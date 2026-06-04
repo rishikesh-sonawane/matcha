@@ -1,7 +1,9 @@
-import requests
-from bs4 import BeautifulSoup
 from urllib.parse import quote
 
+import requests
+from bs4 import BeautifulSoup
+
+from .utils import resilient_get
 
 HEADERS = {
     "User-Agent": (
@@ -25,7 +27,7 @@ def search_linkedin_jobs(query, location=""):
     )
 
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=15)
+        resp = resilient_get(url, headers=HEADERS, timeout=15)
         if resp.status_code != 200:
             return jobs
 
@@ -35,13 +37,11 @@ def search_linkedin_jobs(query, location=""):
         for card in job_cards:
             try:
                 title_el = card.select_one(".base-search-card__title") or card.find("h3")
-                company_el = (
-                    card.select_one(".base-search-card__subtitle")
-                    or card.select_one(".job-search-card__company-name")
+                company_el = card.select_one(".base-search-card__subtitle") or card.select_one(
+                    ".job-search-card__company-name"
                 )
-                location_el = (
-                    card.select_one(".job-search-card__location")
-                    or card.select_one(".base-search-card__location")
+                location_el = card.select_one(".job-search-card__location") or card.select_one(
+                    ".base-search-card__location"
                 )
                 link_el = card.select_one("a.base-card__full-link") or card.find("a", href=True)
 
@@ -55,14 +55,16 @@ def search_linkedin_jobs(query, location=""):
                     link = href if href.startswith("http") else f"https://www.linkedin.com{href}"
 
                 if title:
-                    jobs.append({
-                        "title": title,
-                        "company": company,
-                        "location": location,
-                        "description": "",
-                        "url": link,
-                        "source": "LinkedIn",
-                    })
+                    jobs.append(
+                        {
+                            "title": title,
+                            "company": company,
+                            "location": location,
+                            "description": "",
+                            "url": link,
+                            "source": "LinkedIn",
+                        }
+                    )
             except Exception:
                 continue
 

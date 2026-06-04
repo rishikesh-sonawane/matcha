@@ -1,7 +1,10 @@
 import re
+from urllib.parse import parse_qs, quote, unquote, urlparse
+
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import quote, urlparse, parse_qs, unquote
+
+from .utils import resilient_get
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
 
@@ -15,7 +18,7 @@ def search_naukri_jobs(query, location=""):
         url = f"https://html.duckduckgo.com/html/?q={quote(q)}"
 
         try:
-            resp = requests.get(url, headers=HEADERS, timeout=15)
+            resp = resilient_get(url, headers=HEADERS, timeout=15)
             if resp.status_code != 200:
                 continue
 

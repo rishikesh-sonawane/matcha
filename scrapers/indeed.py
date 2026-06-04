@@ -1,6 +1,8 @@
+from urllib.parse import parse_qs, urlparse
+
 import cloudscraper
 from bs4 import BeautifulSoup
-from urllib.parse import quote, urlparse, parse_qs
+
 
 def resolve_indeed_url(url):
     """Resolve Indeed tracking URLs to actual job page URLs."""
@@ -45,9 +47,7 @@ def search_indeed_jobs(query, location=""):
     }
 
     try:
-        resp = scraper.get(
-            base_url, params=params, timeout=20, allow_redirects=True
-        )
+        resp = scraper.get(base_url, params=params, timeout=20, allow_redirects=True)
         if resp.status_code != 200:
             return jobs
 
@@ -56,23 +56,17 @@ def search_indeed_jobs(query, location=""):
 
         for card in cards:
             try:
-                title_el = (
-                    card.select_one("h3.jobTitle a span[title]")
-                    or card.select_one("h3.jobTitle a")
+                title_el = card.select_one("h3.jobTitle a span[title]") or card.select_one(
+                    "h3.jobTitle a"
                 )
                 company_el = card.select_one("[data-testid=company-name]")
                 location_el = card.select_one("[data-testid=text-location]")
                 salary_el = card.select_one("[data-testid*=salary]")
-                link_el = (
-                    card.select_one("a.jcs-JobTitle")
-                    or card.find("a", href=True)
-                )
+                link_el = card.select_one("a.jcs-JobTitle") or card.find("a", href=True)
 
                 title = title_el.get_text(strip=True) if title_el else ""
                 company = company_el.get_text(strip=True) if company_el else ""
-                location_text = (
-                    location_el.get_text(strip=True) if location_el else ""
-                )
+                location_text = location_el.get_text(strip=True) if location_el else ""
                 salary = salary_el.get_text(strip=True) if salary_el else ""
 
                 link = ""
@@ -92,9 +86,9 @@ def search_indeed_jobs(query, location=""):
                 seen.add(dedup_key)
 
                 description = salary
-                snippet_el = card.select_one(
-                    ".job-snippet"
-                ) or card.select_one("[data-testid=attribute_snippet_testid]")
+                snippet_el = card.select_one(".job-snippet") or card.select_one(
+                    "[data-testid=attribute_snippet_testid]"
+                )
                 if snippet_el:
                     description = (
                         snippet_el.get_text(strip=True)[:500] + " | " + salary
@@ -102,14 +96,16 @@ def search_indeed_jobs(query, location=""):
                         else snippet_el.get_text(strip=True)[:500]
                     )
 
-                jobs.append({
-                    "title": title,
-                    "company": company,
-                    "location": location_text or location or "India",
-                    "description": description,
-                    "url": link,
-                    "source": "Indeed",
-                })
+                jobs.append(
+                    {
+                        "title": title,
+                        "company": company,
+                        "location": location_text or location or "India",
+                        "description": description,
+                        "url": link,
+                        "source": "Indeed",
+                    }
+                )
             except Exception:
                 continue
 

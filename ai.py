@@ -1,6 +1,7 @@
 import json
 import os
 import re
+
 import requests
 
 from config import load_config, save_config
@@ -195,8 +196,11 @@ def ai_generate_queries(profile):
     location = profile.get("location", "") or ""
 
     prompt = QUERY_GENERATION_PROMPT.format(
-        title=title, headline=headline, skills=skills,
-        summary=summary, location=location,
+        title=title,
+        headline=headline,
+        skills=skills,
+        summary=summary,
+        location=location,
     )
     result = _call_ai(
         [{"role": "user", "content": prompt}],

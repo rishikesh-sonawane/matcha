@@ -1,5 +1,4 @@
 import json
-import os
 from pathlib import Path
 
 CONFIG_DIR = Path.home() / ".job-finder"

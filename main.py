@@ -1,45 +1,115 @@
 #!/usr/bin/env python3
+import argparse
+import re
 import sys
 import time
-from urllib.parse import urlparse
+import webbrowser
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
-from rich.console import Console
-from rich.table import Table
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
-from rich.prompt import Prompt, Confirm
-from rich.panel import Panel
-from rich import box
-
 from profile import build_or_load_profile
-from scrapers.linkedin import search_linkedin_jobs
-from scrapers.remoteok import search_remoteok_jobs
-from scrapers.web_search import search_web_for_jobs
-from scrapers.serpapi_jobs import search_serpapi_jobs, check_serpapi_available
-from scrapers.naukri import search_naukri_jobs
-from scrapers.indeed import search_indeed_jobs
-from matcher import compute_relevance, compute_relevance_ai
+
+from prompt_toolkit import Application
+from prompt_toolkit.formatted_text import ANSI
+from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.layout import FormattedTextControl, HSplit, Layout, Window
+from rapidfuzz import fuzz
+from rich import box
+from rich.console import Console
+from rich.live import Live
+from rich.panel import Panel
+from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
+from rich.prompt import Confirm, Prompt
+from rich.table import Table
+
+from actions import is_job_saved, load_saved_jobs, save_job, unsave_job
+from ai import ai_generate_queries, check_ai_available
 from config import load_config, save_config
-from ai import check_ai_available, ai_generate_queries
+from matcher import compute_relevance, compute_relevance_ai
+from scrapers.indeed import search_indeed_jobs
+from scrapers.linkedin import search_linkedin_jobs
+from scrapers.naukri import search_naukri_jobs
+from scrapers.remoteok import search_remoteok_jobs
+from scrapers.serpapi_jobs import check_serpapi_available, search_serpapi_jobs
+from scrapers.web_search import search_web_for_jobs
 
 console = Console()
+
+
+SCRAPER_DEFS = {
+    "LinkedIn": search_linkedin_jobs,
+    "Indeed": search_indeed_jobs,
+    "Naukri": search_naukri_jobs,
+    "RemoteOK": search_remoteok_jobs,
+    "Web Search": search_web_for_jobs,
+}
+
+
+def configure_serpapi():
+    if check_serpapi_available():
+        return
+    if not Confirm.ask(
+        "[yellow]Configure SerpAPI for Google Jobs?[/yellow] (free tier: 100/mo)",
+        default=False,
+    ):
+        return
+    key = Prompt.ask("Enter your SerpAPI key", password=False)
+    if key.strip():
+        config = load_config()
+        config["serpapi_key"] = key.strip()
+        save_config(config)
+        console.print("[green]SerpAPI key saved![/green]")
+
+
+def configure_ai():
+    if check_ai_available():
+        return
+    if not Confirm.ask(
+        "[yellow]Configure AI matching?[/yellow] "
+        "(enables profile enhancement, query expansion, job scoring)",
+        default=False,
+    ):
+        return
+    from ai import configure_ai as set_ai_key
+
+    key = Prompt.ask("Enter your AI API key (or set $MINIMAX env var)", password=False)
+    if key.strip():
+        set_ai_key(key.strip())
+        console.print("[green]AI key saved![/green]")
 
 
 def run_scraper(name, scraper_func, query, location):
     try:
         results = scraper_func(query, location)
         return name, results
-    except Exception as e:
+    except Exception:
         return name, []
 
 
-def deduplicate(jobs):
-    seen = set()
+def _normalize(text):
+    text = text.lower().strip()
+    text = re.sub(r"\b(ii|iii|iv|sr?|jr)\b", "", text)
+    text = re.sub(r"[^a-z0-9\s]", "", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def deduplicate(jobs, title_threshold=82, company_threshold=88):
+    seen = []
     unique = []
     for j in jobs:
-        key = (j["title"].lower().strip(), j["company"].lower().strip())
-        if key not in seen:
-            seen.add(key)
+        norm_title = _normalize(j.get("title", ""))
+        norm_company = _normalize(j.get("company", ""))
+        is_duplicate = False
+        for s_title, s_company in seen:
+            title_sim = fuzz.token_sort_ratio(norm_title, s_title)
+            company_sim = (
+                fuzz.token_sort_ratio(norm_company, s_company)
+                if not norm_company or not s_company
+                else fuzz.token_set_ratio(norm_company, s_company)
+            )
+            if title_sim >= title_threshold and company_sim >= company_threshold:
+                is_duplicate = True
+                break
+        if not is_duplicate:
+            seen.append((norm_title, norm_company))
             unique.append(j)
     return unique
 
@@ -48,69 +118,67 @@ def search_jobs(queries, location):
     if isinstance(queries, str):
         queries = [queries]
 
-    scrapers = {
-        "LinkedIn": search_linkedin_jobs,
-        "Indeed": search_indeed_jobs,
-        "Naukri": search_naukri_jobs,
-        "RemoteOK": search_remoteok_jobs,
-        "Web Search": search_web_for_jobs,
-    }
-
+    scrapers = dict(SCRAPER_DEFS)
     if check_serpapi_available():
         scrapers["Google Jobs"] = search_serpapi_jobs
 
     all_jobs = []
     source_counts = {}
-    seen_sources = {}
+    pending = {name: True for name in scrapers}
 
     total_tasks = len(scrapers) * len(queries)
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        console=console,
-        transient=True,
-    ) as progress:
-        task = progress.add_task("[cyan]Searching...", total=total_tasks)
+    with Live(console=console, refresh_per_second=4, transient=True) as live:
+
+        def _status_table():
+            t = Table(
+                box=box.SIMPLE,
+                show_header=False,
+                show_edge=False,
+                padding=(0, 2),
+            )
+            t.add_column("Status", width=2, no_wrap=True)
+            t.add_column("Source", width=14, no_wrap=True)
+            t.add_column("Results", width=8, justify="right")
+            for name in sorted(scrapers):
+                status = "..." if pending.get(name) else "OK"
+                count = source_counts.get(name, 0)
+                s = f"[green]{status}[/green]" if status == "OK" else f"[yellow]{status}[/yellow]"
+                c = f"[green]{count}[/green]" if count > 0 else "[dim]0[/dim]"
+                t.add_row(s, name, c)
+            return t
+
+        live.update(_status_table())
 
         with ThreadPoolExecutor(max_workers=min(total_tasks, 12)) as executor:
             futures = {}
             for name, func in scrapers.items():
                 for q in queries:
                     f = executor.submit(run_scraper, f"{name}({q})", func, q, location)
-                    futures[f] = (name, q)
+                    futures[f] = name
 
             for future in as_completed(futures):
                 name, jobs = future.result()
+                source_name = name.split("(")[0]
                 unique = deduplicate(jobs)
-                seen_sources[name.split("(")[0]] = seen_sources.get(name.split("(")[0], 0) + len(unique)
-                progress.update(
-                    task,
-                    advance=1,
-                    description=f"[green]{name.split('(')[0]}: {len(unique)} results",
-                )
+                source_counts[source_name] = source_counts.get(source_name, 0) + len(unique)
+                pending[source_name] = False
                 all_jobs.extend(unique)
-                time.sleep(0.1)
-
-    for name, count in seen_sources.items():
-        if count > 0:
-            source_counts[name] = count
+                live.update(_status_table())
+                time.sleep(0.05)
 
     return all_jobs, source_counts
 
 
 def rank_jobs(jobs, profile, use_ai=False):
-    # First pass: fast heuristic scoring for all jobs
     ranked = []
     for job in jobs:
         relevance = compute_relevance(job, profile)
         ranked.append((relevance["score"], job, relevance["reasons"]))
     ranked.sort(key=lambda x: x[0], reverse=True)
 
-    # Second pass: AI scoring on top candidates
     if use_ai:
-        ai_top_n = 15
+        ai_top_n = min(15, len(ranked))
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -118,193 +186,344 @@ def rank_jobs(jobs, profile, use_ai=False):
             console=console,
             transient=True,
         ) as progress:
-            task = progress.add_task(
-                "[yellow]AI-scoring top candidates...", total=min(ai_top_n, len(ranked))
-            )
-            for i in range(min(ai_top_n, len(ranked))):
-                relevance = compute_relevance_ai(ranked[i][1], profile)
-                if relevance:
-                    ranked[i] = (relevance["score"], ranked[i][1], relevance["reasons"])
-                progress.update(task, advance=1)
-
+            task = progress.add_task("[yellow]AI-scoring top candidates...", total=ai_top_n)
+            with ThreadPoolExecutor(max_workers=min(ai_top_n, 8)) as ai_executor:
+                ai_futures = {
+                    ai_executor.submit(compute_relevance_ai, ranked[i][1], profile): i
+                    for i in range(ai_top_n)
+                }
+                for f in as_completed(ai_futures):
+                    i = ai_futures[f]
+                    relevance = f.result()
+                    if relevance:
+                        ranked[i] = (relevance["score"], ranked[i][1], relevance["reasons"])
+                    progress.update(task, advance=1)
         ranked.sort(key=lambda x: x[0], reverse=True)
 
     return ranked
 
 
-def display_results(ranked, source_counts, ai_enabled=False, page_size=20):
-    if not ranked:
-        console.print("[yellow]No jobs found. Try broadening your search terms.[/yellow]")
-        return
+def build_results_table(ranked, page, page_size, total_pages, ai_enabled, saved_ids,     highlight=None):
+    start = page * page_size
+    end = min(start + page_size, len(ranked))
 
-    summary_parts = [f"[cyan]{count}[/] from [bold]{name}[/]" for name, count in source_counts.items() if count > 0]
-    summary = " | ".join(summary_parts)
-    ai_tag = " [bold yellow](AI scored)[/bold yellow]" if ai_enabled else ""
-    console.print(f"\n[bold]Found {len(ranked)} total jobs[/bold]{ai_tag} — {summary}")
+    title = f"[bold]Matching Jobs[/bold] [dim](page {page + 1}/{total_pages})[/dim]"
+    if ai_enabled:
+        title += " [yellow](AI)[/yellow]"
 
-    ranked = [(s, j, r) for s, j, r in ranked if s > 0]
+    table = Table(
+        title=title,
+        box=box.SIMPLE,
+        header_style="bold cyan",
+        show_edge=False,
+    )
+    table.add_column("#", style="dim", width=3, no_wrap=True)
+    table.add_column("Title", style="bold", width=22, overflow="ellipsis")
+    table.add_column("Company", width=14, overflow="ellipsis")
+    table.add_column("Source", width=8, no_wrap=True)
+    table.add_column("Match", justify="right", width=6, no_wrap=True)
 
-    if not ranked:
-        console.print("[yellow]No jobs matched your profile sufficiently. Try broadening your search.[/yellow]")
-        return
-
-    def shorten_url(url, max_len=30):
-        if not url:
-            return ""
-        parsed = urlparse(url)
-        path = parsed.path.strip("/")
-        if path:
-            display = f"{parsed.netloc}/{path}"
-        else:
-            display = parsed.netloc
-        if len(display) > max_len:
-            display = display[:max_len-3] + "..."
-        return display
-
-    total_pages = (len(ranked) + page_size - 1) // page_size
-    current_page = 0
-
-    while current_page < total_pages:
-        start = current_page * page_size
-        end = min(start + page_size, len(ranked))
-
-        table_title = f"[bold]Matching Jobs[/bold] [dim](page {current_page + 1}/{total_pages})[/dim]"
-        if ai_enabled:
-            table_title += " [yellow](AI)[/yellow]"
-
-        table = Table(
-            title=table_title,
-            box=box.SIMPLE,
-            header_style="bold cyan",
-            show_edge=False,
+    for i, (score, job, reasons) in enumerate(ranked[start:end], start + 1):
+        score_color = "green" if score >= 60 else "yellow" if score >= 25 else "red"
+        url = job.get("url", "")
+        saved_mark = " [yellow]★[/yellow]" if url and is_job_saved(url, saved_ids) else ""
+        row_style = "reverse bold" if highlight is not None and (i - 1) == (start + highlight) else None
+        table.add_row(
+            str(i),
+            job.get("title", "N/A") + saved_mark,
+            job.get("company", "N/A"),
+            job.get("source", "N/A"),
+            f"[{score_color}]{score}%[/{score_color}]",
+            style=row_style,
         )
-        table.add_column("#", style="dim", width=3, no_wrap=True)
-        table.add_column("Title", style="bold", width=22, overflow="ellipsis")
-        table.add_column("Company", width=14, overflow="ellipsis")
-        table.add_column("Source", width=8, no_wrap=True)
-        table.add_column("Link", width=30, overflow="ellipsis")
-        table.add_column("Match", justify="right", width=6, no_wrap=True)
 
-        for i, (score, job, reasons) in enumerate(ranked[start:end], start + 1):
-            score_color = "green" if score >= 60 else "yellow" if score >= 25 else "red"
-            url = job.get("url", "")
-            table.add_row(
-                str(i),
-                job.get("title", "N/A"),
-                job.get("company", "N/A"),
-                job.get("source", "N/A"),
-                f"[dim]{shorten_url(url)}[/dim]",
-                f"[{score_color}]{score}%[/{score_color}]",
-            )
+    return table
 
-        console.print(table)
 
-        if current_page + 1 < total_pages:
-            if not Confirm.ask(f"Show next page ({start + page_size + 1}-{min(start + page_size * 2, len(ranked))})?", default=False):
-                break
-        current_page += 1
+def show_job_detail(job, score, reasons):
+    console.print()
+    console.print(
+        Panel(
+            f"[bold]{job.get('title', 'N/A')}[/bold]\n"
+            f"[cyan]Company:[/cyan] {job.get('company', 'N/A')}\n"
+            f"[cyan]Location:[/cyan] {job.get('location', 'N/A')}\n"
+            f"[cyan]Source:[/cyan] {job.get('source', 'N/A')}\n"
+            f"[cyan]URL:[/cyan] {job.get('url', 'N/A')}\n"
+            f"[cyan]Match Score:[/cyan] [bold]{score}%[/bold]\n\n"
+            f"[bold]Why this matches:[/bold]\n"
+            + "\n".join(f"  • {r}" for r in reasons)
+            + (
+                f"\n\n[dim]Description:[/dim]\n{job.get('description', '')[:500]}"
+                if job.get("description")
+                else ""
+            ),
+            title="[bold]Job Details[/bold]",
+            border_style="green",
+        )
+    )
 
-    show_detail = Confirm.ask("Show details for a specific job?", default=False)
-    if show_detail:
-        while True:
-            choice = Prompt.ask(
-                "Enter job number to see details (or 'q' to quit)", default="q"
-            )
-            if choice.lower() == "q":
-                break
-            try:
-                idx = int(choice) - 1
-                if 0 <= idx < len(ranked):
-                    score, job, reasons = ranked[idx]
-                    detail_panel = Panel(
-                        f"[bold]{job.get('title', 'N/A')}[/bold]\n"
-                        f"[cyan]Company:[/cyan] {job.get('company', 'N/A')}\n"
-                        f"[cyan]Location:[/cyan] {job.get('location', 'N/A')}\n"
-                        f"[cyan]Source:[/cyan] {job.get('source', 'N/A')}\n"
-                        f"[cyan]URL:[/cyan] {job.get('url', 'N/A')}\n"
-                        f"[cyan]Match Score:[/cyan] [bold]{score}%[/bold]\n\n"
-                        f"[bold]Why this matches:[/bold]\n"
-                        + "\n".join(f"  • {r}" for r in reasons)
-                        + (
-                            f"\n\n[dim]Description:[/dim]\n{job.get('description', '')[:500]}"
-                            if job.get("description")
-                            else ""
-                        ),
-                        title="[bold]Job Details[/bold]",
-                        border_style="green",
-                    )
-                    console.print(detail_panel)
+
+def prompt_loop(ranked, source_counts, ai_enabled):
+    ranked = [(s, j, r) for s, j, r in ranked if s > 0]
+    if not ranked:
+        console.print("[yellow]No jobs matched your profile sufficiently.[/yellow]")
+        return
+
+    summary_parts = [
+        f"[cyan]{count}[/] from [bold]{name}[/]"
+        for name, count in sorted(source_counts.items())
+        if count > 0
+    ]
+    ai_tag = " [bold yellow](AI)[/bold yellow]" if ai_enabled else ""
+    console.print(f"\n[bold]Found {len(ranked)} total jobs[/bold]{ai_tag}")
+    console.print("  " + " | ".join(summary_parts))
+
+    page_size = 10
+    total_pages = max(1, (len(ranked) + page_size - 1) // page_size)
+    saved_ids = load_saved_jobs()
+
+    class State:
+        page = 0
+        selected = 0
+        mode = "list"
+        detail_idx = 0
+        re_run = False
+
+    st = State()
+
+    help_text = (
+        "[dim]\u2191\u2193[/dim] navigate  [dim]Enter[/dim] detail  "
+        "[dim]s[/dim] save/unsave  [dim]o[/dim] open  "
+        "[dim]n[/dim]/[dim]p[/dim] page  [dim]l[/dim] saved  [dim]r[/dim] re-run  [dim]q[/dim] quit"
+    )
+    saved_help = "[dim]Press any key to go back...[/dim]"
+    detail_help = (
+        "[dim]Enter[/dim] back  [dim]o[/dim] open  [dim]s[/dim] save/unsave  [dim]q[/dim] quit"
+    )
+
+    def _do_save(job):
+        url = job.get("url", "")
+        if not url:
+            return
+        if is_job_saved(url, saved_ids):
+            unsave_job(url)
+            saved_ids.pop(url, None)
+        else:
+            save_job(job)
+            saved_ids[url] = {
+                "title": job.get("title", ""),
+                "company": job.get("company", ""),
+                "url": url,
+                "source": job.get("source", ""),
+            }
+
+    def _render_content():
+        with console.capture() as cap:
+            if st.mode == "detail":
+                score, job, reasons = ranked[st.detail_idx]
+                show_job_detail(job, score, reasons)
+            elif st.mode == "saved":
+                if not saved_ids:
+                    console.print("[dim]No saved jobs yet.[/dim]")
                 else:
-                    console.print("[red]Invalid number[/red]")
-            except ValueError:
-                console.print("[red]Invalid input[/red]")
+                    t = Table(
+                        box=box.SIMPLE, title="[bold]Saved Jobs[/bold]",
+                        show_edge=False,
+                    )
+                    t.add_column("Title", width=30, overflow="ellipsis")
+                    t.add_column("Company", width=16, overflow="ellipsis")
+                    t.add_column("Source", width=10)
+                    for entry in saved_ids.values():
+                        t.add_row(
+                            entry.get("title", ""),
+                            entry.get("company", ""),
+                            entry.get("source", ""),
+                        )
+                    console.print(t)
+            else:
+                console.print(
+                    build_results_table(
+                        ranked, st.page, page_size, total_pages,
+                        ai_enabled, saved_ids, highlight=st.selected,
+                    )
+                )
+        return cap.get()
+
+    def _render_help():
+        with console.capture() as cap:
+            if st.mode == "detail":
+                console.print(detail_help)
+            elif st.mode == "saved":
+                console.print(saved_help)
+            else:
+                console.print(help_text)
+        return cap.get()
+
+    kb = KeyBindings()
+
+    @kb.add("up")
+    def _up(event):
+        if st.mode != "list":
+            return
+        if st.selected > 0:
+            st.selected -= 1
+        elif st.page > 0:
+            st.page -= 1
+            pc = min(page_size, len(ranked) - st.page * page_size)
+            st.selected = pc - 1
+        event.app.invalidate()
+
+    @kb.add("down")
+    def _down(event):
+        if st.mode != "list":
+            return
+        ps = st.page * page_size
+        pe = min(ps + page_size, len(ranked))
+        if st.selected < pe - ps - 1:
+            st.selected += 1
+        elif st.page + 1 < total_pages:
+            st.page += 1
+            st.selected = 0
+        event.app.invalidate()
+
+    @kb.add("enter")
+    def _enter(event):
+        if st.mode in ("detail", "saved"):
+            st.mode = "list"
+        else:
+            idx = st.page * page_size + st.selected
+            if 0 <= idx < len(ranked):
+                st.mode = "detail"
+                st.detail_idx = idx
+        event.app.invalidate()
+
+    @kb.add("q")
+    @kb.add("Q")
+    def _quit(event):
+        event.app.exit()
+
+    @kb.add("n")
+    @kb.add("N")
+    def _next(event):
+        if st.mode == "list" and st.page + 1 < total_pages:
+            st.page += 1
+            st.selected = 0
+            event.app.invalidate()
+
+    @kb.add("p")
+    @kb.add("P")
+    def _prev(event):
+        if st.mode == "list" and st.page > 0:
+            st.page -= 1
+            st.selected = 0
+            event.app.invalidate()
+
+    @kb.add("s")
+    @kb.add("S")
+    def _save(event):
+        if st.mode == "list":
+            idx = st.page * page_size + st.selected
+        elif st.mode == "detail":
+            idx = st.detail_idx
+        else:
+            return
+        if 0 <= idx < len(ranked):
+            _do_save(ranked[idx][1])
+        event.app.invalidate()
+
+    @kb.add("o")
+    @kb.add("O")
+    def _open(event):
+        idx = -1
+        if st.mode == "list":
+            idx = st.page * page_size + st.selected
+        elif st.mode == "detail":
+            idx = st.detail_idx
+        if 0 <= idx < len(ranked):
+            url = ranked[idx][1].get("url", "")
+            if url:
+                webbrowser.open(url)
+
+    @kb.add("l")
+    @kb.add("L")
+    def _saved(event):
+        st.mode = "saved"
+        event.app.invalidate()
+
+    @kb.add("r")
+    @kb.add("R")
+    def _rerun(event):
+        st.re_run = True
+        event.app.exit()
+
+    app = Application(
+        layout=Layout(
+            HSplit([
+                Window(content=FormattedTextControl(lambda: ANSI(_render_content()))),
+                Window(
+                    height=1,
+                    content=FormattedTextControl(lambda: ANSI(_render_help())),
+                ),
+            ])
+        ),
+        key_bindings=kb,
+        full_screen=True,
+        mouse_support=False,
+    )
+
+    try:
+        app.run()
+    except KeyboardInterrupt:
+        pass
+
+    if st.re_run:
+        return "re_run"
 
 
 def main():
+    parser = argparse.ArgumentParser(
+        description="Job Finder — multi-source job search with relevance ranking"
+    )
+    parser.add_argument("--configure", action="store_true", help="Configure API keys (SerpAPI, AI)")
+    parser.add_argument(
+        "--new-profile", "-n", action="store_true", help="Re-enter profile from scratch"
+    )
+    args = parser.parse_args()
+
+    if args.configure:
+        configure_serpapi()
+        configure_ai()
+        console.print(
+            "[green]Configuration complete![/green] Run [bold]python3 main.py[/bold] to search."
+        )
+        return
+
     console.print(
         Panel.fit(
             "[bold cyan]Job Finder[/bold cyan]\n"
-            "[dim]Find the most relevant jobs for your profile[/dim]",
+            "[dim]Multi-source job search with relevance ranking[/dim]",
             border_style="cyan",
         )
     )
 
-    profile = build_or_load_profile()
+    profile = build_or_load_profile(force_new=args.new_profile)
     if not profile:
-        console.print("[red]Profile is required to find jobs. Exiting.[/red]")
+        console.print("[red]Profile is required. Run with --new-profile to set one up.[/red]")
         sys.exit(1)
-
-    config = load_config()
-
-    if not check_serpapi_available():
-        if Confirm.ask(
-            "[yellow]SerpAPI key not configured.[/yellow] "
-            "This enables Google Jobs results (free tier: 100 searches/month). "
-            "Configure now?",
-            default=False,
-        ):
-            key = Prompt.ask("Enter your SerpAPI key", password=False)
-            if key.strip():
-                config["serpapi_key"] = key.strip()
-                save_config(config)
-                console.print("[green]SerpAPI key saved![/green]")
-
-    if not check_ai_available():
-        if Confirm.ask(
-            "[yellow]AI matching key not configured.[/yellow] "
-            "This enables AI-powered profile extraction and job relevance scoring. "
-            "Configure now?",
-            default=False,
-        ):
-            from ai import configure_ai
-            key = Prompt.ask("Enter your MiniMax API key (or set $MINIMAX)", password=False)
-            if key.strip():
-                configure_ai(key.strip())
-                console.print("[green]AI key saved![/green]")
 
     use_ai = check_ai_available()
 
-    default_query = config.get("last_query", "")
-    default_location = config.get("last_location", "")
-
-    console.print("\n[bold]Search Parameters[/bold]")
-    query = Prompt.ask(
-        "Job search query",
-        default=(
-            profile.get("title")
-            or profile.get("headline")
-            or default_query
-            or ""
-        ),
+    config = load_config()
+    default_query = (
+        config.get("last_query") or profile.get("title") or profile.get("headline") or ""
     )
+    default_location = config.get("last_location") or ""
 
-    location = Prompt.ask("Location (or leave blank for remote)", default=default_location or "")
+    console.print()
+    query = Prompt.ask("Job search query", default=default_query)
+    location = Prompt.ask("Location (or blank for remote)", default=default_location)
 
-    save_config({
-        "last_query": query,
-        "last_location": location,
-    })
-
+    save_config({"last_query": query, "last_location": location})
     profile["location"] = location
 
     queries = [query]
@@ -314,20 +533,19 @@ def main():
             extra = [q for q in ai_queries if q.lower() != query.lower()]
             if extra:
                 queries.extend(extra)
-                console.print(f"[dim]AI expanded search: {', '.join(queries)}[/dim]")
+                console.print(f"[dim]AI queries: {', '.join(queries)}[/dim]")
 
     jobs, source_counts = search_jobs(queries, location)
+    if not jobs:
+        console.print("[yellow]No jobs found. Try different search terms.[/yellow]")
+        return
 
-    if jobs:
-        ranked = rank_jobs(jobs, profile, use_ai=use_ai)
-        display_results(ranked, source_counts, ai_enabled=use_ai)
-    else:
-        console.print(
-            "[yellow]Could not fetch any job listings. "
-            "Try running again with different search terms.[/yellow]"
-        )
+    ranked = rank_jobs(jobs, profile, use_ai=use_ai)
+    result = prompt_loop(ranked, source_counts, ai_enabled=use_ai)
 
-    console.print("\n[dim]Tip: Run again to search with different terms.[/dim]")
+    if result == "re_run":
+        console.print()
+        main()
 
 
 if __name__ == "__main__":

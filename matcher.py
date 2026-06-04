@@ -1,6 +1,6 @@
 import re
 
-from ai import check_ai_available, ai_score_job
+from ai import ai_score_job, check_ai_available
 
 
 def compute_relevance_ai(job, profile):
@@ -15,12 +15,55 @@ def tokenize(text):
 
 
 STOP_WORDS = {
-    "a", "an", "the", "and", "or", "of", "in", "with", "for",
-    "at", "to", "is", "are", "was", "were", "i", "my", "me",
-    "we", "our", "you", "your", "it", "its", "on", "by",
-    "as", "be", "but", "from", "not", "so", "up", "all",
-    "have", "has", "had", "been", "being", "do", "does", "did",
-    "will", "would", "could", "should", "may", "might", "can",
+    "a",
+    "an",
+    "the",
+    "and",
+    "or",
+    "of",
+    "in",
+    "with",
+    "for",
+    "at",
+    "to",
+    "is",
+    "are",
+    "was",
+    "were",
+    "i",
+    "my",
+    "me",
+    "we",
+    "our",
+    "you",
+    "your",
+    "it",
+    "its",
+    "on",
+    "by",
+    "as",
+    "be",
+    "but",
+    "from",
+    "not",
+    "so",
+    "up",
+    "all",
+    "have",
+    "has",
+    "had",
+    "been",
+    "being",
+    "do",
+    "does",
+    "did",
+    "will",
+    "would",
+    "could",
+    "should",
+    "may",
+    "might",
+    "can",
 }
 
 
@@ -65,11 +108,14 @@ def compute_relevance(job, profile):
         if len(matched_skills) > 5:
             reasons[-1] += f" +{len(matched_skills) - 5} more"
 
-    all_profile_text = " ".join([
-        profile_summary, profile_headline,
-        " ".join(profile_skills),
-        profile_title,
-    ])
+    all_profile_text = " ".join(
+        [
+            profile_summary,
+            profile_headline,
+            " ".join(profile_skills),
+            profile_title,
+        ]
+    )
     profile_keywords = tokenize(all_profile_text) - STOP_WORDS - title_words
     desc_matches = profile_keywords & tokenize(job_text)
     if desc_matches:
@@ -87,11 +133,28 @@ def compute_relevance(job, profile):
 
     if years_exp is not None:
         seniority_keywords = {
-            "entry": ["junior", "entry", "associate", "graduate", "trainee",
-                       "new grad", "intern", "internship"],
+            "entry": [
+                "junior",
+                "entry",
+                "associate",
+                "graduate",
+                "trainee",
+                "new grad",
+                "intern",
+                "internship",
+            ],
             "mid": ["mid", "mid-level", "intermediate", "ii", "2", "level 2"],
-            "senior": ["senior", "sr", "lead", "staff", "principal",
-                        "architect", "manager", "head", "supervisor"],
+            "senior": [
+                "senior",
+                "sr",
+                "lead",
+                "staff",
+                "principal",
+                "architect",
+                "manager",
+                "head",
+                "supervisor",
+            ],
         }
 
         if years_exp <= 2:
@@ -127,7 +190,7 @@ def compute_relevance(job, profile):
         location_parts = profile_location.replace(",", "").split()
         if any(part in location for part in location_parts if len(part) > 2):
             score += 8
-            reasons.append(f"Location match")
+            reasons.append("Location match")
     elif "remote" in location.lower():
         score += 5
 

@@ -1,29 +1,39 @@
 import re
+from pathlib import Path
+from urllib.parse import quote, urlparse
+
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import quote, urlparse
 from rich.console import Console
-from rich.prompt import Prompt, Confirm
 from rich.panel import Panel
+from rich.prompt import Confirm, Prompt
 from rich.table import Table
-from pathlib import Path
 
+from ai import ai_extract_profile, check_ai_available
 from config import load_profile, save_profile
-from ai import check_ai_available, ai_extract_profile
 
 console = Console()
 
 
 SKILL_TO_TITLE_MAP = [
     ({"python", "django", "flask", "fastapi", "sql", "postgresql", "mysql"}, "Backend Developer"),
-    ({"python", "tensorflow", "pytorch", "scikit-learn", "pandas", "numpy"}, "Machine Learning Engineer"),
+    (
+        {"python", "tensorflow", "pytorch", "scikit-learn", "pandas", "numpy"},
+        "Machine Learning Engineer",
+    ),
     ({"python", "tensorflow", "pytorch", "opencv"}, "AI Engineer"),
     ({"python", "data", "analyst", "tableau", "power bi", "sql"}, "Data Analyst"),
     ({"python", "spark", "kafka", "hadoop", "airflow", "sql", "pandas"}, "Data Engineer"),
     ({"python", "aws", "docker", "kubernetes", "terraform", "linux", "ci/cd"}, "DevOps Engineer"),
     ({"python", "aws", "azure", "gcp", "docker", "kubernetes"}, "Cloud Engineer"),
-    ({"javascript", "typescript", "react", "angular", "vue", "node", "nodejs"}, "Frontend Developer"),
-    ({"javascript", "typescript", "react", "node", "nodejs", "python", "django"}, "Full Stack Developer"),
+    (
+        {"javascript", "typescript", "react", "angular", "vue", "node", "nodejs"},
+        "Frontend Developer",
+    ),
+    (
+        {"javascript", "typescript", "react", "node", "nodejs", "python", "django"},
+        "Full Stack Developer",
+    ),
     ({"java", "spring", "hibernate", "microservices"}, "Java Developer"),
     ({"go", "golang", "docker", "kubernetes", "microservices"}, "Go Developer"),
     ({"rust", "systems", "performance"}, "Systems Engineer"),
@@ -48,7 +58,9 @@ def suggest_title(skills):
 
 
 def extract_experience(text_lower):
-    years = re.findall(r"(\d+)\s*(?:years?|yrs?|yr)\s*(?:of)?\s*(?:experience|exp|work)?", text_lower)
+    years = re.findall(
+        r"(\d+)\s*(?:years?|yrs?|yr)\s*(?:of)?\s*(?:experience|exp|work)?", text_lower
+    )
     if years:
         return max(int(y) for y in years)
     exp = re.findall(r"(?:experience|exp)\s*(?:of|:)?\s*(\d+)", text_lower)
@@ -84,7 +96,7 @@ def parse_resume_pdf(path):
         console.print("[red]Could not extract text from PDF. It may be scanned/image-based.[/red]")
         return None
 
-    lines = [l.strip() for l in text.split("\n") if l.strip()]
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
     text_lower = text.lower()
 
     name = lines[0] if lines else ""
@@ -100,16 +112,70 @@ def parse_resume_pdf(path):
             break
 
     tech_keywords = [
-        "python", "javascript", "typescript", "java", "go", "golang", "rust", "c\\+\\+", "c#",
-        "react", "angular", "vue", "node", "nodejs", "django", "flask", "fastapi", "spring",
-        "aws", "azure", "gcp", "docker", "kubernetes", "terraform", "ansible",
-        "sql", "postgresql", "mysql", "mongodb", "redis", "kafka", "rabbitmq",
-        "git", "linux", "ci/cd", "jenkins", "github actions", "gitlab ci",
-        "tensorflow", "pytorch", "scikit-learn", "pandas", "numpy",
-        "graphql", "rest", "grpc", "html", "css", "sass",
-        "agile", "scrum", "jira", "confluence",
-        "microservices", "kubernetes", "helm", "opencv", "nlp",
-        "tableau", "power bi", "etl", "hadoop", "spark", "airflow",
+        "python",
+        "javascript",
+        "typescript",
+        "java",
+        "go",
+        "golang",
+        "rust",
+        "c\\+\\+",
+        "c#",
+        "react",
+        "angular",
+        "vue",
+        "node",
+        "nodejs",
+        "django",
+        "flask",
+        "fastapi",
+        "spring",
+        "aws",
+        "azure",
+        "gcp",
+        "docker",
+        "kubernetes",
+        "terraform",
+        "ansible",
+        "sql",
+        "postgresql",
+        "mysql",
+        "mongodb",
+        "redis",
+        "kafka",
+        "rabbitmq",
+        "git",
+        "linux",
+        "ci/cd",
+        "jenkins",
+        "github actions",
+        "gitlab ci",
+        "tensorflow",
+        "pytorch",
+        "scikit-learn",
+        "pandas",
+        "numpy",
+        "graphql",
+        "rest",
+        "grpc",
+        "html",
+        "css",
+        "sass",
+        "agile",
+        "scrum",
+        "jira",
+        "confluence",
+        "microservices",
+        "kubernetes",
+        "helm",
+        "opencv",
+        "nlp",
+        "tableau",
+        "power bi",
+        "etl",
+        "hadoop",
+        "spark",
+        "airflow",
     ]
 
     found_keywords = set()
@@ -156,10 +222,25 @@ def parse_resume_pdf(path):
     table.add_column("Field", style="bold")
     table.add_column("Value")
     table.add_row("Name", name)
-    table.add_row("Title", profile["title"] if profile["title"] else f"[yellow]Not detected{' → Suggested: ' + suggested if suggested else ''}[/yellow]")
-    table.add_row("Skills", f"{len(profile['skills'])} detected: {', '.join(profile['skills'][:10])}{'...' if len(profile['skills']) > 10 else ''}" if profile["skills"] else "[yellow]None detected[/yellow]")
-    table.add_row("Experience", f"~{profile['experience']} years" if profile.get("experience") else "[yellow]Not detected[/yellow]")
-    console.print(f"\n[green]Resume parsed:[/green]")
+    table.add_row(
+        "Title",
+        profile["title"]
+        if profile["title"]
+        else f"[yellow]Not detected{' → Suggested: ' + suggested if suggested else ''}[/yellow]",
+    )
+    table.add_row(
+        "Skills",
+        f"{len(profile['skills'])} detected: {', '.join(profile['skills'][:10])}{'...' if len(profile['skills']) > 10 else ''}"
+        if profile["skills"]
+        else "[yellow]None detected[/yellow]",
+    )
+    table.add_row(
+        "Experience",
+        f"~{profile['experience']} years"
+        if profile.get("experience")
+        else "[yellow]Not detected[/yellow]",
+    )
+    console.print("\n[green]Resume parsed:[/green]")
     console.print(table)
 
     return profile
@@ -211,7 +292,10 @@ def search_linkedin_profile_via_web(username):
                 raw_href = title_el.get("href", "")
                 actual_url = extract_url(raw_href) if raw_href else ""
 
-                if username.lower() not in actual_url.lower() and "linkedin.com/in/" not in actual_url.lower():
+                if (
+                    username.lower() not in actual_url.lower()
+                    and "linkedin.com/in/" not in actual_url.lower()
+                ):
                     continue
 
                 found = result
@@ -242,7 +326,8 @@ def search_linkedin_profile_via_web(username):
         r"|Data\s*(?:Engineer|Scientist|Analyst)|ML\s*Engineer"
         r"|Full.?Stack|Frontend|Backend|Product\s*Manager"
         r"|Engineering\s*Manager|Tech\s*Lead)",
-        snippet, re.IGNORECASE
+        snippet,
+        re.IGNORECASE,
     )
     if title_candidates:
         headline = title_candidates[0].strip()
@@ -252,12 +337,43 @@ def search_linkedin_profile_via_web(username):
             headline = exp_match.group(1).strip()
 
     tech_keywords = [
-        "python", "javascript", "typescript", "java", "go", "rust", "c++",
-        "react", "angular", "vue", "node", "django", "flask", "spring",
-        "aws", "azure", "gcp", "docker", "kubernetes", "terraform",
-        "sql", "postgresql", "mysql", "mongodb", "redis", "kafka",
-        "git", "linux", "jenkins", "tensorflow", "pytorch",
-        "graphql", "html", "css", "devops", "cloud", "sre",
+        "python",
+        "javascript",
+        "typescript",
+        "java",
+        "go",
+        "rust",
+        "c++",
+        "react",
+        "angular",
+        "vue",
+        "node",
+        "django",
+        "flask",
+        "spring",
+        "aws",
+        "azure",
+        "gcp",
+        "docker",
+        "kubernetes",
+        "terraform",
+        "sql",
+        "postgresql",
+        "mysql",
+        "mongodb",
+        "redis",
+        "kafka",
+        "git",
+        "linux",
+        "jenkins",
+        "tensorflow",
+        "pytorch",
+        "graphql",
+        "html",
+        "css",
+        "devops",
+        "cloud",
+        "sre",
     ]
     snippet_lower = snippet.lower()
     skills = [kw.title() for kw in tech_keywords if kw in snippet_lower]
@@ -272,7 +388,7 @@ def search_linkedin_profile_via_web(username):
 
 
 def extract_url(raw_href):
-    from urllib.parse import urlparse, parse_qs, unquote
+    from urllib.parse import parse_qs, unquote
 
     if raw_href.startswith("//"):
         raw_href = "https:" + raw_href
@@ -352,9 +468,7 @@ def manual_profile_entry():
     skills = [s.strip() for s in skills_input.split(",") if s.strip()]
     experience = Prompt.ask("Years of experience")
 
-    summary = Prompt.ask(
-        "Professional summary (brief description of your background)"
-    )
+    summary = Prompt.ask("Professional summary (brief description of your background)")
 
     return {
         "name": name,
@@ -366,19 +480,22 @@ def manual_profile_entry():
     }
 
 
-def build_or_load_profile():
-    existing = load_profile()
-    if existing:
-        existing_table = Table(box=None, show_header=False, show_edge=False, padding=(0, 2))
-        existing_table.add_column("Field", style="bold")
-        existing_table.add_column("Value")
-        existing_table.add_row("Name", existing.get("name", "N/A"))
-        existing_table.add_row("Title", existing.get("title", existing.get("headline", "N/A")))
-        existing_table.add_row("Skills", ", ".join(existing.get("skills", [])))
-        existing_table.add_row("Experience", f"~{existing.get('experience', '')} years" if existing.get("experience") else "Not specified")
-        console.print("[green]Existing profile found:[/green]")
-        console.print(existing_table)
-        if Confirm.ask("Use existing profile?", default=True):
+def build_or_load_profile(force_new=False):
+    if not force_new:
+        existing = load_profile()
+        if existing:
+            name = existing.get("name", "").strip() or "User"
+            title = existing.get("title") or existing.get("headline") or ""
+            skill_count = len(existing.get("skills", []))
+            exp = existing.get("experience", "") or ""
+            info = name
+            if title:
+                info += f" — {title}"
+            info += f" ({skill_count} skills"
+            if exp:
+                info += f", ~{exp}y exp"
+            info += ")"
+            console.print(f"[dim]Profile: {info}[/dim]")
             return existing
 
     console.print("[bold]How would you like to enter your profile?[/bold]")
@@ -420,19 +537,26 @@ def build_or_load_profile():
         supplement_table.add_column("Value")
         supplement_table.add_row("Name", profile.get("name", ""))
         supplement_table.add_row("Title", profile.get("title", "[yellow]Not detected[/yellow]"))
-        supplement_table.add_row("Skills", f"{len(profile.get('skills', []))} detected: {', '.join(profile.get('skills', [])[:10])}{'...' if len(profile.get('skills', [])) > 10 else ''}" if profile.get("skills") else "[yellow]None[/yellow]")
-        supplement_table.add_row("Experience", f"~{profile.get('experience', '')} years" if profile.get("experience") else "[yellow]Not detected[/yellow]")
+        supplement_table.add_row(
+            "Skills",
+            f"{len(profile.get('skills', []))} detected: {', '.join(profile.get('skills', [])[:10])}{'...' if len(profile.get('skills', [])) > 10 else ''}"
+            if profile.get("skills")
+            else "[yellow]None[/yellow]",
+        )
+        supplement_table.add_row(
+            "Experience",
+            f"~{profile.get('experience', '')} years"
+            if profile.get("experience")
+            else "[yellow]Not detected[/yellow]",
+        )
         console.print(f"\n[green]Profile loaded from {source_method}:[/green]")
         console.print(supplement_table)
         if Confirm.ask("Does this look correct? You can supplement it.", default=True):
             extra_skills = Prompt.ask(
-                "Additional skills (comma-separated, or leave blank)",
-                default=""
+                "Additional skills (comma-separated, or leave blank)", default=""
             )
             if extra_skills.strip():
-                profile["skills"].extend(
-                    [s.strip() for s in extra_skills.split(",") if s.strip()]
-                )
+                profile["skills"].extend([s.strip() for s in extra_skills.split(",") if s.strip()])
             if not profile.get("title") or not profile["title"].strip():
                 suggested = suggest_title(profile.get("skills", []))
                 profile["title"] = Prompt.ask(
@@ -441,7 +565,9 @@ def build_or_load_profile():
             if not profile.get("experience") or not str(profile["experience"]).strip():
                 profile["experience"] = Prompt.ask("Years of experience", default="")
             if not profile.get("headline"):
-                profile["headline"] = Prompt.ask("Professional headline", default=profile.get("title", ""))
+                profile["headline"] = Prompt.ask(
+                    "Professional headline", default=profile.get("title", "")
+                )
         else:
             profile = manual_profile_entry()
 
