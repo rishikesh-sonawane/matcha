@@ -9,6 +9,7 @@ from rich.table import Table
 from pathlib import Path
 
 from config import load_profile, save_profile
+from ai import check_ai_available, ai_extract_profile
 
 console = Console()
 
@@ -133,13 +134,31 @@ def parse_resume_pdf(path):
         "summary": summary,
     }
 
+    if check_ai_available():
+        console.print("[dim]Enhancing profile with AI...[/dim]")
+        ai_profile = ai_extract_profile(text[:4000])
+        if ai_profile:
+            if not profile["title"] and ai_profile.get("title"):
+                profile["title"] = ai_profile["title"]
+            if not profile["headline"] and ai_profile.get("headline"):
+                profile["headline"] = ai_profile["headline"]
+            if not profile["experience"] and ai_profile.get("experience"):
+                profile["experience"] = ai_profile["experience"]
+            ai_skills = ai_profile.get("skills", [])
+            existing_skills = set(s.lower() for s in profile["skills"])
+            new_skills = [s for s in ai_skills if s.lower() not in existing_skills]
+            if new_skills:
+                profile["skills"].extend(new_skills)
+            profile["summary"] = ai_profile.get("summary", "") or profile["summary"]
+            console.print("[green]  AI-enhanced: title/experience/skills enriched[/green]")
+
     table = Table(box=None, show_header=False, show_edge=False, padding=(0, 2))
     table.add_column("Field", style="bold")
     table.add_column("Value")
     table.add_row("Name", name)
-    table.add_row("Title", title.capitalize() if title else f"[yellow]Not detected{' → Suggested: ' + suggested if suggested else ''}[/yellow]")
-    table.add_row("Skills", f"{len(skills)} detected: {', '.join(skills[:10])}{'...' if len(skills) > 10 else ''}" if skills else "[yellow]None detected[/yellow]")
-    table.add_row("Experience", f"~{experience_years} years" if experience_years else "[yellow]Not detected[/yellow]")
+    table.add_row("Title", profile["title"] if profile["title"] else f"[yellow]Not detected{' → Suggested: ' + suggested if suggested else ''}[/yellow]")
+    table.add_row("Skills", f"{len(profile['skills'])} detected: {', '.join(profile['skills'][:10])}{'...' if len(profile['skills']) > 10 else ''}" if profile["skills"] else "[yellow]None detected[/yellow]")
+    table.add_row("Experience", f"~{profile['experience']} years" if profile.get("experience") else "[yellow]Not detected[/yellow]")
     console.print(f"\n[green]Resume parsed:[/green]")
     console.print(table)
 

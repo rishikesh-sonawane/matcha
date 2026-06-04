@@ -1,5 +1,13 @@
 import re
 
+from ai import check_ai_available, ai_score_job
+
+
+def compute_relevance_ai(job, profile):
+    if not check_ai_available():
+        return None
+    return ai_score_job(profile, job)
+
 
 def tokenize(text):
     text = text.lower()
