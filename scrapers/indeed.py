@@ -1,7 +1,31 @@
-import re
 import cloudscraper
 from bs4 import BeautifulSoup
-from urllib.parse import quote
+from urllib.parse import quote, urlparse, parse_qs
+
+def resolve_indeed_url(url):
+    """Resolve Indeed tracking URLs to actual job page URLs."""
+    parsed = urlparse(url)
+    params = parse_qs(parsed.query)
+
+    if "rc/clk" in url:
+        jk = params.get("jk", [None])[0]
+        if jk:
+            return f"https://in.indeed.com/viewjob?jk={jk}"
+
+    if "pagead/clk" in url:
+        jk = params.get("jk", [None])[0]
+        if jk:
+            return f"https://in.indeed.com/viewjob?jk={jk}"
+        try:
+            scraper = cloudscraper.create_scraper()
+            resp = scraper.head(url, allow_redirects=True, timeout=10)
+            if resp.url and "indeed.com" in resp.url and "pagead/clk" not in resp.url:
+                return resp.url
+        except Exception:
+            pass
+
+    return url
+
 
 INDIA_JOB_DOMAINS = {
     "in.indeed.com": "India",
@@ -55,9 +79,9 @@ def search_indeed_jobs(query, location=""):
                 if link_el:
                     href = link_el.get("href", "")
                     if href.startswith("http"):
-                        link = href
+                        link = resolve_indeed_url(href)
                     else:
-                        link = f"https://in.indeed.com{href}"
+                        link = resolve_indeed_url(f"https://in.indeed.com{href}")
 
                 if not title:
                     continue
