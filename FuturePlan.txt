@@ -92,7 +92,7 @@ Value: Zero-setup onboarding. Reproducible environments. Automated quality gates
 Instead of sequential for i in range(15): compute_relevance_ai(), batch them with asyncio.gather or concurrent calls — 15 parallel AI requests instead of sequential.
 Value: AI pass drops from ~75s to ~8s. Users won't walk away.
 9. Config Encryption
-Encrypt ~/.job-finder/config.json values (API keys) with a master password or OS keychain integration (keyring library).
+Encrypt ~/.matcha/config.json values (API keys) with a master password or OS keychain integration (keyring library).
 # Current: plaintext JSON
 {"ai_key": "sk-...", "serpapi_key": "..."}
 # Production: encrypted

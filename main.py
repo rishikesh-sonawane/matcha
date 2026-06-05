@@ -527,7 +527,7 @@ def prompt_loop(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Job Finder — multi-source job search with relevance ranking"
+        description="Matcha — multi-source job search with relevance ranking"
     )
     parser.add_argument("--configure", action="store_true", help="Configure API keys (SerpAPI, AI)")
     parser.add_argument(
@@ -551,7 +551,7 @@ def main() -> None:
 
     console.print(
         Panel.fit(
-            "[bold cyan]Job Finder[/bold cyan]\n"
+            "[bold cyan]Matcha[/bold cyan]\n"
             "[dim]Multi-source job search with relevance ranking[/dim]",
             border_style="cyan",
         )

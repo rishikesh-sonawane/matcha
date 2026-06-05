@@ -12,7 +12,7 @@ from requests.exceptions import ConnectionError, Timeout
 
 RETRYABLE_STATUSES: set[int] = {429, 502, 503, 504}
 
-CACHE_DIR: Path = Path.home() / ".job-finder"
+CACHE_DIR: Path = Path.home() / ".matcha"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 _session: requests_cache.CachedSession = requests_cache.CachedSession(

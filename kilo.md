@@ -1,8 +1,8 @@
-# Job Finder — Project Context
+# Matcha — Project Context
 
 ## Overview
 
-Job Finder is a Python terminal application (TUI) that aggregates job listings from multiple sources, ranks them by relevance to a user's professional profile, and displays them in an interactive, color-coded terminal interface. It uses a two-pass relevance engine (heuristic + optional AI via Kilo Gateway) and supports three methods of profile entry (PDF resume, LinkedIn URL, manual).
+Matcha is a Python terminal application (TUI) that aggregates job listings from multiple sources, ranks them by relevance to a user's professional profile, and displays them in an interactive, color-coded terminal interface. It uses a two-pass relevance engine (heuristic + optional AI via Kilo Gateway) and supports three methods of profile entry (PDF resume, LinkedIn URL, manual).
 
 ---
 
@@ -47,16 +47,16 @@ ddgs>=9.14.0
 ## Directory Structure
 
 ```
-/Users/rishi/Code/projects/job-finder/
+/Users/rishi/Code/projects/matcha/
 ├── .dockerignore
 ├── .github/workflows/ci.yml         # GitHub Actions: matrix (3.9-3.12), lint+format+test, Docker on tags
 ├── .pre-commit-config.yaml           # ruff (lint+format), trailing-whitespace, end-of-file, check-yaml, check-merge-conflict
 ├── Dockerfile                        # Multi-stage python:3.11-slim, non-root user
 ├── FuturePlan.txt                    # Detailed production-grade enhancement plan (25+ items)
 ├── README.md                         # Full project documentation
-├── actions.py                        # Save/unsave/load jobs (SQLite persistence in ~/.job-finder/jobs.db)
+├── actions.py                        # Save/unsave/load jobs (SQLite persistence in ~/.matcha/jobs.db)
 ├── ai.py                             # AI client for Kilo Gateway (profile extraction, query gen, job scoring)
-├── config.py                         # Persistent JSON config in ~/.job-finder/ (config.json, profile.json)
+├── config.py                         # Persistent JSON config in ~/.matcha/ (config.json, profile.json)
 ├── docker-compose.yml                # Docker Compose with MINIMAX/SERPAPI_KEY env vars, persistent config volume
 ├── kilo.md                           # This file — project context for AI agents
 ├── main.py                           # CLI entry point, orchestration, TUI (prompt_toolkit + Rich), ~625 lines
@@ -228,7 +228,7 @@ Helper: `tokenize(text)` — lowercase + extract `[a-z0-9+#.]+` tokens. `STOP_WO
 
 ### config.py (38 lines) — File-based Config
 
-**Directory:** `~/.job-finder/` (auto-created)
+**Directory:** `~/.matcha/` (auto-created)
 **Files:**
 - `config.json` — `{ai_key, serpapi_key, last_query, last_location}`
 - `profile.json` — saved profile dict
@@ -239,7 +239,7 @@ Helper: `tokenize(text)` — lowercase + extract `[a-z0-9+#.]+` tokens. `STOP_WO
 
 ### actions.py (107 lines) — Job Lifecycle (SQLite)
 
-**File:** `~/.job-finder/jobs.db` (SQLite)
+**File:** `~/.matcha/jobs.db` (SQLite)
 **Schema:**
 ```sql
 CREATE TABLE jobs (
@@ -303,7 +303,7 @@ CREATE TABLE jobs (
 
 ### scrapers/utils.py (90 lines)
 - `resilient_get(url, session, **kwargs)` — 3 retries, exponential backoff (1s, 2s, 4s), retry on {429, 502, 503, 504}, ConnectionError, Timeout
-- **HTTP cache:** Module-level `requests_cache.CachedSession` with SQLite backend at `~/.job-finder/http_cache.sqlite`, 30-minute TTL, caches only 200 OK responses. Used by default in `resilient_get()` — LinkedIn, Naukri, RemoteOK, SerpAPI, and Web Search scrapers all benefit automatically
+- **HTTP cache:** Module-level `requests_cache.CachedSession` with SQLite backend at `~/.matcha/http_cache.sqlite`, 30-minute TTL, caches only 200 OK responses. Used by default in `resilient_get()` — LinkedIn, Naukri, RemoteOK, SerpAPI, and Web Search scrapers all benefit automatically
 - **Rate limiter:** `TokenBucket` + `RateLimiter` classes implement per-domain token bucket throttling with per-domain locks (thread-safe). Rates:
   - `linkedin.com`: 3 req/min
   - `indeed.com`: 5 req/min
@@ -333,13 +333,13 @@ CREATE TABLE jobs (
 
 ## Configuration (Persistent)
 
-**Config directory:** `~/.job-finder/` (auto-created)
+**Config directory:** `~/.matcha/` (auto-created)
 **Config files:**
 - `config.json` — `{ai_key, serpapi_key, last_query, last_location, last_days}` (`last_query`/`last_location` are checked AFTER profile title/settings query in default precedence)`
 - `profile.json` — `{name, title, headline, skills, experience, summary}`
 - `jobs.db` — SQLite database for job lifecycle tracking (statuses: saved, applied, dismissed, interview, rejected, offer)
 - `http_cache.sqlite` — Auto-created by requests-cache, 30min TTL
-- `settings.yaml` — Optional user-facing YAML config (also loaded from `./job-finder.yaml`)
+- `settings.yaml` — Optional user-facing YAML config (also loaded from `./matcha.yaml`)
 
 **YAML config structure:**
 ```yaml
@@ -352,7 +352,7 @@ ai:
 scrapers:
   serpapi: false
 ```
-Config files are loaded in order: `--config` flag > `./job-finder.yaml` > `~/.job-finder/settings.yaml`, with deep merge semantics. Used to pre-fill prompts in interactive mode or drive non-interactive mode.
+Config files are loaded in order: `--config` flag > `./matcha.yaml` > `~/.matcha/settings.yaml`, with deep merge semantics. Used to pre-fill prompts in interactive mode or drive non-interactive mode.
 
 **Hardcoded settings:**
 - AI model: `kilo-auto/small`, API URL: `https://api.kilo.ai/api/gateway/chat/completions`, temp: 0.1
@@ -401,7 +401,7 @@ Config files are loaded in order: `--config` flag > `./job-finder.yaml` > `~/.jo
 **Base:** `python:3.11-slim` (multi-stage)
 **User:** Non-root UID 10001
 **Entrypoint:** `python3 main.py`
-**Compose:** Mounts `job-finder-config` volume at `/home/app/.job-finder`, passes `$MINIMAX` and `$SERPAPI_KEY` env vars
+**Compose:** Mounts `matcha-config` volume at `/home/app/.matcha`, passes `$MINIMAX` and `$SERPAPI_KEY` env vars
 
 ---
 
@@ -457,7 +457,7 @@ Config files are loaded in order: `--config` flag > `./job-finder.yaml` > `~/.jo
 4. ~~**Indeed returns 0 on Python 3.14**~~ **RESOLVED:** Cloudscraper returns 403 on Python 3.14 (challenge-solving broken for Indeed's Cloudflare type). Indeed now tries `_fetch_indeed_page` (resilient_get → cloudscraper) first; if that returns 0, falls back to `ddgs` with `site:in.indeed.com/viewjob` queries. On Python 3.9 cloudscraper works so the ddgs fallback isn't needed.
 5. ~~**No type hints anywhere**~~ **RESOLVED:** Full type hints across all source files + Pydantic v2 models in `models.py`
 6. **No logging framework** — all output via `console.print()` mixed with Rich UI
-7. **API keys in plaintext** — stored in `~/.job-finder/config.json` unencrypted
+7. **API keys in plaintext** — stored in `~/.matcha/config.json` unencrypted
 8. **India-centric** — Indeed hardcoded to `in.indeed.com`
 9. **LinkedIn scraper fragility** — guest API could break without notice, returns ~10 results
 10. **Naukri scraper uses DDG API** — rewritten from `html.duckduckgo.com` HTML scraping (which was captcha-blocked and unreliable) to `ddgs.text("site:naukri.com")`. Returns 6-44 jobs per query. Still limited to DDG-indexed Naukri pages, not direct API access.
@@ -483,10 +483,10 @@ Config files are loaded in order: `--config` flag > `./job-finder.yaml` > `~/.jo
 
 | # | Enhancement | Status | What changed |
 |---|---|---|---|
-| 1 | **HTTP Cache (requests-cache)** | ✅ Done | Added `requests-cache>=1.0.0` to requirements; `scrapers/utils.py` now creates a module-level `CachedSession` with SQLite backend at `~/.job-finder/http_cache.sqlite`, 30-min TTL, caches only 200 OK; all scrapers using `resilient_get()` benefit automatically |
+| 1 | **HTTP Cache (requests-cache)** | ✅ Done | Added `requests-cache>=1.0.0` to requirements; `scrapers/utils.py` now creates a module-level `CachedSession` with SQLite backend at `~/.matcha/http_cache.sqlite`, 30-min TTL, caches only 200 OK; all scrapers using `resilient_get()` benefit automatically |
 | 2 | **Rate Limiting** | ✅ Done | Added `TokenBucket` + `RateLimiter` classes to `scrapers/utils.py` with per-domain token bucket throttling, per-domain locks (thread-safe), and jitter (0.5-1.5x). Configured rates: LinkedIn 3/min, Indeed 5/min, RemoteOK 10/min, SerpAPI 8/min, DuckDuckGo 6/min |
-| 3 | **Non-interactive mode + YAML config** | ✅ Done | Added `settings.py` with `load_settings()` — loads YAML from `--config` flag > `./job-finder.yaml` > `~/.job-finder/settings.yaml` with deep merge. Added `--non-interactive`/`-b` flag to skip all prompts. Added `pyyaml>=6.0` to requirements. YAML supports `search.{query,location,days}`, `ai.enabled`, `scrapers.serpapi` |
-| 4 | **SQLite job tracking** | ✅ Done | Replaced `saved.json` with SQLite database `~/.job-finder/jobs.db`. Schema: `jobs(url PK, title, company, source, status, saved_at, applied_at, notes)` with statuses: saved/applied/dismissed/interview/rejected/offer. Added `set_job_status()` and `get_job_status()` functions. Uses WAL mode for thread safety. Backward-compatible API preserved (`load_saved_jobs()` still returns dict, `save_job()`/`unsave_job()` work unchanged). No new dependencies (Python stdlib `sqlite3`). |
+| 3 | **Non-interactive mode + YAML config** | ✅ Done | Added `settings.py` with `load_settings()` — loads YAML from `--config` flag > `./matcha.yaml` > `~/.matcha/settings.yaml` with deep merge. Added `--non-interactive`/`-b` flag to skip all prompts. Added `pyyaml>=6.0` to requirements. YAML supports `search.{query,location,days}`, `ai.enabled`, `scrapers.serpapi` |
+| 4 | **SQLite job tracking** | ✅ Done | Replaced `saved.json` with SQLite database `~/.matcha/jobs.db`. Schema: `jobs(url PK, title, company, source, status, saved_at, applied_at, notes)` with statuses: saved/applied/dismissed/interview/rejected/offer. Added `set_job_status()` and `get_job_status()` functions. Uses WAL mode for thread safety. Backward-compatible API preserved (`load_saved_jobs()` still returns dict, `save_job()`/`unsave_job()` work unchanged). No new dependencies (Python stdlib `sqlite3`). |
 | 5 | **Type hints + Pydantic models** | ✅ Done | Added `models.py` with Pydantic v2 models (Job, Profile, RelevanceResult, SavedJob, SearchConfig, AIConfig, ScraperConfig, Settings). Added full type hints to all 20+ source files: all function signatures, class attributes, module-level variables. Added `from __future__ import annotations` where needed. Added `pydantic>=2.0` to requirements. Removed "No type hints" gotcha. |
 | 6 | **Web search via ddgs API** | ✅ Done | Replaced DuckDuckGo HTML scraper with `ddgs` Python library. DuckDuckGo's `html.duckduckgo.com` endpoint now returns captcha 202 for automated requests. `ddgs` uses the DDG API directly. Also added `_SKIP_DOMAIN_PARTS` company fallback, `_STOP_WORDS` filtering, title-based company extraction, aggregate/search page filtering, non-job URL filtering. |
 | 7 | **Indeed fallback via ddgs (Python 3.14)** | ✅ Done | Cloudscraper returns 403 on Python 3.14 for Indeed (Cloudflare challenge-solving broken). Added `_fetch_indeed_page` that tries `resilient_get` → cloudscraper; if 0 jobs, falls back to `ddgs` with `site:in.indeed.com/viewjob` queries. Company extraction from ddgs snippets uses validated regex patterns with stop-word filtering. Added `ddgs` to requirements. |

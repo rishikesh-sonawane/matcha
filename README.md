@@ -1,4 +1,4 @@
-# Job Finder 🔍
+# Matcha 🔍
 
 > **Multi-source job aggregator with AI-powered relevance ranking.**
 > Enter your profile once — get ranked, personalized job matches from across the web.
@@ -90,8 +90,8 @@ Job boards show you **every** posting matching a keyword. This tool shows you on
 ### Setup
 
 ```bash
-git clone https://github.com/yourusername/job-finder.git
-cd job-finder
+git clone https://github.com/yourusername/matcha.git
+cd matcha
 pip3 install -r requirements.txt
 python3 main.py
 ```
@@ -131,7 +131,7 @@ python3 main.py
 
 ```
 ╭────────────────────────────────────────────────╮
-│ Job Finder                                     │
+│ Matcha                                     │
 │ Multi-source job search with relevance ranking │
 ╰────────────────────────────────────────────────╯
 
@@ -218,7 +218,7 @@ Interactive features:
 
 ### 4. Config File (Optional)
 
-Create `job-finder.yaml` in the project directory or `~/.job-finder/settings.yaml`:
+Create `matcha.yaml` in the project directory or `~/.matcha/settings.yaml`:
 
 ```yaml
 search:
@@ -315,7 +315,7 @@ With AI enabled:
 ## Project Structure
 
 ```
-job-finder/
+matcha/
 ├── main.py                  # CLI entry point, orchestration, UI
 ├── profile.py               # AI-only profile ingestion (PDF, LinkedIn, manual)
 ├── matcher.py               # Two-pass relevance scoring engine

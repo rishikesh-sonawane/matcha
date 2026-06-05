@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 
-CONFIG_DIR = Path.home() / ".job-finder"
+CONFIG_DIR = Path.home() / ".matcha"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 PROFILE_FILE = CONFIG_DIR / "profile.json"
 

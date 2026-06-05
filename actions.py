@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-CONFIG_DIR = Path.home() / ".job-finder"
+CONFIG_DIR = Path.home() / ".matcha"
 DB_PATH = CONFIG_DIR / "jobs.db"
 
 SCHEMA = """

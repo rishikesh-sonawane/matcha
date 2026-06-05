@@ -1,19 +1,6 @@
 services:
-  job-finder:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: job-finder:latest
-    container_name: job-finder
-    stdin_open: true
-    tty: true
-    environment:
-      - MINIMAX=${MINIMAX:-}
-      - SERPAPI_KEY=${SERPAPI_KEY:-}
-    volumes:
-      - job-finder-config:/home/app/.job-finder
-    working_dir: /app
-    entrypoint: ["python3", "main.py"]
-
-volumes:
-  job-finder-config:
+  matcha:
+    image: matcha:latest
+    container_name: matcha
+      - matcha-config:/home/app/.matcha
+  matcha-config:

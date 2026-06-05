@@ -3,8 +3,8 @@ from typing import Any, Optional
 
 import yaml
 
-LOCAL_CONFIG = Path("job-finder.yaml")
-USER_CONFIG = Path.home() / ".job-finder" / "settings.yaml"
+LOCAL_CONFIG = Path("matcha.yaml")
+USER_CONFIG = Path.home() / ".matcha" / "settings.yaml"
 
 DEFAULT_CONFIG = {
     "search": {
