@@ -1,7 +1,8 @@
 # Matcha 🍵
 
-> **Multi-source job aggregator with AI-powered relevance ranking.**
-> Enter your profile once — get ranked, personalized job matches from across the web.
+> **Match-a, Your next role, perfectly brewed.**
+> 
+> Multi-source job aggregator with AI-powered relevance ranking. Enter your profile once — get ranked, personalized job matches from across the web.
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)]()
 [![Rich TUI](https://img.shields.io/badge/built%20with-Rich-ffd700)]()
