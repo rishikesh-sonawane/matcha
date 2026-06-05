@@ -572,7 +572,12 @@ def main() -> None:
         or config.get("last_query")
         or ""
     )
-    default_location = profile.get("location") or settings["search"].get("location") or config.get("last_location") or ""
+    default_location = (
+        profile.get("location")
+        or settings["search"].get("location")
+        or config.get("last_location")
+        or ""
+    )
     default_days = config.get("last_days") or settings["search"].get("days", 7)
 
     if args.non_interactive:

@@ -39,6 +39,7 @@ pdfplumber>=0.10.0
 cloudscraper>=1.2.71
 rapidfuzz>=3.0.0
 prompt_toolkit>=3.0.0
+ddgs>=9.14.0
 ```
 
 ---
@@ -58,18 +59,18 @@ prompt_toolkit>=3.0.0
 ├── config.py                         # Persistent JSON config in ~/.job-finder/ (config.json, profile.json)
 ├── docker-compose.yml                # Docker Compose with MINIMAX/SERPAPI_KEY env vars, persistent config volume
 ├── kilo.md                           # This file — project context for AI agents
-├── main.py                           # CLI entry point, orchestration, TUI (prompt_toolkit + Rich), ~620 lines
+├── main.py                           # CLI entry point, orchestration, TUI (prompt_toolkit + Rich), ~625 lines
 ├── matcher.py                        # Two-pass relevance scoring (heuristic + AI wrapper), ~25 lines
 ├── models.py                         # Pydantic v2 data models (Job, Profile, RelevanceResult, SavedJob, SearchConfig, AIConfig, ScraperConfig, Settings)
-├── profile.py                        # Profile ingestion via PDF, LinkedIn, or manual, 577 lines
+├── profile.py                        # AI-only profile ingestion via PDF, LinkedIn, or manual, ~415 lines
 ├── pyproject.toml                    # Ruff config (line-length 100, target py39), pytest config
 ├── requirements.txt                  # 10 dependencies
 ├── scrapers/
-├── settings.py                       # YAML config loader (non-interactive mode), 35 lines
+├── settings.py                       # YAML config loader (non-interactive mode), 48 lines
 │   ├── __init__.py                   # Re-exports from linkedin, naukri, remoteok, serpapi_jobs, web_search
 │   ├── indeed.py                     # Indeed India scraper (cloudscraper + URL resolution), 115 lines
 │   ├── linkedin.py                   # LinkedIn guest API scraper, 74 lines
-│   ├── naukri.py                     # Naukri via DuckDuckGo search, 109 lines
+│   ├── naukri.py                     # Naukri via DuckDuckGo API (ddgs), ~143 lines
 │   ├── remoteok.py                   # RemoteOK public API scraper, 114 lines
 │   ├── serpapi_jobs.py              # Google Jobs via SerpAPI (optional), 88 lines
 │   ├── utils.py                      # resilient_get() + HTTP cache + per-domain rate limiter (token bucket), 76 lines
@@ -126,7 +127,7 @@ python3 main.py --help                               # Help
   - **Key bindings:** up/down (navigate), enter (detail), s (save/unsave), o (open in browser), n/p (next/prev page), l (saved list), r (re-run), q (quit)
   - State tracked via simple `State` class with: `page`, `selected`, `mode`, `detail_idx`, `re_run`
 
-**SCRAPER_DEFS dict (line 37-43):**
+**SCRAPER_DEFS dict (line 37-44):**
 ```python
 SCRAPER_DEFS = {
     "LinkedIn": search_linkedin_jobs,
@@ -140,18 +141,17 @@ Google Jobs added dynamically if SerpAPI key present.
 
 ---
 
-### profile.py (577 lines) — Profile Ingestion
+### profile.py (~415 lines) — Profile Ingestion (AI-only)
 
 **Key functions:**
-- `suggest_title(skills)` — maps skills → job title using SKILL_TO_TITLE_MAP (17 mappings)
-- `extract_experience(text_lower)` — regex extraction of years from free text
-- `parse_resume_pdf(path)` — pdfplumber extraction + regex keyword detection (40+ tech keywords) + optional AI enhancement
+- `parse_resume_pdf(path)` — pdfplumber extraction → AI-only extraction via `ai_extract_profile()` (no fallback keyword matching)
 - `scrape_linkedin_profile(url)` — direct LinkedIn page scrape, falls back to `search_linkedin_profile_via_web()` via DuckDuckGo
 - `search_linkedin_profile_via_web(username)` — DuckDuckGo search fallback for LinkedIn profile gathering
 - `manual_profile_entry()` — interactive prompts for all profile fields
-- `build_or_load_profile(force_new=False)` — orchestrator: check saved → choose method → fallback chain
+- `build_or_load_profile(force_new=False)` — orchestrator: check saved → choose method → AI-first extraction, falls back to manual entry if AI unavailable
+- `ai_suggest_titles()` called from `ai.py` to suggest job titles from skills (replaces old `suggest_title` with hardcoded map)
 
-**SKILL_TO_TITLE_MAP (17 entries):** Backend Developer, ML Engineer, AI Engineer, Data Analyst, Data Engineer, DevOps Engineer, Cloud Engineer, Frontend Developer, Full Stack Developer, Java Developer, Go Developer, Systems Engineer, Product Manager
+**Removed (AI replacement):** `suggest_title()`, `_fallback_parse()`, `_load_profile_config()`, `_match_keywords()`, `_extract_skills_section()`, `_find_section_range()`, `_score_section_skills()`, `_clean_keyword()`, all keyword/section/pattern configs
 
 **Profile dict shape:**
 ```python
@@ -205,12 +205,13 @@ Helper: `tokenize(text)` — lowercase + extract `[a-z0-9+#.]+` tokens. `STOP_WO
 
 ---
 
-### ai.py (262 lines) — AI Client
+### ai.py (~305 lines) — AI Client
 
 **Provider:** Kilo Gateway (`https://api.kilo.ai/api/gateway/chat/completions`, model `kilo-auto/small`)
 **Auth:** Bearer token from `$MINIMAX` env var or `config.json` `ai_key` field
 **Config key:** `ai_key`, **Env var:** `MINIMAX`
 **Temperature:** 0.1 (hardcoded)
+**Note:** `response_format={"type": "json_object"}` is NOT passed — the `kilo-auto/small` model does not support it and silently fails.
 
 **Functions:**
 - `_get_api_key()` — env var > config file
@@ -221,6 +222,7 @@ Helper: `tokenize(text)` — lowercase + extract `[a-z0-9+#.]+` tokens. `STOP_WO
 - `ai_extract_profile(text)` — resume enrichment via `PROFILE_EXTRACTION_PROMPT`
 - `ai_generate_queries(profile)` — 3-5 expanded search queries via `QUERY_GENERATION_PROMPT`
 - `ai_score_job(profile, job)` — structured job scoring via `JOB_SCORING_PROMPT` (0-100 + reasons)
+- `ai_suggest_titles(skills)` — suggests 3-5 job titles matching a skills list via `SUGGEST_TITLES_PROMPT`
 
 ---
 
@@ -271,11 +273,13 @@ CREATE TABLE jobs (
 - **Method:** requests + BeautifulSoup, parses `<li>` job cards
 - **Time filter:** `f_TPR=r{days*86400}` — accepts `days` kwarg (default 7, min 1). User is prompted for days in main flow
 
-### scrapers/naukri.py (109 lines)
-- **Target:** Naukri.com (via DuckDuckGo)
-- **Method:** Searches `html.duckduckgo.com` for `naukri.com {query}` and `naukri {query}`
-- **Fallback:** Only gets search result snippets, not full job listings
-- **Helper functions:** `clean_title()`, `build_job()`, `extract_url()` (DDG redirect resolver)
+### scrapers/naukri.py (~143 lines)
+- **Target:** Naukri.com (via DuckDuckGo API)
+- **Method:** Uses `ddgs.text("site:naukri.com {query}")` API call (was `html.duckduckgo.com` HTML scrape)
+- **Filtering:** Strips non-job content (`/code360/`, `/campus/`, `/blog/`, `/interview-`, `companies.naukri.com`)
+- **Title extraction:** URL-based fallback for search category pages, snippet-based extraction for job listings
+- **Timeout:** 8s per request (was 15s)
+- **Performance:** Single API call per query (was 2 sequential HTML searches)
 
 ### scrapers/remoteok.py (114 lines)
 - **Target:** RemoteOK public API (`remoteok.com/api`)
@@ -323,7 +327,7 @@ CREATE TABLE jobs (
 | LinkedIn | `linkedin.com/jobs-guest/jobs/api/...` | None (guest) | Free |
 | Indeed | `in.indeed.com/jobs` | None (cloudscraper) | Free |
 | RemoteOK | `remoteok.com/api` | None | Free |
-| DuckDuckGo | `html.duckduckgo.com/html/` | None | Free (for Naukri, web search, LinkedIn fallback) |
+| DuckDuckGo | `ddgs` Python library | None | Free (for web search, Naukri, Indeed fallback) |
 
 ---
 
@@ -331,7 +335,7 @@ CREATE TABLE jobs (
 
 **Config directory:** `~/.job-finder/` (auto-created)
 **Config files:**
-- `config.json` — `{ai_key, serpapi_key, last_query, last_location, last_days}`
+- `config.json` — `{ai_key, serpapi_key, last_query, last_location, last_days}` (`last_query`/`last_location` are checked AFTER profile title/settings query in default precedence)`
 - `profile.json` — `{name, title, headline, skills, experience, summary}`
 - `jobs.db` — SQLite database for job lifecycle tracking (statuses: saved, applied, dismissed, interview, rejected, offer)
 - `http_cache.sqlite` — Auto-created by requests-cache, 30min TTL
@@ -354,7 +358,7 @@ Config files are loaded in order: `--config` flag > `./job-finder.yaml` > `~/.jo
 - AI model: `kilo-auto/small`, API URL: `https://api.kilo.ai/api/gateway/chat/completions`, temp: 0.1
 - Indeed domain: `in.indeed.com` (India-only)
 - Page size: 10, AI scoring top N: 15, max scraper workers: 12, max AI workers: 8
-- HTTP timeouts: 15-20s
+- HTTP timeouts: 8-20s (8s for Naukri, 10-20s for other scrapers)
 - Dedup thresholds: title 82%, company 88%
 - Retry: 3 attempts, backoff 1s/2s/4s, on {429,502,503,504} + ConnectionError + Timeout
 - HTTP cache: SQLite backend, 30-minute TTL, caches only 200 OK
@@ -364,7 +368,7 @@ Config files are loaded in order: `--config` flag > `./job-finder.yaml` > `~/.jo
 ## Testing
 
 **Framework:** Python `unittest` (stdlib)
-**File:** `tests/test_core.py` (275 lines)
+**File:** `tests/test_core.py` (~288 lines)
 **Run:** `python -m unittest tests.test_core -v`
 
 **Test classes (24 methods total):**
@@ -375,7 +379,7 @@ Config files are loaded in order: `--config` flag > `./job-finder.yaml` > `~/.jo
 | TestTokenize | 5 | `tokenize()` — basic, lowercase, numbers, empty, special chars |
 | TestComputeRelevance | 5 | `compute_relevance()` — perfect match, no match, partial, reasons, bounds |
 | TestResolveIndeedURL | 6 | `resolve_indeed_url()` — rc/clk, clean URL, non-indeed, pagead/clk, no jk param, empty |
-| TestSuggestTitle | 5 | `suggest_title()` — devops/backend/frontend skills, empty, unrecognized |
+| TestSuggestTitle | 5 | `ai_suggest_titles()` — devops/backend/frontend skills, empty, unrecognized (mocks `check_ai_available` + `_call_ai`) |
 | TestExtractJSON | 6 | `_extract_json()` — plain, codeblock, embedded, invalid, empty |
 
 **CI:** GitHub Actions runs tests across Python 3.9, 3.10, 3.11, 3.12 matrix.
@@ -456,7 +460,7 @@ Config files are loaded in order: `--config` flag > `./job-finder.yaml` > `~/.jo
 7. **API keys in plaintext** — stored in `~/.job-finder/config.json` unencrypted
 8. **India-centric** — Indeed hardcoded to `in.indeed.com`
 9. **LinkedIn scraper fragility** — guest API could break without notice, returns ~10 results
-10. **Naukri scraper is shallow** — only gets DuckDuckGo search snippets, not full listings
+10. **Naukri scraper uses DDG API** — rewritten from `html.duckduckgo.com` HTML scraping (which was captcha-blocked and unreliable) to `ddgs.text("site:naukri.com")`. Returns 6-44 jobs per query. Still limited to DDG-indexed Naukri pages, not direct API access.
 11. ~~**No HTTP caching** — re-scrapes everything every run~~ **RESOLVED:** requests-cache with SQLite backend, 30-min TTL, caches only 200 OK
 12. ~~**No rate limiting** — could get IP banned with aggressive usage~~ **RESOLVED:** Per-domain token bucket rate limiter in `scrapers/utils.py` with 5 configured domains, jitter, and per-domain locks
 13. **No web server or API** — pure terminal app, no frontend framework
@@ -486,6 +490,8 @@ Config files are loaded in order: `--config` flag > `./job-finder.yaml` > `~/.jo
 | 5 | **Type hints + Pydantic models** | ✅ Done | Added `models.py` with Pydantic v2 models (Job, Profile, RelevanceResult, SavedJob, SearchConfig, AIConfig, ScraperConfig, Settings). Added full type hints to all 20+ source files: all function signatures, class attributes, module-level variables. Added `from __future__ import annotations` where needed. Added `pydantic>=2.0` to requirements. Removed "No type hints" gotcha. |
 | 6 | **Web search via ddgs API** | ✅ Done | Replaced DuckDuckGo HTML scraper with `ddgs` Python library. DuckDuckGo's `html.duckduckgo.com` endpoint now returns captcha 202 for automated requests. `ddgs` uses the DDG API directly. Also added `_SKIP_DOMAIN_PARTS` company fallback, `_STOP_WORDS` filtering, title-based company extraction, aggregate/search page filtering, non-job URL filtering. |
 | 7 | **Indeed fallback via ddgs (Python 3.14)** | ✅ Done | Cloudscraper returns 403 on Python 3.14 for Indeed (Cloudflare challenge-solving broken). Added `_fetch_indeed_page` that tries `resilient_get` → cloudscraper; if 0 jobs, falls back to `ddgs` with `site:in.indeed.com/viewjob` queries. Company extraction from ddgs snippets uses validated regex patterns with stop-word filtering. Added `ddgs` to requirements. |
+| 8 | **AI-only profile extraction** | ✅ Done | Removed `response_format={"type": "json_object"}` from all AI calls (model does not support it). Rewrote `profile.py` as AI-only: no fallback parsing functions, no keyword matching, no section-aware extraction. Removed `suggest_title()`, `_fallback_parse()`, `_load_profile_config()`, `_match_keywords()`, `_extract_skills_section()`, `_find_section_range()`, `_score_section_skills()`, `_clean_keyword()`. Added `ai_suggest_titles()` to `ai.py`. Stripped profile fallback config from `settings.py`. Updated tests to mock AI calls. |
+| 9 | **Naukri scraper rewritten (DDGS API)** | ✅ Done | Replaced `html.duckduckgo.com` HTML scraping (unreliable, 2×15s sequential) with single `ddgs.text("site:naukri.com")` API call. Filters out non-job content (code360, blog, campus). Timeout reduced to 8s. Returns 6-44 jobs per query (was 0). |
 
 ---
 
