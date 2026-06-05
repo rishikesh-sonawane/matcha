@@ -1,4 +1,5 @@
 import re
+from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import requests
@@ -6,10 +7,16 @@ from bs4 import BeautifulSoup
 
 from .utils import resilient_get
 
-HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+HEADERS: dict[str, str] = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+}
 
 
-def search_naukri_jobs(query, location=""):
+def search_naukri_jobs(
+    query: str,
+    location: str = "",
+    **kwargs: Any,
+) -> list[dict[str, str]]:
     jobs = []
     seen_urls = set()
 
@@ -59,7 +66,13 @@ def search_naukri_jobs(query, location=""):
     return jobs
 
 
-def build_job(title, snippet, url, search_location, query):
+def build_job(
+    title: str,
+    snippet: str,
+    url: str,
+    search_location: str,
+    query: str,
+) -> dict[str, str]:
     title_clean = clean_title(title)
 
     company = "Naukri"
@@ -84,7 +97,7 @@ def build_job(title, snippet, url, search_location, query):
     }
 
 
-def clean_title(title):
+def clean_title(title: str) -> str:
     title = re.sub(r"\s*[-–|]\s*Naukri\.?com.*", "", title, flags=re.IGNORECASE)
     title = re.sub(r"\s*[-–|]\s*(?:Hiring|Job|Opening|Vacancy).*", "", title, flags=re.IGNORECASE)
     title = re.sub(r"\s*[-–]\s*\d+.*", "", title)
@@ -95,7 +108,7 @@ def clean_title(title):
     return title.strip(" ,-–")
 
 
-def extract_url(raw_href):
+def extract_url(raw_href: str) -> str:
     if not raw_href:
         return ""
     if raw_href.startswith("//"):

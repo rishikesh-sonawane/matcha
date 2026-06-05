@@ -1,3 +1,4 @@
+from typing import Any
 from urllib.parse import quote
 
 import requests
@@ -5,7 +6,7 @@ from bs4 import BeautifulSoup
 
 from .utils import resilient_get
 
-HEADERS = {
+HEADERS: dict[str, str] = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -16,13 +17,23 @@ HEADERS = {
 }
 
 
-def search_linkedin_jobs(query, location=""):
+SECONDS_PER_DAY: int = 86400
+
+
+def search_linkedin_jobs(
+    query: str,
+    location: str = "",
+    **kwargs: Any,
+) -> list[dict[str, str]]:
     jobs = []
     loc = location if location else "United States"
 
+    days = max(1, kwargs.get("days", 7))
+    f_tpr = f"r{days * SECONDS_PER_DAY}"
+
     url = (
         f"https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
-        f"?keywords={quote(query)}&location={quote(loc)}&f_TPR=r86400"
+        f"?keywords={quote(query)}&location={quote(loc)}&f_TPR={f_tpr}"
         f"&position=1&pageNum=0"
     )
 

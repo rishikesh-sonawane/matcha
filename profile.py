@@ -1,5 +1,6 @@
 import re
 from pathlib import Path
+from typing import Any, Optional
 from urllib.parse import quote, urlparse
 
 import requests
@@ -15,7 +16,7 @@ from config import load_profile, save_profile
 console = Console()
 
 
-SKILL_TO_TITLE_MAP = [
+SKILL_TO_TITLE_MAP: list[tuple[set[str], str]] = [
     ({"python", "django", "flask", "fastapi", "sql", "postgresql", "mysql"}, "Backend Developer"),
     (
         {"python", "tensorflow", "pytorch", "scikit-learn", "pandas", "numpy"},
@@ -45,7 +46,7 @@ SKILL_TO_TITLE_MAP = [
 ]
 
 
-def suggest_title(skills):
+def suggest_title(skills: list[str]) -> Optional[str]:
     skill_set = {s.lower() for s in skills}
     best_match = None
     best_count = 0
@@ -57,7 +58,7 @@ def suggest_title(skills):
     return best_match
 
 
-def extract_experience(text_lower):
+def extract_experience(text_lower: str) -> Optional[int]:
     years = re.findall(
         r"(\d+)\s*(?:years?|yrs?|yr)\s*(?:of)?\s*(?:experience|exp|work)?", text_lower
     )
@@ -69,7 +70,7 @@ def extract_experience(text_lower):
     return None
 
 
-def parse_resume_pdf(path):
+def parse_resume_pdf(path: str) -> Optional[dict[str, Any]]:
     path = Path(path)
     if not path.exists():
         console.print(f"[red]File not found: {path}[/red]")
@@ -246,7 +247,7 @@ def parse_resume_pdf(path):
     return profile
 
 
-HEADERS = {
+HEADERS: dict[str, str] = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -256,12 +257,12 @@ HEADERS = {
 }
 
 
-def extract_linkedin_username(url):
+def extract_linkedin_username(url: str) -> Optional[str]:
     match = re.search(r"linkedin\.com/in/([^/]+)", url)
     return match.group(1) if match else None
 
 
-def search_linkedin_profile_via_web(username):
+def search_linkedin_profile_via_web(username: str) -> Optional[dict[str, Any]]:
     queries = [
         f"linkedin.com/in/{username}",
         f"{username.replace('-', ' ')} linkedin",
@@ -387,7 +388,7 @@ def search_linkedin_profile_via_web(username):
     }
 
 
-def extract_url(raw_href):
+def extract_url(raw_href: str) -> str:
     from urllib.parse import parse_qs, unquote
 
     if raw_href.startswith("//"):
@@ -401,7 +402,7 @@ def extract_url(raw_href):
     return raw_href
 
 
-def scrape_linkedin_profile(url):
+def scrape_linkedin_profile(url: str) -> Optional[dict[str, Any]]:
     username = extract_linkedin_username(url)
     if not username:
         console.print("[red]Invalid LinkedIn profile URL[/red]")
@@ -458,7 +459,7 @@ def scrape_linkedin_profile(url):
         return search_linkedin_profile_via_web(username)
 
 
-def manual_profile_entry():
+def manual_profile_entry() -> dict[str, Any]:
     console.print(Panel("[bold]Enter Your Profile Details[/bold]"))
 
     name = Prompt.ask("Full name")
@@ -480,7 +481,7 @@ def manual_profile_entry():
     }
 
 
-def build_or_load_profile(force_new=False):
+def build_or_load_profile(force_new: bool = False) -> Optional[dict[str, Any]]:
     if not force_new:
         existing = load_profile()
         if existing:

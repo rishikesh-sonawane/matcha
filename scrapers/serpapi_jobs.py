@@ -1,11 +1,17 @@
+from typing import Any
+
 import requests
 
 from .utils import resilient_get
 
-SERPAPI_BASE = "https://serpapi.com/search.json"
+SERPAPI_BASE: str = "https://serpapi.com/search.json"
 
 
-def search_serpapi_jobs(query, location=""):
+def search_serpapi_jobs(
+    query: str,
+    location: str = "",
+    **kwargs: Any,
+) -> list[dict[str, str]]:
     config = get_serpapi_config()
     api_key = config.get("serpapi_key")
     if not api_key:
@@ -74,12 +80,12 @@ def search_serpapi_jobs(query, location=""):
         return []
 
 
-def check_serpapi_available():
+def check_serpapi_available() -> bool:
     config = get_serpapi_config()
     return bool(config.get("serpapi_key"))
 
 
-def get_serpapi_config():
+def get_serpapi_config() -> dict[str, Any]:
     try:
         from config import load_config
 

@@ -9,7 +9,7 @@ Job Finder is a Python terminal application (TUI) that aggregates job listings f
 ## Tech Stack
 
 | Technology | Purpose |
-|---|---|
+|---|---|---|
 | Python 3.9+ | Runtime |
 | Rich | Terminal UI (tables, panels, progress bars, live display) |
 | prompt_toolkit | Interactive TUI navigation, keyboard bindings, full-screen mode |
@@ -18,6 +18,8 @@ Job Finder is a Python terminal application (TUI) that aggregates job listings f
 | cloudscraper | Cloudflare bypass for Indeed India |
 | pdfplumber | PDF text extraction for resumes |
 | rapidfuzz | Fuzzy string matching for deduplication |
+| requests-cache | Disk-backed HTTP cache (SQLite, 30min TTL) |
+| pydantic | Data validation and type safety (v2) |
 | ruff | Python linter and formatter |
 | pre-commit | Git pre-commit hooks |
 | Docker | Containerization (python:3.11-slim, multi-stage, non-root user UID 10001) |
@@ -27,6 +29,9 @@ Job Finder is a Python terminal application (TUI) that aggregates job listings f
 
 ```
 requests>=2.28.0
+requests-cache>=1.0.0
+pyyaml>=6.0
+pydantic>=2.0
 beautifulsoup4>=4.11.0
 rich>=13.0.0
 python-dotenv>=1.0.0
@@ -48,28 +53,30 @@ prompt_toolkit>=3.0.0
 ├── Dockerfile                        # Multi-stage python:3.11-slim, non-root user
 ├── FuturePlan.txt                    # Detailed production-grade enhancement plan (25+ items)
 ├── README.md                         # Full project documentation
-├── actions.py                        # Save/unsave/load jobs (JSON persistence in ~/.job-finder/saved.json)
+├── actions.py                        # Save/unsave/load jobs (SQLite persistence in ~/.job-finder/jobs.db)
 ├── ai.py                             # AI client for Kilo Gateway (profile extraction, query gen, job scoring)
 ├── config.py                         # Persistent JSON config in ~/.job-finder/ (config.json, profile.json)
 ├── docker-compose.yml                # Docker Compose with MINIMAX/SERPAPI_KEY env vars, persistent config volume
 ├── kilo.md                           # This file — project context for AI agents
-├── main.py                           # CLI entry point, orchestration, TUI (prompt_toolkit + Rich), 552 lines
-├── matcher.py                        # Two-pass relevance scoring (heuristic + AI wrapper), 202 lines
+├── main.py                           # CLI entry point, orchestration, TUI (prompt_toolkit + Rich), ~620 lines
+├── matcher.py                        # Two-pass relevance scoring (heuristic + AI wrapper), ~25 lines
+├── models.py                         # Pydantic v2 data models (Job, Profile, RelevanceResult, SavedJob, SearchConfig, AIConfig, ScraperConfig, Settings)
 ├── profile.py                        # Profile ingestion via PDF, LinkedIn, or manual, 577 lines
 ├── pyproject.toml                    # Ruff config (line-length 100, target py39), pytest config
-├── requirements.txt                  # 8 dependencies
+├── requirements.txt                  # 10 dependencies
 ├── scrapers/
+├── settings.py                       # YAML config loader (non-interactive mode), 35 lines
 │   ├── __init__.py                   # Re-exports from linkedin, naukri, remoteok, serpapi_jobs, web_search
 │   ├── indeed.py                     # Indeed India scraper (cloudscraper + URL resolution), 115 lines
 │   ├── linkedin.py                   # LinkedIn guest API scraper, 74 lines
 │   ├── naukri.py                     # Naukri via DuckDuckGo search, 109 lines
 │   ├── remoteok.py                   # RemoteOK public API scraper, 114 lines
 │   ├── serpapi_jobs.py              # Google Jobs via SerpAPI (optional), 88 lines
-│   ├── utils.py                      # resilient_get() with retry logic, 27 lines
+│   ├── utils.py                      # resilient_get() + HTTP cache + per-domain rate limiter (token bucket), 76 lines
 │   └── web_search.py                 # DuckDuckGo web search with job board filtering, 213 lines
 └── tests/
     ├── __init__.py
-    └── test_core.py                  # 275 lines, 6 test classes, 24 test methods (unittest)
+    └── test_core.py                  # 274 lines, 6 test classes, 42 test methods (unittest)
 ```
 
 ---
@@ -89,10 +96,12 @@ prompt_toolkit>=3.0.0
 ## CLI
 
 ```bash
-python3 main.py                          # Normal flow
-python3 main.py --configure              # Set SerpAPI + AI API keys
-python3 main.py --new-profile / -n       # Re-enter profile from scratch
-python3 main.py --help                   # Help
+python3 main.py                                    # Normal flow (interactive prompts)
+python3 main.py -b                                   # Non-interactive mode (requires YAML config)
+python3 main.py --config /path/to/config.yaml -b     # Custom config path in non-interactive mode
+python3 main.py --configure                          # Set SerpAPI + AI API keys
+python3 main.py --new-profile / -n                   # Re-enter profile from scratch
+python3 main.py --help                               # Help
 ```
 
 ---
@@ -104,10 +113,11 @@ python3 main.py --help                   # Help
 **Key functions:**
 - `configure_serpapi()` — interactive SerpAPI key setup
 - `configure_ai()` — interactive AI API key setup
-- `run_scraper(name, scraper_func, query, location)` — wraps scraper call in try/except
+- `run_scraper(name, scraper_func, query, location, days)` — wraps scraper call in try/except, passes days to each scraper
+- `main()` now accepts `--non-interactive` / `-b` (skip prompts, uses YAML config values) and `--config` (custom YAML path)
 - `_normalize(text)` — lowercase + strip roman numerals/seniority abbrev + remove punctuation + collapse whitespace
 - `deduplicate(jobs, title_threshold=82, company_threshold=88)` — rapidfuzz fuzzy dedup
-- `search_jobs(queries, location)` — parallel scrape across all sources × all queries, live Rich table
+- `search_jobs(queries, location, days)` — parallel scrape across all sources × all queries, passes days to each scraper, live Rich table
 - `rank_jobs(jobs, profile, use_ai=False)` — heuristic ranking + optional AI re-scoring of top 15
 - `build_results_table(ranked, page, page_size, total_pages, ai_enabled, saved_ids, highlight)` — Rich Table for results
 - `show_job_detail(job, score, reasons)` — Rich Panel for job details
@@ -155,6 +165,22 @@ Google Jobs added dynamically if SerpAPI key present.
     "location": str,        # added at search time
 }
 ```
+
+---
+
+### models.py (54 lines) — Pydantic V2 Data Models
+
+**Models:**
+- `Job` — `{title, company, location, description, url, source}`
+- `Profile` — `{name, title, headline, skills, experience, summary, location}`
+- `RelevanceResult` — `{score: float 0-100, reasons: list[str]}`
+- `SavedJob` — `{title, company, url, source}`
+- `SearchConfig` — `{query, location, days}`
+- `AIConfig` — `{enabled}`
+- `ScraperConfig` — `{serpapi}`
+- `Settings` — `{search: SearchConfig, ai: AIConfig, scrapers: ScraperConfig}`
+
+**Usage:** Models are defined for type safety and documentation. Runtime code still uses plain dicts for flexibility and backward compatibility with scrapers and serialization.
 
 ---
 
@@ -209,11 +235,25 @@ Helper: `tokenize(text)` — lowercase + extract `[a-z0-9+#.]+` tokens. `STOP_WO
 
 ---
 
-### actions.py (54 lines) — Job Bookmarks
+### actions.py (107 lines) — Job Lifecycle (SQLite)
 
-**File:** `~/.job-finder/saved.json`
-**Data shape:** `{url: {title, company, url, source}}`
-**Functions:** `load_saved_jobs()`, `is_job_saved(url, saved_ids)`, `save_job(job, saved_ids)`, `unsave_job(url, saved_ids)`
+**File:** `~/.job-finder/jobs.db` (SQLite)
+**Schema:**
+```sql
+CREATE TABLE jobs (
+    url TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    company TEXT NOT NULL,
+    source TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'saved',  -- saved, applied, dismissed, interview, rejected, offer
+    saved_at TEXT NOT NULL,
+    applied_at TEXT,
+    notes TEXT DEFAULT ''
+)
+```
+**Valid statuses:** `saved`, `applied`, `dismissed`, `interview`, `rejected`, `offer`
+**Functions:** `load_saved_jobs()` → `{url: {title, company, url, source}}`, `is_job_saved()`, `save_job()`, `unsave_job()`, `set_job_status(url, status)`, `get_job_status(url)`
+**Migration:** Automatically migrates from `saved.json` on first run — creates SQLite DB with WAL mode. Backward-compatible dict interface preserved for in-memory `saved_ids` use in TUI loop.
 
 ---
 
@@ -225,11 +265,11 @@ Helper: `tokenize(text)` — lowercase + extract `[a-z0-9+#.]+` tokens. `STOP_WO
 - **URL resolution:** `resolve_indeed_url()` decodes `rc/clk` and `pagead/clk` tracking URLs → clean `viewjob?jk=` URLs
 - **Selectors:** `.job_seen_beacon`, `[data-jk]`, `h3.jobTitle a`, `[data-testid=company-name]`, `[data-testid=text-location]`
 
-### scrapers/linkedin.py (74 lines)
+### scrapers/linkedin.py (76 lines)
 - **Target:** LinkedIn guest API
-- **Endpoint:** `/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords=...&location=...&f_TPR=r86400`
+- **Endpoint:** `/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords=...&location=...&f_TPR=r{days*86400}`
 - **Method:** requests + BeautifulSoup, parses `<li>` job cards
-- **Filter:** Past 24 hours (`f_TPR=r86400`)
+- **Time filter:** `f_TPR=r{days*86400}` — accepts `days` kwarg (default 7, min 1). User is prompted for days in main flow
 
 ### scrapers/naukri.py (109 lines)
 - **Target:** Naukri.com (via DuckDuckGo)
@@ -257,8 +297,16 @@ Helper: `tokenize(text)` — lowercase + extract `[a-z0-9+#.]+` tokens. `STOP_WO
   - Accept individual job pages (`INDIVIDUAL_JOB_PATTERNS`) OR known job board domains (13 domains)
 - **Helper functions:** `is_search_page()`, `extract_url()`, `clean_title()`, `extract_company()`, `extract_location()`, `identify_source()`
 
-### scrapers/utils.py (27 lines)
+### scrapers/utils.py (90 lines)
 - `resilient_get(url, session, **kwargs)` — 3 retries, exponential backoff (1s, 2s, 4s), retry on {429, 502, 503, 504}, ConnectionError, Timeout
+- **HTTP cache:** Module-level `requests_cache.CachedSession` with SQLite backend at `~/.job-finder/http_cache.sqlite`, 30-minute TTL, caches only 200 OK responses. Used by default in `resilient_get()` — LinkedIn, Naukri, RemoteOK, SerpAPI, and Web Search scrapers all benefit automatically
+- **Rate limiter:** `TokenBucket` + `RateLimiter` classes implement per-domain token bucket throttling with per-domain locks (thread-safe). Rates:
+  - `linkedin.com`: 3 req/min
+  - `indeed.com`: 5 req/min
+  - `remoteok.com`: 10 req/min
+  - `serpapi.com`: 8 req/min
+  - `duckduckgo.com`: 6 req/min
+  - Jitter (0.5–1.5x) applied to wait times to avoid thundering herd
 
 ### scrapers/__init__.py (6 lines)
 - Re-exports: `search_linkedin_jobs`, `search_naukri_jobs`, `search_remoteok_jobs`, `check_serpapi_available`, `search_serpapi_jobs`, `search_web_for_jobs`
@@ -283,9 +331,24 @@ Helper: `tokenize(text)` — lowercase + extract `[a-z0-9+#.]+` tokens. `STOP_WO
 
 **Config directory:** `~/.job-finder/` (auto-created)
 **Config files:**
-- `config.json` — `{ai_key, serpapi_key, last_query, last_location}`
+- `config.json` — `{ai_key, serpapi_key, last_query, last_location, last_days}`
 - `profile.json` — `{name, title, headline, skills, experience, summary}`
-- `saved.json` — `{url: {title, company, url, source}}`
+- `jobs.db` — SQLite database for job lifecycle tracking (statuses: saved, applied, dismissed, interview, rejected, offer)
+- `http_cache.sqlite` — Auto-created by requests-cache, 30min TTL
+- `settings.yaml` — Optional user-facing YAML config (also loaded from `./job-finder.yaml`)
+
+**YAML config structure:**
+```yaml
+search:
+  query: "Platform Engineer"
+  location: "Pune"
+  days: 7
+ai:
+  enabled: true
+scrapers:
+  serpapi: false
+```
+Config files are loaded in order: `--config` flag > `./job-finder.yaml` > `~/.job-finder/settings.yaml`, with deep merge semantics. Used to pre-fill prompts in interactive mode or drive non-interactive mode.
 
 **Hardcoded settings:**
 - AI model: `kilo-auto/small`, API URL: `https://api.kilo.ai/api/gateway/chat/completions`, temp: 0.1
@@ -294,6 +357,7 @@ Helper: `tokenize(text)` — lowercase + extract `[a-z0-9+#.]+` tokens. `STOP_WO
 - HTTP timeouts: 15-20s
 - Dedup thresholds: title 82%, company 88%
 - Retry: 3 attempts, backoff 1s/2s/4s, on {429,502,503,504} + ConnectionError + Timeout
+- HTTP cache: SQLite backend, 30-minute TTL, caches only 200 OK
 
 ---
 
@@ -360,7 +424,7 @@ Helper: `tokenize(text)` — lowercase + extract `[a-z0-9+#.]+` tokens. `STOP_WO
 
 ---
 
-## Data Schemas (informal dicts, no dataclasses/Pydantic)
+## Data Schemas (Pydantic v2 models in models.py + dicts for runtime)
 
 **Job dict:**
 ```python
@@ -384,23 +448,44 @@ Helper: `tokenize(text)` — lowercase + extract `[a-z0-9+#.]+` tokens. `STOP_WO
 ## Key Observations & Gotchas
 
 1. **scrapers/__init__.py is incomplete** — does not re-export `search_indeed_jobs` or `resolve_indeed_url` (main.py imports them directly from `scrapers.indeed`)
-2. **No type hints anywhere** — no mypy, no Pydantic, no dataclasses
-3. **No logging framework** — all output via `console.print()` mixed with Rich UI
-4. **API keys in plaintext** — stored in `~/.job-finder/config.json` unencrypted
-5. **India-centric** — Indeed hardcoded to `in.indeed.com`
-6. **LinkedIn scraper fragility** — guest API could break without notice, returns ~10 results
-7. **Naukri scraper is shallow** — only gets DuckDuckGo search snippets, not full listings
-8. **No HTTP caching** — re-scrapes everything every run
-9. **No rate limiting** — could get IP banned with aggressive usage
-10. **No web server or API** — pure terminal app, no frontend framework
-11. **No state management library** — plain Python dicts + JSON file persistence
-12. **No user accounts or authentication** — single-user local app
-13. **deduplicate() has edge case in company matching** — line 103-105: when `norm_company` or `s_company` is empty, uses `token_sort_ratio` instead of `token_set_ratio` (logic may be inverted — currently uses `token_set_ratio` when BOTH non-empty, `token_sort_ratio` when either is empty)
-14. **deduplicate() doesn't filter done/dead sources** — if a scraper errors, `run_scraper` returns `[]` silently
-15. **AI dependency on single provider** (Kilo Gateway) — no fallback
-16. **Profile `title` and `headline` often identical** — `headline` defaults to `title` in multiple code paths
-17. **Jobs with score 0 are silently filtered** in `prompt_loop` line 267
-18. **FuturePlan.txt** contains 25+ planned enhancements (tests, type hints, logging, rate limiting, caching, proxy rotation, config encryption, SQLite job tracking, scheduled mode, more scrapers, fuzzy dedup, health monitoring, profile merge, retry with tenacity, YAML config, better LinkedIn scraping)
+2. ~~**urllib3 v2 + LibreSSL segfault**~~ **RESOLVED:** Pinned `urllib3<2` in requirements.txt. urllib3 v2 requires OpenSSL 1.1.1+ but macOS ships LibreSSL; HTTPS POSTs (AI scoring) segfault. urllib3 v1 is fully compatible.
+3. ~~**Web search garbled titles/companies**~~ **RESOLVED:** Replaced broken DuckDuckGo HTML scraper (`html.duckduckgo.com` returns captcha 202) with `ddgs` API. Titles cleaned to first segment. `identify_source()` strips `www` prefix. `extract_company()` uses title-based extraction for "X hiring Y" patterns + validated regex against snippet + domain fallback with `_SKIP_DOMAIN_PARTS` (skips "in", "uk", "careers", "boards", etc.) and `_STOP_WORDS` filtering.
+4. ~~**Indeed returns 0 on Python 3.14**~~ **RESOLVED:** Cloudscraper returns 403 on Python 3.14 (challenge-solving broken for Indeed's Cloudflare type). Indeed now tries `_fetch_indeed_page` (resilient_get → cloudscraper) first; if that returns 0, falls back to `ddgs` with `site:in.indeed.com/viewjob` queries. On Python 3.9 cloudscraper works so the ddgs fallback isn't needed.
+5. ~~**No type hints anywhere**~~ **RESOLVED:** Full type hints across all source files + Pydantic v2 models in `models.py`
+6. **No logging framework** — all output via `console.print()` mixed with Rich UI
+7. **API keys in plaintext** — stored in `~/.job-finder/config.json` unencrypted
+8. **India-centric** — Indeed hardcoded to `in.indeed.com`
+9. **LinkedIn scraper fragility** — guest API could break without notice, returns ~10 results
+10. **Naukri scraper is shallow** — only gets DuckDuckGo search snippets, not full listings
+11. ~~**No HTTP caching** — re-scrapes everything every run~~ **RESOLVED:** requests-cache with SQLite backend, 30-min TTL, caches only 200 OK
+12. ~~**No rate limiting** — could get IP banned with aggressive usage~~ **RESOLVED:** Per-domain token bucket rate limiter in `scrapers/utils.py` with 5 configured domains, jitter, and per-domain locks
+13. **No web server or API** — pure terminal app, no frontend framework
+14. **No state management library** — plain Python dicts + JSON file persistence
+15. **No user accounts or authentication** — single-user local app
+16. **deduplicate() has edge case in company matching** — line 103-105: when `norm_company` or `s_company` is empty, uses `token_sort_ratio` instead of `token_set_ratio` (logic may be inverted — currently uses `token_set_ratio` when BOTH non-empty, `token_sort_ratio` when either is empty)
+17. **deduplicate() doesn't filter done/dead sources** — if a scraper errors, `run_scraper` returns `[]` silently
+18. **AI dependency on single provider** (Kilo Gateway) — no fallback
+19. **Profile `title` and `headline` often identical** — `headline` defaults to `title` in multiple code paths
+20. **Jobs with score 0 are silently filtered** in `prompt_loop` line 267
+21. **DuckDuckGo HTML endpoint now fully captcha-blocked** — `html.duckduckgo.com` returns 202 with image captcha for all automated requests. Replaced with `ddgs` Python library in `web_search.py`.
+22. **Indeed Cloudflare challenge breaks cloudscraper on Python 3.14** — cloudscraper works on Python 3.9 for Indeed but returns 403 on 3.14. The `ddgs` fallback (`site:in.indeed.com/viewjob`) is the workaround. Company extraction from ddgs snippets is limited ("Unknown" for many results).
+23. **`ddgs` is a new dependency** — requires `pip install ddgs`. Replaces the DuckDuckGo HTML scraper and serves as Indeed fallback on Python 3.14.
+24. **Company extraction from search snippets is inherently unreliable** — `extract_company` uses regex + stop-word filtering + title-based + domain fallback but still misses many companies. Future work could use LLM-based extraction.
+25. **FuturePlan.txt** contains 25+ planned enhancements (tests, type hints, logging, rate limiting, caching, proxy rotation, config encryption, SQLite job tracking, scheduled mode, more scrapers, fuzzy dedup, health monitoring, profile merge, retry with tenacity, YAML config, better LinkedIn scraping)
+
+---
+
+## Enhancements Log
+
+| # | Enhancement | Status | What changed |
+|---|---|---|---|
+| 1 | **HTTP Cache (requests-cache)** | ✅ Done | Added `requests-cache>=1.0.0` to requirements; `scrapers/utils.py` now creates a module-level `CachedSession` with SQLite backend at `~/.job-finder/http_cache.sqlite`, 30-min TTL, caches only 200 OK; all scrapers using `resilient_get()` benefit automatically |
+| 2 | **Rate Limiting** | ✅ Done | Added `TokenBucket` + `RateLimiter` classes to `scrapers/utils.py` with per-domain token bucket throttling, per-domain locks (thread-safe), and jitter (0.5-1.5x). Configured rates: LinkedIn 3/min, Indeed 5/min, RemoteOK 10/min, SerpAPI 8/min, DuckDuckGo 6/min |
+| 3 | **Non-interactive mode + YAML config** | ✅ Done | Added `settings.py` with `load_settings()` — loads YAML from `--config` flag > `./job-finder.yaml` > `~/.job-finder/settings.yaml` with deep merge. Added `--non-interactive`/`-b` flag to skip all prompts. Added `pyyaml>=6.0` to requirements. YAML supports `search.{query,location,days}`, `ai.enabled`, `scrapers.serpapi` |
+| 4 | **SQLite job tracking** | ✅ Done | Replaced `saved.json` with SQLite database `~/.job-finder/jobs.db`. Schema: `jobs(url PK, title, company, source, status, saved_at, applied_at, notes)` with statuses: saved/applied/dismissed/interview/rejected/offer. Added `set_job_status()` and `get_job_status()` functions. Uses WAL mode for thread safety. Backward-compatible API preserved (`load_saved_jobs()` still returns dict, `save_job()`/`unsave_job()` work unchanged). No new dependencies (Python stdlib `sqlite3`). |
+| 5 | **Type hints + Pydantic models** | ✅ Done | Added `models.py` with Pydantic v2 models (Job, Profile, RelevanceResult, SavedJob, SearchConfig, AIConfig, ScraperConfig, Settings). Added full type hints to all 20+ source files: all function signatures, class attributes, module-level variables. Added `from __future__ import annotations` where needed. Added `pydantic>=2.0` to requirements. Removed "No type hints" gotcha. |
+| 6 | **Web search via ddgs API** | ✅ Done | Replaced DuckDuckGo HTML scraper with `ddgs` Python library. DuckDuckGo's `html.duckduckgo.com` endpoint now returns captcha 202 for automated requests. `ddgs` uses the DDG API directly. Also added `_SKIP_DOMAIN_PARTS` company fallback, `_STOP_WORDS` filtering, title-based company extraction, aggregate/search page filtering, non-job URL filtering. |
+| 7 | **Indeed fallback via ddgs (Python 3.14)** | ✅ Done | Cloudscraper returns 403 on Python 3.14 for Indeed (Cloudflare challenge-solving broken). Added `_fetch_indeed_page` that tries `resilient_get` → cloudscraper; if 0 jobs, falls back to `ddgs` with `site:in.indeed.com/viewjob` queries. Company extraction from ddgs snippets uses validated regex patterns with stop-word filtering. Added `ddgs` to requirements. |
 
 ---
 

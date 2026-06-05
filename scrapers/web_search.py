@@ -1,23 +1,10 @@
 import re
-from urllib.parse import parse_qs, quote, unquote, urlparse
+from typing import Any
+from urllib.parse import urlparse
 
-import requests
-from bs4 import BeautifulSoup
+from ddgs import DDGS
 
-from .utils import resilient_get
-
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-}
-
-
-INDIVIDUAL_JOB_PATTERNS = [
+INDIVIDUAL_JOB_PATTERNS: list[str] = [
     r"/jobs/view/",
     r"/job/view/",
     r"/viewjob",
@@ -32,104 +19,99 @@ INDIVIDUAL_JOB_PATTERNS = [
     r"/listings/",
 ]
 
-SEARCH_PAGE_PATTERNS = [
+SEARCH_PAGE_PATTERNS: list[str] = [
     r"jobs\sin\s",
     r"jobs\savailable",
     r"Top\s+\d+",
     r"\d+\+?\s+.*jobs",
+    r"Job\s+Vacancies",
+]
+
+AGGREGATE_URL_PATTERNS: list[str] = [
+    r"/jobs(\?|$)",
+    r"/jobs/.*-jobs-",
+    r"\?f_",
+    r"\?location",
+]
+
+NON_JOB_URL_PATTERNS: list[str] = [
+    r"/auth/",
+    r"/login",
+    r"/signup",
+    r"/register",
+    r"/password/",
+    r"/session/",
 ]
 
 
-def search_web_for_jobs(query, location=""):
-    jobs = []
-    search_query = f"{query} {location}" if location else query
+def _dedup_jobs(jobs: list[dict[str, str]]) -> list[dict[str, str]]:
+    seen_urls: set[str] = set()
+    result: list[dict[str, str]] = []
+    for j in jobs:
+        if j["url"] not in seen_urls:
+            seen_urls.add(j["url"])
+            result.append(j)
+    return result
 
-    urls = [
-        f"https://html.duckduckgo.com/html/?q={quote(search_query)}",
-        f"https://html.duckduckgo.com/html/?q={quote(query + ' hiring')}",
+
+def search_web_for_jobs(
+    query: str,
+    location: str = "",
+    **kwargs: Any,
+) -> list[dict[str, str]]:
+    jobs: list[dict[str, str]] = []
+
+    # Search targeted job-board sites for high-quality individual job listings
+    site_queries: list[str] = [
+        f"site:linkedin.com/jobs/view {query} {location}",
+        f"site:greenhouse.io {query} {location}",
+        f"site:lever.co {query} {location}",
+        f"site:jobs.ashbyhq.com {query} {location}",
+        f"site:boards.greenhouse.io {query} {location}",
     ]
+    # Fallback: general search for career pages
+    site_queries.append(f"{query} {location} career")
 
-    for url in urls:
+    for q in site_queries:
         try:
-            resp = resilient_get(url, headers=HEADERS, timeout=15)
-            if resp.status_code != 200:
-                continue
-
-            soup = BeautifulSoup(resp.text, "html.parser")
-            results = soup.select(".result")
-
-            for result in results:
-                try:
-                    is_ad = bool(result.select_one(".badge--ad"))
-                    if is_ad:
-                        continue
-
-                    title_el = result.select_one(".result__title a") or result.find("a")
-                    snippet_el = result.select_one(".result__snippet")
-
-                    if not title_el:
-                        continue
-
-                    raw_href = title_el.get("href", "")
-                    actual_url = extract_url(raw_href)
-                    title = title_el.get_text(strip=True)
-
-                    if not title or not actual_url:
-                        continue
-
-                    if is_search_page(title, actual_url):
-                        continue
-
-                    is_individual = any(
-                        re.search(p, actual_url, re.IGNORECASE) for p in INDIVIDUAL_JOB_PATTERNS
-                    )
-
-                    if not is_individual:
-                        domain = urlparse(actual_url).netloc.lower()
-                        job_board_domains = [
-                            "linkedin.com",
-                            "indeed.com",
-                            "glassdoor.com",
-                            "monster.com",
-                            "ziprecruiter.com",
-                            "dice.com",
-                            "simplyhired.com",
-                            "wellfound.com",
-                            "startup.jobs",
-                            "greenhouse.io",
-                            "lever.co",
-                            "breezy.hr",
-                            "workable.com",
-                            "bamboohr.com",
-                        ]
-                        if not any(d in domain for d in job_board_domains):
-                            continue
-
-                    snippet = snippet_el.get_text(strip=True) if snippet_el else ""
-
-                    job = {
-                        "title": clean_title(title),
-                        "company": extract_company(actual_url, snippet, title),
-                        "location": extract_location(snippet, actual_url, title),
-                        "description": snippet[:1000],
-                        "url": actual_url,
-                        "source": identify_source(actual_url),
-                    }
-                    if job["title"] and not is_search_page(job["title"], actual_url):
-                        jobs.append(job)
-                except Exception:
-                    continue
-
-        except requests.RequestException:
+            with DDGS() as ddgs:
+                raw = ddgs.text(q, max_results=5)
+        except Exception:
             continue
 
-        if jobs:
+        for item in raw:
+            try:
+                title = item.get("title", "")
+                url = item.get("href", "")
+                snippet = item.get("body", "")
+
+                if not title or not url:
+                    continue
+                if is_search_page(title, url):
+                    continue
+                if any(re.search(p, url, re.IGNORECASE) for p in NON_JOB_URL_PATTERNS):
+                    continue
+
+                job = {
+                    "title": clean_title(title),
+                    "company": extract_company(url, snippet, title),
+                    "location": extract_location(snippet, url, title),
+                    "description": snippet[:1000],
+                    "url": url,
+                    "source": identify_source(url),
+                }
+                if job["title"] and not is_search_page(job["title"], url):
+                    jobs.append(job)
+            except Exception:
+                continue
+
+        if len(jobs) >= 10:
             break
 
-    return jobs
+    return _dedup_jobs(jobs)
 
 
-def is_search_page(title, url):
+def is_search_page(title: str, url: str) -> bool:
     for p in SEARCH_PAGE_PATTERNS:
         if re.search(p, title, re.IGNORECASE):
             return True
@@ -138,21 +120,7 @@ def is_search_page(title, url):
     return False
 
 
-def extract_url(raw_href):
-    if not raw_href:
-        return ""
-    if raw_href.startswith("//"):
-        raw_href = "https:" + raw_href
-    parsed = urlparse(raw_href)
-    if "duckduckgo.com" in parsed.netloc:
-        qs = parse_qs(parsed.query)
-        uddg = qs.get("uddg", [None])[0]
-        if uddg:
-            return unquote(uddg)
-    return raw_href
-
-
-def clean_title(title):
+def clean_title(title: str) -> str:
     title = re.sub(
         r"\s*[-–|]\s*(?:LinkedIn|Indeed|Glassdoor|Monster|ZipRecruiter).*",
         "",
@@ -160,26 +128,169 @@ def clean_title(title):
         flags=re.IGNORECASE,
     )
     title = re.sub(r"\s*[-–|]\s*(?:Hiring|Job|Opening|Vacancy).*", "", title, flags=re.IGNORECASE)
-    return title.strip()
+    segments = re.split(r"\s*[-–|]\s*", title)
+    return segments[0].strip() if segments[0].strip() else title.strip()
 
 
-def extract_company(url, snippet, title):
-    domain = urlparse(url).netloc.lower()
-    domain = re.sub(r"^www\.", "", domain)
+_SKIP_DOMAIN_PARTS: set[str] = {
+    "www",
+    "ww1",
+    "ww2",
+    "in",
+    "uk",
+    "de",
+    "fr",
+    "au",
+    "ca",
+    "br",
+    "jp",
+    "app",
+    "careers",
+    "jobs",
+    "boards",
+    "career",
+    "join",
+    "employment",
+    "recruitment",
+    "apply",
+    "search",
+    "job",
+}
 
+
+_STOP_WORDS: set[str] = {
+    "the",
+    "a",
+    "an",
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "being",
+    "have",
+    "has",
+    "had",
+    "do",
+    "does",
+    "did",
+    "will",
+    "would",
+    "could",
+    "should",
+    "may",
+    "might",
+    "must",
+    "shall",
+    "can",
+    "this",
+    "that",
+    "these",
+    "those",
+    "it",
+    "its",
+    "our",
+    "their",
+    "your",
+    "my",
+    "his",
+    "her",
+    "they",
+    "we",
+    "you",
+    "he",
+    "she",
+    "and",
+    "or",
+    "but",
+    "nor",
+    "for",
+    "with",
+    "about",
+    "between",
+    "through",
+    "during",
+    "before",
+    "after",
+    "above",
+    "below",
+    "from",
+    "up",
+    "down",
+    "of",
+    "in",
+    "on",
+    "at",
+    "by",
+    "to",
+    "into",
+    "over",
+    "under",
+    "again",
+    "further",
+    "then",
+    "once",
+    "here",
+    "there",
+    "all",
+    "each",
+    "every",
+    "both",
+    "few",
+    "more",
+    "most",
+    "some",
+    "any",
+    "no",
+    "not",
+    "only",
+    "own",
+    "same",
+    "so",
+    "than",
+    "too",
+    "very",
+    "overview",
+    "summary",
+    "about",
+    "description",
+    "role",
+    "position",
+    "job",
+    "apply",
+    "learn",
+    "join",
+    "team",
+    "via",
+}
+
+
+def extract_company(url: str, snippet: str, title: str) -> str:
     patterns = [
         r"(?:at|by)\s+([A-Z][A-Za-z0-9\s&.]+?)(?:\s+[-–]|\s+(?:is|has|in)\s+|$)",
         r"([A-Z][A-Za-z0-9\s&]+)\s+(?:is\s+)?(?:hiring|seeking|looking)",
     ]
     for p in patterns:
-        m = re.search(p, snippet, re.IGNORECASE)
+        m = re.search(p, snippet or "", re.IGNORECASE)
         if m:
-            return m.group(1).strip()
+            candidate = m.group(1).strip()
+            first_word = candidate.split()[0].lower()
+            if len(candidate) >= 3 and first_word not in _STOP_WORDS:
+                return candidate
 
-    return domain.split(".")[0].title()
+    # Try title-based extraction: "X hiring Y" → X is the company
+    m = re.search(r"^([A-Z][A-Za-z0-9\s&.]+?)\s+(?:is\s+)?hiring\s+", title or "", re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+
+    domain = urlparse(url).netloc.lower()
+    domain = re.sub(r"^www\d*\.", "", domain)
+    parts = [p for p in domain.split(".") if p not in _SKIP_DOMAIN_PARTS]
+    return parts[0].title() if parts else domain.split(".")[0].title()
 
 
-def extract_location(snippet, url, title):
+def extract_location(snippet: str, url: str, title: str) -> str:
     patterns = [
         r"in\s+([A-Z][a-zA-Z\s]+(?:,\s*[A-Z]{2})?)",
         r"([A-Z][a-zA-Z\s]+(?:,\s*[A-Z]{2}))(?:\s+[.…]|\s*$)",
@@ -193,7 +304,7 @@ def extract_location(snippet, url, title):
     return "Remote / Unspecified"
 
 
-def identify_source(url):
+def identify_source(url: str) -> str:
     domain = urlparse(url).netloc.lower()
     sources = {
         "linkedin.com": "LinkedIn",
@@ -210,4 +321,6 @@ def identify_source(url):
     for pattern, name in sources.items():
         if pattern in domain:
             return name
-    return domain.split(".")[0].title()
+    clean = re.sub(r"^www\d*\.", "", domain)
+    parts = clean.split(".")
+    return parts[0].title() if parts else clean.title()

@@ -1,15 +1,16 @@
 import re
+from typing import Any, Optional
 
 from ai import ai_score_job, check_ai_available
 
 
-def compute_relevance_ai(job, profile):
+def compute_relevance_ai(job: dict[str, Any], profile: dict[str, Any]) -> Optional[dict[str, Any]]:
     if not check_ai_available():
         return None
     return ai_score_job(profile, job)
 
 
-def tokenize(text):
+def tokenize(text: str) -> set[str]:
     text = text.lower()
     return set(re.findall(r"[a-z0-9+#.]+", text))
 
@@ -67,7 +68,7 @@ STOP_WORDS = {
 }
 
 
-def compute_relevance(job, profile):
+def compute_relevance(job: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any]:
     score = 0.0
     reasons = []
 

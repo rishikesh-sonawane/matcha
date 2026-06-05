@@ -6,6 +6,7 @@ import time
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from profile import build_or_load_profile
+from typing import Any, Optional
 
 from prompt_toolkit import Application
 from prompt_toolkit.formatted_text import ANSI
@@ -30,6 +31,7 @@ from scrapers.naukri import search_naukri_jobs
 from scrapers.remoteok import search_remoteok_jobs
 from scrapers.serpapi_jobs import check_serpapi_available, search_serpapi_jobs
 from scrapers.web_search import search_web_for_jobs
+from settings import load_settings
 
 console = Console()
 
@@ -76,24 +78,34 @@ def configure_ai():
         console.print("[green]AI key saved![/green]")
 
 
-def run_scraper(name, scraper_func, query, location):
+def run_scraper(
+    name: str,
+    scraper_func: Any,
+    query: str,
+    location: str,
+    days: Optional[int] = None,
+) -> tuple[str, list[dict[str, Any]]]:
     try:
-        results = scraper_func(query, location)
+        results = scraper_func(query, location, days=days)
         return name, results
     except Exception:
         return name, []
 
 
-def _normalize(text):
+def _normalize(text: str) -> str:
     text = text.lower().strip()
     text = re.sub(r"\b(ii|iii|iv|sr?|jr)\b", "", text)
     text = re.sub(r"[^a-z0-9\s]", "", text)
     return re.sub(r"\s+", " ", text).strip()
 
 
-def deduplicate(jobs, title_threshold=82, company_threshold=88):
-    seen = []
-    unique = []
+def deduplicate(
+    jobs: list[dict[str, Any]],
+    title_threshold: int = 82,
+    company_threshold: int = 88,
+) -> list[dict[str, Any]]:
+    seen: list[tuple[str, str]] = []
+    unique: list[dict[str, Any]] = []
     for j in jobs:
         norm_title = _normalize(j.get("title", ""))
         norm_company = _normalize(j.get("company", ""))
@@ -114,7 +126,11 @@ def deduplicate(jobs, title_threshold=82, company_threshold=88):
     return unique
 
 
-def search_jobs(queries, location):
+def search_jobs(
+    queries: list[str],
+    location: str,
+    days: Optional[int] = None,
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
     if isinstance(queries, str):
         queries = [queries]
 
@@ -154,7 +170,7 @@ def search_jobs(queries, location):
             futures = {}
             for name, func in scrapers.items():
                 for q in queries:
-                    f = executor.submit(run_scraper, f"{name}({q})", func, q, location)
+                    f = executor.submit(run_scraper, f"{name}({q})", func, q, location, days)
                     futures[f] = name
 
             for future in as_completed(futures):
@@ -170,8 +186,15 @@ def search_jobs(queries, location):
     return all_jobs, source_counts
 
 
-def rank_jobs(jobs, profile, use_ai=False):
-    ranked = []
+RankedJob = tuple[float, dict[str, Any], list[str]]
+
+
+def rank_jobs(
+    jobs: list[dict[str, Any]],
+    profile: dict[str, Any],
+    use_ai: bool = False,
+) -> list[RankedJob]:
+    ranked: list[RankedJob] = []
     for job in jobs:
         relevance = compute_relevance(job, profile)
         ranked.append((relevance["score"], job, relevance["reasons"]))
@@ -204,8 +227,14 @@ def rank_jobs(jobs, profile, use_ai=False):
 
 
 def build_results_table(
-    ranked, page, page_size, total_pages, ai_enabled, saved_ids, highlight=None
-):
+    ranked: list[RankedJob],
+    page: int,
+    page_size: int,
+    total_pages: int,
+    ai_enabled: bool,
+    saved_ids: dict[str, Any],
+    highlight: Optional[int] = None,
+) -> Table:
     start = page * page_size
     end = min(start + page_size, len(ranked))
 
@@ -244,7 +273,7 @@ def build_results_table(
     return table
 
 
-def show_job_detail(job, score, reasons):
+def show_job_detail(job: dict[str, Any], score: float, reasons: list[str]) -> None:
     console.print()
     console.print(
         Panel(
@@ -267,7 +296,11 @@ def show_job_detail(job, score, reasons):
     )
 
 
-def prompt_loop(ranked, source_counts, ai_enabled):
+def prompt_loop(
+    ranked: list[RankedJob],
+    source_counts: dict[str, int],
+    ai_enabled: bool,
+) -> Optional[str]:
     ranked = [(s, j, r) for s, j, r in ranked if s > 0]
     if not ranked:
         console.print("[yellow]No jobs matched your profile sufficiently.[/yellow]")
@@ -287,11 +320,11 @@ def prompt_loop(ranked, source_counts, ai_enabled):
     saved_ids = load_saved_jobs()
 
     class State:
-        page = 0
-        selected = 0
-        mode = "list"
-        detail_idx = 0
-        re_run = False
+        page: int = 0
+        selected: int = 0
+        mode: str = "list"
+        detail_idx: int = 0
+        re_run: bool = False
 
     st = State()
 
@@ -492,7 +525,7 @@ def prompt_loop(ranked, source_counts, ai_enabled):
         return "re_run"
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Job Finder — multi-source job search with relevance ranking"
     )
@@ -500,6 +533,10 @@ def main():
     parser.add_argument(
         "--new-profile", "-n", action="store_true", help="Re-enter profile from scratch"
     )
+    parser.add_argument(
+        "--non-interactive", "-b", action="store_true", help="Skip prompts (requires YAML config)"
+    )
+    parser.add_argument("--config", type=str, default=None, help="Path to YAML config file")
     args = parser.parse_args()
 
     if args.configure:
@@ -509,6 +546,8 @@ def main():
             "[green]Configuration complete![/green] Run [bold]python3 main.py[/bold] to search."
         )
         return
+
+    settings = load_settings(config_path=args.config)
 
     console.print(
         Panel.fit(
@@ -523,19 +562,39 @@ def main():
         console.print("[red]Profile is required. Run with --new-profile to set one up.[/red]")
         sys.exit(1)
 
-    use_ai = check_ai_available()
+    use_ai = check_ai_available() and settings["ai"]["enabled"]
 
     config = load_config()
     default_query = (
-        config.get("last_query") or profile.get("title") or profile.get("headline") or ""
+        config.get("last_query")
+        or settings["search"].get("query")
+        or profile.get("title")
+        or profile.get("headline")
+        or ""
     )
-    default_location = config.get("last_location") or ""
+    default_location = config.get("last_location") or settings["search"].get("location") or ""
+    default_days = config.get("last_days") or settings["search"].get("days", 7)
 
-    console.print()
-    query = Prompt.ask("Job search query", default=default_query)
-    location = Prompt.ask("Location (or blank for remote)", default=default_location)
+    if args.non_interactive:
+        query = default_query
+        location = default_location
+        days = default_days
+        if not query:
+            console.print(
+                "[red]No search query configured. Set it in YAML config or use interactive mode.[/red]"
+            )
+            sys.exit(1)
+    else:
+        console.print()
+        query = Prompt.ask("Job search query", default=default_query)
+        location = Prompt.ask("Location (or blank for remote)", default=default_location)
+        days_str = Prompt.ask("Show jobs posted within how many days?", default=str(default_days))
+        try:
+            days = max(1, int(days_str))
+        except ValueError:
+            days = None
 
-    save_config({"last_query": query, "last_location": location})
+    save_config({"last_query": query, "last_location": location, "last_days": days})
     profile["location"] = location
 
     queries = [query]
@@ -547,7 +606,7 @@ def main():
                 queries.extend(extra)
                 console.print(f"[dim]AI queries: {', '.join(queries)}[/dim]")
 
-    jobs, source_counts = search_jobs(queries, location)
+    jobs, source_counts = search_jobs(queries, location, days=days)
     if not jobs:
         console.print("[yellow]No jobs found. Try different search terms.[/yellow]")
         return

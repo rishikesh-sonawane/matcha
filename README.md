@@ -81,10 +81,27 @@ Job boards show you **every** posting matching a keyword. This tool shows you on
 
 ## Installation
 
+### System Requirements
+
+- **Python 3.9+** — Works with CLT Python 3.9 (`/Library/Developer/CommandLineTools/usr/bin/python3`) on macOS
+- **Python 3.14** — Also supported inside a virtual environment (see below)
+- **macOS only** — Not tested on Linux/Windows
+
+### Setup
+
 ```bash
 git clone https://github.com/yourusername/job-finder.git
 cd job-finder
 pip3 install -r requirements.txt
+python3 main.py
+```
+
+**Important for Python 3.14 (Homebrew):** Create a virtual environment first to avoid urllib3 v2 + macOS LibreSSL segfault:
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
 python3 main.py
 ```
 
@@ -93,11 +110,18 @@ python3 main.py
 | Package | Purpose |
 |---------|---------|
 | `requests` | HTTP client for all scrapers |
+| `requests-cache` | SQLite-backed HTTP cache (30-min TTL, 200-only) |
 | `beautifulsoup4` | HTML parsing for all scrapers |
 | `rich` | Terminal UI (tables, panels, progress bars, prompts) |
-| `cloudscraper` | Cloudflare bypass for Indeed India |
+| `cloudscraper` | Cloudflare bypass for Indeed India (Python 3.9 only; 403s on 3.14) |
+| `ddgs` | DuckDuckGo API — powers Web Search scraper + Indeed fallback |
 | `pdfplumber` | PDF resume text extraction |
+| `prompt_toolkit` | Interactive keyboard-driven UI for job browsing |
+| `rapidfuzz` | Fuzzy string matching for deduplication |
+| `pydantic` | Data models for profile, jobs, and settings |
+| `pyyaml` | YAML config file support |
 | `python-dotenv` | Environment variable management |
+| `urllib3<2` | Pinned to v1 to prevent LibreSSL segfault on macOS |
 
 ---
 
@@ -133,7 +157,7 @@ Location (or leave blank for remote): Pune
 ### 3. Results
 
 ```
-Found 245 total jobs — 24 from LinkedIn | 30 from Indeed | 18 from Naukri | 8 from RemoteOK | 165 from Web Search
+Found 97 total jobs — 50 from LinkedIn | 6 from Naukri | 38 from RemoteOK | 4 from Web Search
 
   #  Title                    Company         Source    Link                               Match
  ─── ──────────────────────── ─────────────── ──────── ────────────────────────────── ─────────
@@ -145,9 +169,28 @@ Found 245 total jobs — 24 from LinkedIn | 30 from Indeed | 18 from Naukri | 8 
 ```
 
 Interactive features:
-- **Paginated browsing** — 20 results per page, `y/n` to continue
-- **Job details** — Enter a number to see full URL, match reasons, and description
-- **Re-run** — Search again with different terms
+- **Paginated browsing** — `↑↓` navigate, `n/p` page, `Enter` for details
+- **Job details** — Full URL, match reasons, and description
+- **Save jobs** — Press `s` to save/unsave; `l` to view saved
+- **Open in browser** — Press `o` to open job URL
+- **Re-run** — Press `r` to search again with different terms
+- **Non-interactive mode** — Use `-b` or `--non-interactive` flag to skip all prompts and auto-search
+
+### 5. Config File (Optional)
+
+Create `job-finder.yaml` in the project directory or `~/.job-finder/settings.yaml`:
+
+```yaml
+search:
+  query: Platform Engineer
+  location: Pune
+  days: 7
+ai:
+  enabled: true
+scrapers:
+  serpapi:
+    key: your_serpapi_key
+```
 
 ### Example Detail View
 
@@ -178,10 +221,10 @@ Interactive features:
 | Source | Method | Results | Requires |
 |--------|--------|---------|----------|
 | **LinkedIn** | Guest API endpoint (`/jobs-guest/api/seeMoreJobPostings`) | ~10 listings | Nothing |
-| **Indeed India** | `cloudscraper`-based HTML parsing of `in.indeed.com` | ~25 listings | Nothing |
+| **Indeed India** | `cloudscraper`-based HTML parsing on Python 3.9; falls back to `ddgs` (`site:in.indeed.com/viewjob`) on Python 3.14 | 5–25 listings | Nothing |
 | **RemoteOK** | Public JSON API filtered by keyword matching | ~8 listings | Nothing |
-| **Naukri** | DuckDuckGo search for Naukri.com listings | Search page links | Nothing |
-| **Web Search** | DuckDuckGo HTML search with job board domain filtering | 100+ listings | Nothing |
+| **Naukri** | DuckDuckGo API search for Naukri.com listings | 0–5 listings | Nothing |
+| **Web Search** | `ddgs` API with targeted `site:` queries on known job boards (LinkedIn, Greenhouse, Lever, Ashby) | 10–30 listings | Nothing |
 | **Google Jobs** | SerpAPI `google_jobs` engine (optional) | Rich listings | SerpAPI key |
 
 ---
@@ -237,15 +280,20 @@ job-finder/
 ├── matcher.py               # Two-pass relevance scoring engine
 ├── ai.py                    # AI provider client (Kilo Gateway)
 ├── config.py                # Persistent config and profile storage
+├── models.py                # Pydantic v2 data models
+├── settings.py              # YAML config loader
+├── actions.py               # Saved-job actions
 ├── requirements.txt         # Python dependencies
+├── kilo.md                  # Dev session log / architecture notes
 └── scrapers/
     ├── __init__.py
-    ├── indeed.py            # Indeed India (cloudscraper + URL resolution)
+    ├── utils.py             # Resilient HTTP client, rate limiter, cache
+    ├── indeed.py            # Indeed: cloudscraper (3.9) → ddgs fallback (3.14)
     ├── linkedin.py          # LinkedIn guest API
-    ├── naukri.py            # Naukri via DuckDuckGo search
-    ├── remoteok.py          # RemoteOK public API
+    ├── naukri.py            # Naukri via ddgs API search
+    ├── remoteok.py          # RemoteOK public JSON API
     ├── serpapi_jobs.py      # Google Jobs via SerpAPI (optional)
-    └── web_search.py        # DuckDuckGo web search with job board filtering
+    └── web_search.py        # ddgs API with targeted site: queries on job boards
 ```
 
 ---

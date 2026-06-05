@@ -1,6 +1,7 @@
 import json
 import os
 import re
+from typing import Any, Optional
 
 import requests
 
@@ -12,7 +13,7 @@ CONFIG_KEY = "ai_key"
 ENV_VAR = "MINIMAX"
 
 
-def _get_api_key():
+def _get_api_key() -> str:
     key = os.environ.get(ENV_VAR, "")
     if key:
         return key
@@ -20,17 +21,21 @@ def _get_api_key():
     return config.get(CONFIG_KEY, "")
 
 
-def check_ai_available():
+def check_ai_available() -> bool:
     return bool(_get_api_key())
 
 
-def configure_ai(key):
+def configure_ai(key: str) -> None:
     config = load_config()
     config[CONFIG_KEY] = key
     save_config(config)
 
 
-def _call_ai(messages, response_format=None, max_tokens=500):
+def _call_ai(
+    messages: list[dict[str, Any]],
+    response_format: Optional[dict[str, Any]] = None,
+    max_tokens: int = 500,
+) -> Optional[str]:
     key = _get_api_key()
     if not key:
         return None
@@ -62,7 +67,7 @@ def _call_ai(messages, response_format=None, max_tokens=500):
         return None
 
 
-def _extract_json(text):
+def _extract_json(text: str) -> Optional[dict[str, Any]]:
     text = text.strip()
     if text.startswith("```"):
         text = re.sub(r"^```(?:json)?\s*", "", text)
@@ -99,7 +104,7 @@ Rules:
 - If experience is ambiguous, set to null rather than guessing"""
 
 
-def ai_extract_profile(text):
+def ai_extract_profile(text: str) -> Optional[dict[str, Any]]:
     if not check_ai_available():
         return None
     prompt = PROFILE_EXTRACTION_PROMPT.format(text=text[:4000])
@@ -186,7 +191,7 @@ Guidelines:
 - Never give 100 — nobody is a perfect match."""
 
 
-def ai_generate_queries(profile):
+def ai_generate_queries(profile: dict[str, Any]) -> Optional[list[str]]:
     if not check_ai_available():
         return None
     title = profile.get("title", "") or profile.get("headline", "")
@@ -217,7 +222,7 @@ def ai_generate_queries(profile):
     return [q.strip() for q in queries if q.strip()][:5]
 
 
-def ai_score_job(profile, job):
+def ai_score_job(profile: dict[str, Any], job: dict[str, Any]) -> Optional[dict[str, Any]]:
     if not check_ai_available():
         return None
     title = profile.get("title", "") or profile.get("headline", "")

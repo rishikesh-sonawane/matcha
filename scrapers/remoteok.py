@@ -1,10 +1,11 @@
 import re
+from typing import Any
 
 import requests
 
 from .utils import resilient_get
 
-HEADERS = {
+HEADERS: dict[str, str] = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -13,7 +14,11 @@ HEADERS = {
 }
 
 
-def search_remoteok_jobs(query, location=""):
+def search_remoteok_jobs(
+    query: str,
+    location: str = "",
+    **kwargs: Any,
+) -> list[dict[str, Any]]:
     jobs = []
     query_lower = query.lower()
     query_terms = set(query_lower.split())
