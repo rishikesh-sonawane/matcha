@@ -1,0 +1,16 @@
+.git/
+.gitignore
+.github/
+.ruff_cache/
+__pycache__/
+*.pyc
+*.pyo
+.env
+.dockerignore
+Dockerfile
+docker-compose.yml
+README.md
+FuturePlan.txt
+tests/
+.venv/
+venv/

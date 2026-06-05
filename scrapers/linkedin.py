@@ -1,9 +1,12 @@
-import requests
-from bs4 import BeautifulSoup
+from typing import Any
 from urllib.parse import quote
 
+import requests
+from bs4 import BeautifulSoup
 
-HEADERS = {
+from .utils import resilient_get
+
+HEADERS: dict[str, str] = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -14,18 +17,28 @@ HEADERS = {
 }
 
 
-def search_linkedin_jobs(query, location=""):
+SECONDS_PER_DAY: int = 86400
+
+
+def search_linkedin_jobs(
+    query: str,
+    location: str = "",
+    **kwargs: Any,
+) -> list[dict[str, str]]:
     jobs = []
     loc = location if location else "United States"
 
+    days = max(1, kwargs.get("days", 7))
+    f_tpr = f"r{days * SECONDS_PER_DAY}"
+
     url = (
         f"https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
-        f"?keywords={quote(query)}&location={quote(loc)}&f_TPR=r86400"
+        f"?keywords={quote(query)}&location={quote(loc)}&f_TPR={f_tpr}"
         f"&position=1&pageNum=0"
     )
 
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=15)
+        resp = resilient_get(url, headers=HEADERS, timeout=15)
         if resp.status_code != 200:
             return jobs
 
@@ -35,13 +48,11 @@ def search_linkedin_jobs(query, location=""):
         for card in job_cards:
             try:
                 title_el = card.select_one(".base-search-card__title") or card.find("h3")
-                company_el = (
-                    card.select_one(".base-search-card__subtitle")
-                    or card.select_one(".job-search-card__company-name")
+                company_el = card.select_one(".base-search-card__subtitle") or card.select_one(
+                    ".job-search-card__company-name"
                 )
-                location_el = (
-                    card.select_one(".job-search-card__location")
-                    or card.select_one(".base-search-card__location")
+                location_el = card.select_one(".job-search-card__location") or card.select_one(
+                    ".base-search-card__location"
                 )
                 link_el = card.select_one("a.base-card__full-link") or card.find("a", href=True)
 
@@ -55,14 +66,16 @@ def search_linkedin_jobs(query, location=""):
                     link = href if href.startswith("http") else f"https://www.linkedin.com{href}"
 
                 if title:
-                    jobs.append({
-                        "title": title,
-                        "company": company,
-                        "location": location,
-                        "description": "",
-                        "url": link,
-                        "source": "LinkedIn",
-                    })
+                    jobs.append(
+                        {
+                            "title": title,
+                            "company": company,
+                            "location": location,
+                            "description": "",
+                            "url": link,
+                            "source": "LinkedIn",
+                        }
+                    )
             except Exception:
                 continue
 

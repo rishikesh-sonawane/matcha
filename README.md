@@ -1,9 +1,9 @@
 # Job Finder 🔍
 
-> **Multi-source job aggregator with AI-powered relevance ranking.**  
+> **Multi-source job aggregator with AI-powered relevance ranking.**
 > Enter your profile once — get ranked, personalized job matches from across the web.
 
-[![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)]()
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)]()
 [![Rich TUI](https://img.shields.io/badge/built%20with-Rich-ffd700)]()
 [![AI Matching](https://img.shields.io/badge/feature-AI%20Scoring-8a2be2)]()
 
@@ -24,7 +24,7 @@ Job boards show you **every** posting matching a keyword. This tool shows you on
 2. **AI pass** — Top candidates re-scored by an LLM that understands role semantics, skill adjacency, and career trajectory. Critical prompt tuning ensures honest, discriminating scores.
 
 **Three-Way Profile Entry**
-- **PDF Resume** — Extracts name, title, skills, and experience via `pdfplumber`, then AI-enriches the result for deeper skill detection and headline generation.
+- **PDF Resume** — Extracts name, title, skills, experience, and summary via AI (no fallback keyword matching). All skill detection is LLM-driven.
 - **LinkedIn URL** — Fetches public profile data with DuckDuckGo fallback when LinkedIn blocks direct access (HTTP 999). Supplement mode lets you fill gaps.
 - **Manual Entry** — Full control over every field. Always works.
 
@@ -34,9 +34,9 @@ Job boards show you **every** posting matching a keyword. This tool shows you on
 
 **Rich Terminal UI**
 - Color-coded match scores (green ≥ 60, yellow ≥ 25, red < 25)
-- Paginated results table (20 per page)
+- Paginated results table (10 per page)
 - Interactive job detail panel with full URL, match reasons, and description
-- Live progress bars for search and AI scoring phases
+- Live progress status for search and AI scoring phases
 - Persisted profile and config across sessions
 
 **Zero Paid API Requirements** — All core sources work without API keys. SerpAPI (Google Jobs) and AI scoring are optional enhancements.
@@ -57,19 +57,19 @@ Job boards show you **every** posting matching a keyword. This tool shows you on
            ┌────────────────┐    ┌──────────────────┐    ┌──────────────────┐
            │  Profile Layer │    │  Relevance Layer  │    │  Scraper Layer   │
            │  profile.py    │    │  matcher.py       │    │  scrapers/       │
-           │                │    │  ai.py            │    │                  │
-           │  • PDF parsing │    │                  │    │  • LinkedIn      │
-           │  • LinkedIn    │    │  • Heuristic (5  │    │  • Indeed        │
-           │    scraping    │    │    dimensions)   │    │  • Naukri        │
-           │  • AI enrich   │    │  • AI re-scoring │    │  • RemoteOK      │
-           │  • Manual      │    │  • Query gen     │    │  • Web Search    │
-           └────────────────┘    └──────────────────┘    │  • SerpAPI (opt) │
-                                                          └──────────────────┘
+           │  ai.py         │    │  ai.py            │    │                  │
+           │                │    │                  │    │  • LinkedIn      │
+           │  • PDF (AI)    │    │  • Heuristic (5  │    │  • Indeed        │
+           │  • LinkedIn    │    │    dimensions)   │    │  • Naukri        │
+           │  • Manual      │    │  • AI re-scoring │    │  • RemoteOK      │
+           │                │    │  • Query gen     │    │  • Web Search    │
+           └────────────────┘    │  • Title suggest │    │  • SerpAPI (opt) │
+                                 └──────────────────┘    └──────────────────┘
 ```
 
 ### Data Flow
 
-1. **Profile Ingestion** — Resume PDF, LinkedIn URL, or manual input → structured profile (name, title, skills, experience, summary)
+1. **Profile Ingestion** — Resume PDF, LinkedIn URL, or manual input → AI-extracted profile (name, title, skills, experience, summary). No fallback keyword lists or hardcoded mappings.
 2. **Query Expansion** — Base query + AI-generated variant queries targeting adjacent roles
 3. **Parallel Scraping** — `ThreadPoolExecutor` dispatches all queries × all scrapers concurrently (up to 30 tasks)
 4. **Deduplication** — Title+company hash eliminates cross-source duplicates
@@ -81,10 +81,27 @@ Job boards show you **every** posting matching a keyword. This tool shows you on
 
 ## Installation
 
+### System Requirements
+
+- **Python 3.10+** required for all scrapers (`ddgs` dependency). On Python 3.9 only Indeed works (via `cloudscraper`).
+- **Python 3.14** — Supported inside a virtual environment (see below)
+- **macOS only** — Not tested on Linux/Windows
+
+### Setup
+
 ```bash
 git clone https://github.com/yourusername/job-finder.git
 cd job-finder
 pip3 install -r requirements.txt
+python3 main.py
+```
+
+**Important for Python 3.14 (Homebrew):** Create a virtual environment first to avoid urllib3 v2 + macOS LibreSSL segfault:
+
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
 python3 main.py
 ```
 
@@ -93,61 +110,127 @@ python3 main.py
 | Package | Purpose |
 |---------|---------|
 | `requests` | HTTP client for all scrapers |
+| `requests-cache` | SQLite-backed HTTP cache (30-min TTL, 200-only) |
 | `beautifulsoup4` | HTML parsing for all scrapers |
 | `rich` | Terminal UI (tables, panels, progress bars, prompts) |
-| `cloudscraper` | Cloudflare bypass for Indeed India |
+| `cloudscraper` | Cloudflare bypass for Indeed India (Python 3.9 only; 403s on 3.14) |
+| `ddgs` | DuckDuckGo API — powers Web Search, Naukri, and Indeed fallback scrapers |
 | `pdfplumber` | PDF resume text extraction |
+| `prompt_toolkit` | Interactive keyboard-driven UI for job browsing |
+| `rapidfuzz` | Fuzzy string matching for deduplication |
+| `pydantic` | Data models for profile, jobs, and settings |
+| `pyyaml` | YAML config file support |
 | `python-dotenv` | Environment variable management |
+| `urllib3<2` | Pinned to v1 to prevent LibreSSL segfault on macOS |
 
 ---
 
 ## Usage
 
-### 1. Profile Setup
+### 1. Complete Flow
 
 ```
-╭──────────────────────────────────────────────╮
-│ Job Finder                                   │
-│ Find the most relevant jobs for your profile │
-╰──────────────────────────────────────────────╯
-Existing profile found:
+╭────────────────────────────────────────────────╮
+│ Job Finder                                     │
+│ Multi-source job search with relevance ranking │
+╰────────────────────────────────────────────────╯
+
+Profile: Rishikesh Vijay Sonawane — CI/CD Infrastructure | DevOps (36 skills, ~4y exp)
+Use existing profile? [y/n] (y): n
+
+How would you like to enter your profile?
+  1. Enter details manually
+  2. Upload a resume PDF
+  3. Provide a LinkedIn profile URL
+Choose [1/2/3] (1): 2
+Path to resume PDF: /path/to/resume.pdf
+Extracting profile with AI...
+
+Resume parsed:
   Name          Rishikesh Vijay Sonawane
-  Title         CI/CD Infrastructure | DevOps Engineer
-  Skills        ansible, aws, ci/cd, django, docker, ...
+  Title         CI/CD Infrastructure | DevOps
+  Skills        37 detected: AWS, EC2, IAM, VPC, Auto Scaling Groups, ECR, Terraform, GitOps, Atlantis, Bash Scripting, GitHub Actions, Self-Hosted Runners, GitHub Enterprise Cloud, CI/CD Platform Engineering, Docker, Amazon ECR, Docker Image Optimization, Pull-Through Cache, Datadog, Infrastructure Monitoring, Alerting, Incident Response, Linux, Git, Access Management, Developer Tooling, ChatGPT, Claude, Cursor, LibreChat, LLM-CLI, CI/CD Infrastructure Engineering, GitHub Actions & Self-Hosted Runners, Developer Productivity Engineering, AWS Platform Automation, Infrastructure Cost Optimization, Internal Developer Platforms
   Experience    ~4 years
-Use existing profile? [y/n] (y):
+
+Does this look correct? You can supplement it. [y/n] (y): y
+Additional skills (comma-separated, or leave blank) ():
+
+Job search query (CI/CD Infrastructure | DevOps): Platform Engineering
+Location (or blank for remote) (Pune bengaluru hyderabad):
+Show jobs posted within how many days? (7): 2
+
+AI queries: Platform Engineering, Platform Engineer Terraform, DevOps Engineer AWS, CI/CD Engineer GitHub, Infrastructure Engineer Datadog, DevOps Engineer Bengaluru
+  OK     Indeed                   83
+  OK     LinkedIn                  1
+  OK     Naukri                   44
+  OK     RemoteOK                 31
+  OK     Web Search               64
+
+Found 207 total jobs (AI)
+  83 from Indeed | 1 from LinkedIn | 44 from Naukri | 31 from RemoteOK | 64 from Web Search
+
+
+                  Matching Jobs (page 1/21) (AI)
+ #     Title                    Company          Source      Match
+───────────────────────────────────────────────────────────────────
+ 1     AWS Devops Engineer      Capgemini        LinkedIn    92.0%
+ 2     Software Engineer II     Microsoft        Indeed      92.0%
+ 3     DevOps Engineer-III      ADCI             Indeed      92.0%
+ 4     DevOps Engineer II       ADCI             Indeed      92.0%
+ 5     DevOps Engineer-III      ADCI             Indeed      92.0%
+ 6     devOps engineer          Redbytes         Indeed      85.0%
+                                Software
+ 7     NTT Data AWS Cloud       NTT Data         LinkedIn    82.0%
+       DevOps engineer
+ 8     Software Development     ADCI             Indeed      55.0%
+       Engineer II
+
+
+
+↑↓ navigate  Enter detail  s save/unsave  o open  n/p page  l saved  r re-run  q quit
 ```
 
-Three entry methods:
-- **PDF Resume** — Extracts structured data with AI enhancement
-- **LinkedIn URL** — Scrapes public profile with fallback
-- **Manual** — Full manual control
+### 2. Profile Entry
 
-### 2. Search
+Three methods:
+- **PDF Resume** — Extracts structured data via `pdfplumber`, then AI handles all skill/title/experience extraction. No keyword lists or fallback patterns.
+- **LinkedIn URL** — Scrapes public profile with DuckDuckGo fallback (when LinkedIn blocks with HTTP 999)
+- **Manual** — Full control over every field; always works
+
+If AI is unavailable, the tool prints an error and offers manual entry only — no silent fallback to keyword matching.
+
+### 3. Search & Results
 
 ```
-Job search query (Platform Engineer):
+Job search query (CI/CD Infrastructure | DevOps):
 Location (or leave blank for remote): Pune
 ```
 
-### 3. Results
-
-```
-Found 245 total jobs — 24 from LinkedIn | 30 from Indeed | 18 from Naukri | 8 from RemoteOK | 165 from Web Search
-
-  #  Title                    Company         Source    Link                               Match
- ─── ──────────────────────── ─────────────── ──────── ────────────────────────────── ─────────
-  1  Platform Engineer        Barclays        Indeed    in.indeed.com/viewjob?jk=b5...     82%
-  2  Platform Engineer II     Mastercard      Indeed    in.indeed.com/viewjob?jk=e4...     78%
-  3  GCP Platform Engineer    Nexifyr         Web       nexifyr.com/careers/position...    71%
-  4  Platform Engineer        Evolent Health  Indeed    in.indeed.com/viewjob?jk=cc...     65%
-  ...
-```
+Jobs are searched across all configured sources in parallel using the base query plus AI-generated variants.
 
 Interactive features:
-- **Paginated browsing** — 20 results per page, `y/n` to continue
-- **Job details** — Enter a number to see full URL, match reasons, and description
-- **Re-run** — Search again with different terms
+- **Paginated browsing** — `↑↓` navigate, `n/p` page, `Enter` for details
+- **Job details** — Full URL, match reasons, and description
+- **Save jobs** — Press `s` to save/unsave; `l` to view saved
+- **Open in browser** — Press `o` to open job URL
+- **Re-run** — Press `r` to search again with different terms
+- **Non-interactive mode** — Use `-b` or `--non-interactive` flag to skip all prompts and auto-search
+
+### 4. Config File (Optional)
+
+Create `job-finder.yaml` in the project directory or `~/.job-finder/settings.yaml`:
+
+```yaml
+search:
+  query: Platform Engineer
+  location: Pune
+  days: 7
+ai:
+  enabled: true
+scrapers:
+  serpapi:
+    key: your_serpapi_key
+```
 
 ### Example Detail View
 
@@ -162,7 +245,7 @@ Interactive features:
 │                                                                   │
 │ Why this matches:                                                 │
 │   • Job title matches profile: platform, engineer                 │
-│   • Skill match: aws, docker, terraform, ci/cd, linux             │
+│   • Skill match: AWS, Docker, Terraform, CI/CD, Linux             │
 │   • Seniority match: mid                                          │
 │   • Location match                                                │
 │                                                                   │
@@ -178,10 +261,10 @@ Interactive features:
 | Source | Method | Results | Requires |
 |--------|--------|---------|----------|
 | **LinkedIn** | Guest API endpoint (`/jobs-guest/api/seeMoreJobPostings`) | ~10 listings | Nothing |
-| **Indeed India** | `cloudscraper`-based HTML parsing of `in.indeed.com` | ~25 listings | Nothing |
+| **Indeed India** | `cloudscraper`-based HTML parsing on Python 3.9; falls back to `ddgs` (`site:in.indeed.com/viewjob`) on Python 3.14 | 5–25 listings | Nothing |
 | **RemoteOK** | Public JSON API filtered by keyword matching | ~8 listings | Nothing |
-| **Naukri** | DuckDuckGo search for Naukri.com listings | Search page links | Nothing |
-| **Web Search** | DuckDuckGo HTML search with job board domain filtering | 100+ listings | Nothing |
+| **Naukri** | `ddgs` API with `site:naukri.com` search, non-job content filtered out | 6–44 listings | Nothing |
+| **Web Search** | `ddgs` API with targeted `site:` queries on known job boards (LinkedIn, Greenhouse, Lever, Ashby) | 10–30 listings | Nothing |
 | **Google Jobs** | SerpAPI `google_jobs` engine (optional) | Rich listings | SerpAPI key |
 
 ---
@@ -213,7 +296,7 @@ The prompt is tuned to be **critical** — scores of 80+ are reserved for strong
 
 ## Optional: AI Integration
 
-For AI-powered features (profile enhancement, query expansion, relevance scoring), set the `$MINIMAX` environment variable or configure the key through the app prompt:
+For AI-powered features (profile extraction, title suggestion, query expansion, relevance scoring), set the `$MINIMAX` environment variable or run `--configure`:
 
 ```bash
 export MINIMAX="your_key_here"
@@ -222,9 +305,10 @@ export MINIMAX="your_key_here"
 The AI provider uses the **Kilo Gateway** (`api.kilo.ai`) with model `kilo-auto/small` — a free-tier-compatible endpoint.
 
 With AI enabled:
-- Resume PDF parsing is AI-enhanced for deeper skill and title extraction
+- Resume PDFs are parsed entirely by AI — extracts name, skills (30+), title, experience, and summary in one pass
 - Search queries are expanded to 3–5 diverse variants targeting adjacent roles
 - Top 15 jobs are re-scored by AI for more accurate relevance ranking
+- Job titles are suggested from your skill set (no hardcoded mappings)
 
 ---
 
@@ -233,32 +317,39 @@ With AI enabled:
 ```
 job-finder/
 ├── main.py                  # CLI entry point, orchestration, UI
-├── profile.py               # Profile ingestion (PDF, LinkedIn, manual)
+├── profile.py               # AI-only profile ingestion (PDF, LinkedIn, manual)
 ├── matcher.py               # Two-pass relevance scoring engine
 ├── ai.py                    # AI provider client (Kilo Gateway)
 ├── config.py                # Persistent config and profile storage
+├── models.py                # Pydantic v2 data models
+├── settings.py              # YAML config loader
+├── actions.py               # Saved-job actions
 ├── requirements.txt         # Python dependencies
+├── kilo.md                  # Dev session log / architecture notes
 └── scrapers/
     ├── __init__.py
-    ├── indeed.py            # Indeed India (cloudscraper + URL resolution)
+    ├── utils.py             # Resilient HTTP client, rate limiter, cache
+    ├── indeed.py            # Indeed: cloudscraper (3.9) → ddgs fallback (3.14)
     ├── linkedin.py          # LinkedIn guest API
-    ├── naukri.py            # Naukri via DuckDuckGo search
-    ├── remoteok.py          # RemoteOK public API
+    ├── naukri.py            # Naukri via ddgs API search
+    ├── remoteok.py          # RemoteOK public JSON API
     ├── serpapi_jobs.py      # Google Jobs via SerpAPI (optional)
-    └── web_search.py        # DuckDuckGo web search with job board filtering
+    └── web_search.py        # ddgs API with targeted site: queries on job boards
 ```
 
 ---
 
 ## Engineering Highlights
 
-- **Parallel execution** — `ThreadPoolExecutor` dispatches 30+ scraper tasks concurrently, reducing total search time from minutes to ~30–60 seconds
+- **AI-native profile extraction** — No keyword lists, no hardcoded patterns, no fallback parsing. AI handles all skill/title extraction from resumes.
+- **Parallel execution** — `ThreadPoolExecutor` dispatches 30+ scraper tasks concurrently, reducing total search time to ~30 seconds
 - **Resilient scrapers** — Each scraper is isolated in a try/except block; a single source failure never blocks others
 - **Smart deduplication** — Cross-source duplicate detection using normalized title+company keys
 - **Tracking URL resolution** — Indeed `rc/clk` and `pagead/clk` URLs decoded to clean `viewjob` URLs via job key extraction or HTTP redirect following
 - **AI prompt engineering** — Structured JSON output with temperature 0.1 for reliable parsing; fallback regex extraction for malformed responses
-- **Pagination** — Scrollable results with interactive job detail panels; no external dependencies beyond `rich`
 - **Zero API key lock-in** — Core functionality works without any paid API keys
+- **HTTP caching** — requests-cache with SQLite backend, 30-min TTL, avoids re-scraping identical queries
+- **Rate limiting** — Per-domain token bucket limits prevent IP bans
 
 ---
 

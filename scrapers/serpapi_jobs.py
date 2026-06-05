@@ -1,9 +1,17 @@
+from typing import Any
+
 import requests
 
-SERPAPI_BASE = "https://serpapi.com/search.json"
+from .utils import resilient_get
+
+SERPAPI_BASE: str = "https://serpapi.com/search.json"
 
 
-def search_serpapi_jobs(query, location=""):
+def search_serpapi_jobs(
+    query: str,
+    location: str = "",
+    **kwargs: Any,
+) -> list[dict[str, str]]:
     config = get_serpapi_config()
     api_key = config.get("serpapi_key")
     if not api_key:
@@ -21,7 +29,7 @@ def search_serpapi_jobs(query, location=""):
     }
 
     try:
-        resp = requests.get(SERPAPI_BASE, params=params, timeout=15)
+        resp = resilient_get(SERPAPI_BASE, params=params, timeout=15)
         if resp.status_code != 200:
             return []
 
@@ -39,9 +47,7 @@ def search_serpapi_jobs(query, location=""):
                 company = item.get("company_name") or ""
                 location_text = item.get("location") or "Remote"
                 description = item.get("description") or ""
-                via = item.get("via") or "Google Jobs"
                 related_links = item.get("related_links", []) or []
-                extensions = item.get("extensions", []) or []
 
                 url = ""
                 for link in related_links:
@@ -55,14 +61,16 @@ def search_serpapi_jobs(query, location=""):
                             url = link["link"]
                             break
 
-                jobs.append({
-                    "title": title,
-                    "company": company,
-                    "location": location_text,
-                    "description": description[:2000],
-                    "url": url,
-                    "source": "Google Jobs",
-                })
+                jobs.append(
+                    {
+                        "title": title,
+                        "company": company,
+                        "location": location_text,
+                        "description": description[:2000],
+                        "url": url,
+                        "source": "Google Jobs",
+                    }
+                )
             except Exception:
                 continue
 
@@ -72,14 +80,15 @@ def search_serpapi_jobs(query, location=""):
         return []
 
 
-def check_serpapi_available():
+def check_serpapi_available() -> bool:
     config = get_serpapi_config()
     return bool(config.get("serpapi_key"))
 
 
-def get_serpapi_config():
+def get_serpapi_config() -> dict[str, Any]:
     try:
         from config import load_config
+
         return load_config()
     except ImportError:
         return {}
