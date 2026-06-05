@@ -203,7 +203,9 @@ def rank_jobs(jobs, profile, use_ai=False):
     return ranked
 
 
-def build_results_table(ranked, page, page_size, total_pages, ai_enabled, saved_ids,     highlight=None):
+def build_results_table(
+    ranked, page, page_size, total_pages, ai_enabled, saved_ids, highlight=None
+):
     start = page * page_size
     end = min(start + page_size, len(ranked))
 
@@ -227,7 +229,9 @@ def build_results_table(ranked, page, page_size, total_pages, ai_enabled, saved_
         score_color = "green" if score >= 60 else "yellow" if score >= 25 else "red"
         url = job.get("url", "")
         saved_mark = " [yellow]★[/yellow]" if url and is_job_saved(url, saved_ids) else ""
-        row_style = "reverse bold" if highlight is not None and (i - 1) == (start + highlight) else None
+        row_style = (
+            "reverse bold" if highlight is not None and (i - 1) == (start + highlight) else None
+        )
         table.add_row(
             str(i),
             job.get("title", "N/A") + saved_mark,
@@ -327,7 +331,8 @@ def prompt_loop(ranked, source_counts, ai_enabled):
                     console.print("[dim]No saved jobs yet.[/dim]")
                 else:
                     t = Table(
-                        box=box.SIMPLE, title="[bold]Saved Jobs[/bold]",
+                        box=box.SIMPLE,
+                        title="[bold]Saved Jobs[/bold]",
                         show_edge=False,
                     )
                     t.add_column("Title", width=30, overflow="ellipsis")
@@ -343,8 +348,13 @@ def prompt_loop(ranked, source_counts, ai_enabled):
             else:
                 console.print(
                     build_results_table(
-                        ranked, st.page, page_size, total_pages,
-                        ai_enabled, saved_ids, highlight=st.selected,
+                        ranked,
+                        st.page,
+                        page_size,
+                        total_pages,
+                        ai_enabled,
+                        saved_ids,
+                        highlight=st.selected,
                     )
                 )
         return cap.get()
@@ -458,13 +468,15 @@ def prompt_loop(ranked, source_counts, ai_enabled):
 
     app = Application(
         layout=Layout(
-            HSplit([
-                Window(content=FormattedTextControl(lambda: ANSI(_render_content()))),
-                Window(
-                    height=1,
-                    content=FormattedTextControl(lambda: ANSI(_render_help())),
-                ),
-            ])
+            HSplit(
+                [
+                    Window(content=FormattedTextControl(lambda: ANSI(_render_content()))),
+                    Window(
+                        height=1,
+                        content=FormattedTextControl(lambda: ANSI(_render_help())),
+                    ),
+                ]
+            )
         ),
         key_bindings=kb,
         full_screen=True,

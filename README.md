@@ -1,6 +1,6 @@
 # Job Finder 🔍
 
-> **Multi-source job aggregator with AI-powered relevance ranking.**  
+> **Multi-source job aggregator with AI-powered relevance ranking.**
 > Enter your profile once — get ranked, personalized job matches from across the web.
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)]()
