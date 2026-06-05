@@ -1,4 +1,4 @@
-# Matcha 🔍
+# Matcha 🍵
 
 > **Multi-source job aggregator with AI-powered relevance ranking.**
 > Enter your profile once — get ranked, personalized job matches from across the web.
