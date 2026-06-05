@@ -10,57 +10,15 @@ from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
-from ai import ai_extract_profile, check_ai_available
+from ai import ai_extract_profile, ai_suggest_titles, check_ai_available
 from config import load_profile, save_profile
 
 console = Console()
 
 
-SKILL_TO_TITLE_MAP: list[tuple[set[str], str]] = [
-    ({"python", "django", "flask", "fastapi", "sql", "postgresql", "mysql"}, "Backend Developer"),
-    (
-        {"python", "tensorflow", "pytorch", "scikit-learn", "pandas", "numpy"},
-        "Machine Learning Engineer",
-    ),
-    ({"python", "tensorflow", "pytorch", "opencv"}, "AI Engineer"),
-    ({"python", "data", "analyst", "tableau", "power bi", "sql"}, "Data Analyst"),
-    ({"python", "spark", "kafka", "hadoop", "airflow", "sql", "pandas"}, "Data Engineer"),
-    ({"python", "aws", "docker", "kubernetes", "terraform", "linux", "ci/cd"}, "DevOps Engineer"),
-    ({"python", "aws", "azure", "gcp", "docker", "kubernetes"}, "Cloud Engineer"),
-    (
-        {"javascript", "typescript", "react", "angular", "vue", "node", "nodejs"},
-        "Frontend Developer",
-    ),
-    (
-        {"javascript", "typescript", "react", "node", "nodejs", "python", "django"},
-        "Full Stack Developer",
-    ),
-    ({"java", "spring", "hibernate", "microservices"}, "Java Developer"),
-    ({"go", "golang", "docker", "kubernetes", "microservices"}, "Go Developer"),
-    ({"rust", "systems", "performance"}, "Systems Engineer"),
-    ({"sql", "etl", "data", "warehouse", "analytics"}, "Data Engineer"),
-    ({"aws", "azure", "gcp", "cloud", "infrastructure"}, "Cloud Engineer"),
-    ({"docker", "kubernetes", "helm", "terraform", "ansible", "ci/cd"}, "DevOps Engineer"),
-    ({"product", "management", "agile", "scrum", "jira", "confluence"}, "Product Manager"),
-    ({"javascript", "react", "html", "css", "frontend", "ui", "ux"}, "Frontend Developer"),
-]
-
-
-def suggest_title(skills: list[str]) -> Optional[str]:
-    skill_set = {s.lower() for s in skills}
-    best_match = None
-    best_count = 0
-    for required, title in SKILL_TO_TITLE_MAP:
-        count = len(required & skill_set)
-        if count > best_count and count >= len(required) * 0.6:
-            best_count = count
-            best_match = title
-    return best_match
-
-
 def extract_experience(text_lower: str) -> Optional[int]:
     years = re.findall(
-        r"(\d+)\s*(?:years?|yrs?|yr)\s*(?:of)?\s*(?:experience|exp|work)?", text_lower
+        r"(\d+)\+?\s*(?:years?|yrs?|yr)\s*(?:of)?\s*(?:experience|exp|work)?", text_lower
     )
     if years:
         return max(int(y) for y in years)
@@ -94,144 +52,56 @@ def parse_resume_pdf(path: str) -> Optional[dict[str, Any]]:
         return None
 
     if not text.strip():
-        console.print("[red]Could not extract text from PDF. It may be scanned/image-based.[/red]")
+        console.print(
+            "[yellow]Could not extract text from PDF.[/yellow]\n"
+            "  If this is a scanned document, install PaddleOCR:\n"
+            "  pip install paddleocr\n"
+            "  Or enter your profile manually."
+        )
         return None
 
-    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    if not check_ai_available():
+        console.print("[red]AI key required.[/red] Set $MINIMAX or run with --configure")
+        return None
+
+    console.print("[dim]Extracting profile with AI...[/dim]")
+    ai_profile = ai_extract_profile(text[:4000])
+    if not ai_profile:
+        console.print("[red]AI extraction failed — check your AI key and network.[/red]")
+        return None
+
     text_lower = text.lower()
+    name = ai_profile.get("name", "") or text.split("\n")[0].strip()
+    title = ai_profile.get("title", "")
+    headline = ai_profile.get("headline", title)
+    skills = ai_profile.get("skills", [])
+    experience = ai_profile.get("experience", "")
+    summary = ai_profile.get("summary", "")
 
-    name = lines[0] if lines else ""
-
-    title_patterns = [
-        r"(?:^|\n)\s*(software\s*(?:engineer|developer|architect)|senior\s+software|full.?stack|frontend|backend|devops|data\s*(?:scientist|engineer|analyst)|machine\s+learning|ai\s*engineer|product\s*manager|engineering\s*manager|sre|site\s*reliability|cloud\s*engineer|systems\s*engineer|staff\s*engineer|principal\s*engineer)",
-    ]
-    title = ""
-    for p in title_patterns:
-        m = re.search(p, text, re.IGNORECASE)
-        if m:
-            title = m.group(1).strip()
-            break
-
-    tech_keywords = [
-        "python",
-        "javascript",
-        "typescript",
-        "java",
-        "go",
-        "golang",
-        "rust",
-        "c\\+\\+",
-        "c#",
-        "react",
-        "angular",
-        "vue",
-        "node",
-        "nodejs",
-        "django",
-        "flask",
-        "fastapi",
-        "spring",
-        "aws",
-        "azure",
-        "gcp",
-        "docker",
-        "kubernetes",
-        "terraform",
-        "ansible",
-        "sql",
-        "postgresql",
-        "mysql",
-        "mongodb",
-        "redis",
-        "kafka",
-        "rabbitmq",
-        "git",
-        "linux",
-        "ci/cd",
-        "jenkins",
-        "github actions",
-        "gitlab ci",
-        "tensorflow",
-        "pytorch",
-        "scikit-learn",
-        "pandas",
-        "numpy",
-        "graphql",
-        "rest",
-        "grpc",
-        "html",
-        "css",
-        "sass",
-        "agile",
-        "scrum",
-        "jira",
-        "confluence",
-        "microservices",
-        "kubernetes",
-        "helm",
-        "opencv",
-        "nlp",
-        "tableau",
-        "power bi",
-        "etl",
-        "hadoop",
-        "spark",
-        "airflow",
-    ]
-
-    found_keywords = set()
-    for kw in tech_keywords:
-        if re.search(r"\b" + kw + r"\b", text_lower):
-            found_keywords.add(kw.replace("\\+\\+", "++").replace("\\+", "+").replace("\\/", "/"))
-
-    skills = sorted(found_keywords)
-
-    experience_years = extract_experience(text_lower)
-
-    suggested = suggest_title(skills) if not title else None
-
-    summary = text[:500].strip()
+    fallback_exp = extract_experience(text_lower)
+    if fallback_exp and not experience:
+        experience = str(fallback_exp)
 
     profile = {
         "name": name,
-        "title": title.capitalize() if title else "",
-        "headline": title.capitalize() if title else "",
+        "title": title,
+        "headline": headline,
         "skills": skills,
-        "experience": str(experience_years) if experience_years else "",
+        "experience": str(experience) if experience else "",
         "summary": summary,
     }
-
-    if check_ai_available():
-        console.print("[dim]Enhancing profile with AI...[/dim]")
-        ai_profile = ai_extract_profile(text[:4000])
-        if ai_profile:
-            if not profile["title"] and ai_profile.get("title"):
-                profile["title"] = ai_profile["title"]
-            if not profile["headline"] and ai_profile.get("headline"):
-                profile["headline"] = ai_profile["headline"]
-            if not profile["experience"] and ai_profile.get("experience"):
-                profile["experience"] = ai_profile["experience"]
-            ai_skills = ai_profile.get("skills", [])
-            existing_skills = set(s.lower() for s in profile["skills"])
-            new_skills = [s for s in ai_skills if s.lower() not in existing_skills]
-            if new_skills:
-                profile["skills"].extend(new_skills)
-            profile["summary"] = ai_profile.get("summary", "") or profile["summary"]
-            console.print("[green]  AI-enhanced: title/experience/skills enriched[/green]")
 
     table = Table(box=None, show_header=False, show_edge=False, padding=(0, 2))
     table.add_column("Field", style="bold")
     table.add_column("Value")
-    table.add_row("Name", name)
+    table.add_row("Name", profile["name"])
     table.add_row(
         "Title",
-        profile["title"]
-        if profile["title"]
-        else f"[yellow]Not detected{' → Suggested: ' + suggested if suggested else ''}[/yellow]",
+        profile["title"] if profile["title"] else "[yellow]Not detected[/yellow]",
     )
     table.add_row(
         "Skills",
-        f"{len(profile['skills'])} detected: {', '.join(profile['skills'][:10])}{'...' if len(profile['skills']) > 10 else ''}"
+        f"{len(profile['skills'])} detected: {', '.join(profile['skills'])}"
         if profile["skills"]
         else "[yellow]None detected[/yellow]",
     )
@@ -271,37 +141,28 @@ def search_linkedin_profile_via_web(username: str) -> Optional[dict[str, Any]]:
 
     for query in queries:
         url = f"https://html.duckduckgo.com/html/?q={quote(query)}"
-
         try:
             resp = requests.get(url, headers=HEADERS, timeout=15)
             if resp.status_code != 200:
                 continue
-
             soup = BeautifulSoup(resp.text, "html.parser")
             results = soup.select(".result")
-
             for result in results:
                 if result.select_one(".badge--ad"):
                     continue
-
                 title_el = result.select_one(".result__title a")
                 snippet_el = result.select_one(".result__snippet")
-
                 if not title_el:
                     continue
-
                 raw_href = title_el.get("href", "")
                 actual_url = extract_url(raw_href) if raw_href else ""
-
                 if (
                     username.lower() not in actual_url.lower()
                     and "linkedin.com/in/" not in actual_url.lower()
                 ):
                     continue
-
                 found = result
                 break
-
             if found:
                 break
         except requests.RequestException:
@@ -312,14 +173,13 @@ def search_linkedin_profile_via_web(username: str) -> Optional[dict[str, Any]]:
 
     title_el = found.select_one(".result__title a")
     snippet_el = found.select_one(".result__snippet")
-    title = title_el.get_text(strip=True)
+    title_text = title_el.get_text(strip=True)
     snippet = snippet_el.get_text(strip=True) if snippet_el else ""
 
-    name = title.split(" - ")[0].strip() if " - " in title else username
+    name = title_text.split(" - ")[0].strip() if " - " in title_text else username
     headline = ""
-
-    if " - " in title and " | " in title:
-        headline = title.split(" | ")[0].split(" - ", 1)[-1].strip()
+    if " - " in title_text and " | " in title_text:
+        headline = title_text.split(" | ")[0].split(" - ", 1)[-1].strip()
 
     title_candidates = re.findall(
         r"(DevOps\s*(?:Engineer|Developer)?|Software\s*(?:Engineer|Developer|Architect)"
@@ -337,52 +197,24 @@ def search_linkedin_profile_via_web(username: str) -> Optional[dict[str, Any]]:
         if exp_match:
             headline = exp_match.group(1).strip()
 
-    tech_keywords = [
-        "python",
-        "javascript",
-        "typescript",
-        "java",
-        "go",
-        "rust",
-        "c++",
-        "react",
-        "angular",
-        "vue",
-        "node",
-        "django",
-        "flask",
-        "spring",
-        "aws",
-        "azure",
-        "gcp",
-        "docker",
-        "kubernetes",
-        "terraform",
-        "sql",
-        "postgresql",
-        "mysql",
-        "mongodb",
-        "redis",
-        "kafka",
-        "git",
-        "linux",
-        "jenkins",
-        "tensorflow",
-        "pytorch",
-        "graphql",
-        "html",
-        "css",
-        "devops",
-        "cloud",
-        "sre",
-    ]
-    snippet_lower = snippet.lower()
-    skills = [kw.title() for kw in tech_keywords if kw in snippet_lower]
+    if check_ai_available():
+        ai_result = ai_extract_profile(
+            f"Name: {name}\nHeadline: {headline}\nSummary: {snippet[:2000]}"
+        )
+        if ai_result:
+            skills = ai_result.get("skills", [])
+            return {
+                "name": name,
+                "headline": ai_result.get("headline", headline),
+                "skills": skills,
+                "summary": snippet,
+                "experience": ai_result.get("experience", ""),
+            }
 
     return {
         "name": name,
         "headline": headline,
-        "skills": skills,
+        "skills": [],
         "summary": snippet,
         "experience": "",
     }
@@ -417,7 +249,6 @@ def scrape_linkedin_profile(url: str) -> Optional[dict[str, Any]]:
             timeout=15,
             allow_redirects=True,
         )
-
         if resp.status_code != 200:
             return search_linkedin_profile_via_web(username)
 
@@ -461,16 +292,13 @@ def scrape_linkedin_profile(url: str) -> Optional[dict[str, Any]]:
 
 def manual_profile_entry() -> dict[str, Any]:
     console.print(Panel("[bold]Enter Your Profile Details[/bold]"))
-
     name = Prompt.ask("Full name")
     title = Prompt.ask("Current/Past job title")
     headline = Prompt.ask("Professional headline (one-liner)", default=title)
     skills_input = Prompt.ask("Skills (comma-separated)")
     skills = [s.strip() for s in skills_input.split(",") if s.strip()]
     experience = Prompt.ask("Years of experience")
-
     summary = Prompt.ask("Professional summary (brief description of your background)")
-
     return {
         "name": name,
         "title": title,
@@ -501,13 +329,19 @@ def build_or_load_profile(force_new: bool = False) -> Optional[dict[str, Any]]:
                 return existing
             console.print()
 
+    if not check_ai_available():
+        console.print(
+            "[yellow]AI key not configured.[/yellow]\n"
+            "  Set the $MINIMAX environment variable or run with --configure.\n"
+            "  You can still enter profile details manually."
+        )
+
     console.print("[bold]How would you like to enter your profile?[/bold]")
     console.print("  1. Enter details manually")
     console.print("  2. Upload a resume PDF")
     console.print("  3. Provide a LinkedIn profile URL")
 
     source_choice = Prompt.ask("Choose", choices=["1", "2", "3"], default="1")
-
     profile = None
     source_method = "manual"
 
@@ -542,7 +376,7 @@ def build_or_load_profile(force_new: bool = False) -> Optional[dict[str, Any]]:
         supplement_table.add_row("Title", profile.get("title", "[yellow]Not detected[/yellow]"))
         supplement_table.add_row(
             "Skills",
-            f"{len(profile.get('skills', []))} detected: {', '.join(profile.get('skills', [])[:10])}{'...' if len(profile.get('skills', [])) > 10 else ''}"
+            f"{len(profile.get('skills', []))} detected: {', '.join(profile.get('skills', []))}"
             if profile.get("skills")
             else "[yellow]None[/yellow]",
         )
@@ -561,9 +395,12 @@ def build_or_load_profile(force_new: bool = False) -> Optional[dict[str, Any]]:
             if extra_skills.strip():
                 profile["skills"].extend([s.strip() for s in extra_skills.split(",") if s.strip()])
             if not profile.get("title") or not profile["title"].strip():
-                suggested = suggest_title(profile.get("skills", []))
+                if check_ai_available():
+                    suggested = ai_suggest_titles(profile.get("skills", []))
+                else:
+                    suggested = None
                 profile["title"] = Prompt.ask(
-                    "Your job title", default=suggested or profile.get("headline", "")
+                    "Your job title", default=suggested[0] if suggested else ""
                 )
             if not profile.get("experience") or not str(profile["experience"]).strip():
                 profile["experience"] = Prompt.ask("Years of experience", default="")

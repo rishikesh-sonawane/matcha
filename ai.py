@@ -35,6 +35,7 @@ def _call_ai(
     messages: list[dict[str, Any]],
     response_format: Optional[dict[str, Any]] = None,
     max_tokens: int = 500,
+    timeout: int = 30,
 ) -> Optional[str]:
     key = _get_api_key()
     if not key:
@@ -53,18 +54,22 @@ def _call_ai(
     if response_format:
         payload["response_format"] = response_format
 
-    try:
-        resp = requests.post(AI_API_URL, headers=headers, json=payload, timeout=30)
-        if resp.status_code != 200:
+    for attempt in range(2):
+        try:
+            resp = requests.post(AI_API_URL, headers=headers, json=payload, timeout=timeout)
+            if resp.status_code != 200:
+                return None
+            data = resp.json()
+            choices = data.get("choices", [])
+            if not choices:
+                return None
+            content = choices[0].get("message", {}).get("content", "")
+            return content
+        except requests.ReadTimeout:
+            continue
+        except Exception:
             return None
-        data = resp.json()
-        choices = data.get("choices", [])
-        if not choices:
-            return None
-        content = choices[0].get("message", {}).get("content", "")
-        return content
-    except Exception:
-        return None
+    return None
 
 
 def _extract_json(text: str) -> Optional[dict[str, Any]]:
@@ -85,23 +90,23 @@ def _extract_json(text: str) -> Optional[dict[str, Any]]:
     return None
 
 
-PROFILE_EXTRACTION_PROMPT = """You are parsing a resume or professional profile. Extract structured information as JSON.
+PROFILE_EXTRACTION_PROMPT = """Extract structured information from this resume as JSON.
 
-Raw text:
+Resume text:
 {text}
 
-Return valid JSON with these fields:
-- "name": full name
-- "title": most recent or current job title (e.g. "Senior Software Engineer")
+Return valid JSON with these exact keys:
+- "name": full name of the person
+- "title": most recent or current job title (e.g. "Senior DevOps Engineer")
 - "headline": one-line professional summary
-- "skills": array of technical and professional skills (be thorough, infer from context)
-- "experience": total years of professional experience as a number, or null if unclear
+- "skills": array of ALL technical and professional skills mentioned (languages, frameworks, tools, platforms, methodologies — be comprehensive)
+- "experience": total years of professional experience as a number, or null if not mentioned
 - "summary": 2-3 sentence professional summary
 
 Rules:
-- Infer the title from context if not explicit
-- Extract ALL skills mentioned even implicitly (languages, frameworks, tools, platforms, methodologies)
-- If experience is ambiguous, set to null rather than guessing"""
+- Extract the title from the resume context, don't guess
+- List EVERY skill mentioned — programming languages, cloud platforms, CI/CD tools, monitoring, databases, containers, etc.
+- If experience is ambiguous, use null rather than guessing"""
 
 
 def ai_extract_profile(text: str) -> Optional[dict[str, Any]]:
@@ -111,6 +116,7 @@ def ai_extract_profile(text: str) -> Optional[dict[str, Any]]:
     result = _call_ai(
         [{"role": "user", "content": prompt}],
         max_tokens=800,
+        timeout=45,
     )
     if not result:
         return None
@@ -130,9 +136,43 @@ def ai_extract_profile(text: str) -> Optional[dict[str, Any]]:
     return parsed
 
 
+SUGGEST_TITLES_PROMPT = """You are a career advisor. Given a list of technical skills, suggest 3-5 job titles that best match this skill set.
+
+Skills: {skills}
+
+Return valid JSON:
+{{
+  "titles": ["title1", "title2", "title3", ...]
+}}
+
+Rules:
+- Suggest titles that match the overall skill profile, not just one skill
+- Cover related roles (e.g. "DevOps Engineer", "Platform Engineer", "Cloud Engineer" for infrastructure skills)
+- Return exactly 3-5 titles, ordered by best match first"""
+
+
+def ai_suggest_titles(skills: list[str]) -> Optional[list[str]]:
+    if not check_ai_available() or not skills:
+        return None
+    prompt = SUGGEST_TITLES_PROMPT.format(skills=", ".join(skills))
+    result = _call_ai(
+        [{"role": "user", "content": prompt}],
+        max_tokens=200,
+    )
+    if not result:
+        return None
+    parsed = _extract_json(result)
+    if not parsed or not isinstance(parsed, dict):
+        return None
+    titles = parsed.get("titles", [])
+    if not isinstance(titles, list) or len(titles) < 1:
+        return None
+    return [t.strip() for t in titles if t.strip()][:5]
+
+
 QUERY_GENERATION_PROMPT = """You are a job search strategist. Given a candidate's profile, generate 3-5 diverse search queries that will find the best matching jobs.
 
-The queries should cover DIFFERENT job titles and angles — not just the candidate's current title. Think about adjacent roles, related specializations, and skill-based searches.
+Each query must combine a role title and a specific skill from the profile.
 
 CANDIDATE PROFILE:
 - Current Title: {title}
@@ -147,48 +187,10 @@ Return valid JSON:
 }}
 
 Rules:
-- Each query should be 2-4 words max
-- Cover different role types (e.g., if the candidate is a DevOps engineer, include queries for "platform engineer", "site reliability engineer", "cloud engineer" as well)
-- Focus on roles where their skills are applicable, not just exact title matches
+- Each query should be 2-4 words, combining a job title with ONE specific skill (e.g. "AWS DevOps Engineer", "Terraform Cloud Engineer", "Kubernetes SRE")
+- Cover different role types AND different skills
 - Include location-relevant terms if location is specified
 - Return 3-5 queries"""
-
-
-JOB_SCORING_PROMPT = """You are a critical job matching analyst. Score how well a job fits a candidate's profile. Be honest and discriminating — not every related job is a great fit.
-
-CANDIDATE PROFILE:
-- Current Title: {title}
-- Headline: {headline}
-- Skills: {skills}
-- Experience: {experience} years
-- Summary: {summary}
-- Preferred Location: {location}
-
-JOB:
-- Title: {job_title}
-- Company: {job_company}
-- Location: {job_location}
-- Description: {job_description}
-
-Return valid JSON:
-{{
-  "score": <0-100 integer>,
-  "reasons": ["reason1", "reason2", ...]
-}}
-
-Scoring criteria:
-- Skills match (40%): how many of the candidate's core skills are relevant. Deduct for missing key skills the job requires. Skill synonym understanding OK.
-- Title/role match (25%): does the job leverage the candidate's actual expertise? A role adjacent to their specialization scores higher than a generic role.
-- Experience fit (20%): is the seniority level appropriate? Overqualified = penalty, underqualified = penalty.
-- Location fit (15%): same city = best, same region = OK, remote = neutral, different city with no remote = penalty.
-
-Guidelines:
-- Score 80+ only if there is strong skills overlap AND the role aligns with their career trajectory
-- Score 50-79 for adjacent roles where their skills are partially relevant but it's a stretch
-- Score 25-49 for tangential roles that barely use their skills
-- Score 0-24 for completely irrelevant roles
-- Include specific, honest reasons. Mention what's MISSING if relevant.
-- Never give 100 — nobody is a perfect match."""
 
 
 def ai_generate_queries(profile: dict[str, Any]) -> Optional[list[str]]:
@@ -220,6 +222,42 @@ def ai_generate_queries(profile: dict[str, Any]) -> Optional[list[str]]:
     if not isinstance(queries, list) or len(queries) < 1:
         return None
     return [q.strip() for q in queries if q.strip()][:5]
+
+
+JOB_SCORING_PROMPT = """You are a critical job matching analyst. Score how well a job fits a candidate's profile.
+
+CANDIDATE PROFILE:
+- Current Title: {title}
+- Headline: {headline}
+- Skills: {skills}
+- Experience: {experience} years
+- Summary: {summary}
+- Preferred Location: {location}
+
+JOB:
+- Title: {job_title}
+- Company: {job_company}
+- Location: {job_location}
+- Description: {job_description}
+
+Return valid JSON:
+{{
+  "score": <0-100 integer>,
+  "reasons": ["reason1", "reason2", ...]
+}}
+
+Scoring criteria:
+- Skills match (40%): how many of the candidate's core skills are relevant
+- Title/role match (25%): does the job leverage the candidate's actual expertise?
+- Experience fit (20%): is the seniority level appropriate?
+- Location fit (15%): same city = best, same region = OK, remote = neutral
+
+Guidelines:
+- Score 80+ for strong skills overlap AND aligned role
+- Score 50-79 for adjacent roles with partial relevance
+- Score 25-49 for tangential roles
+- Score 0-24 for irrelevant roles
+- Include specific, honest reasons mentioning what's missing if relevant"""
 
 
 def ai_score_job(profile: dict[str, Any], job: dict[str, Any]) -> Optional[dict[str, Any]]:

@@ -2,7 +2,10 @@ import re
 from typing import Any
 from urllib.parse import urlparse
 
-from ddgs import DDGS
+try:
+    from ddgs import DDGS
+except ImportError:
+    DDGS = None  # type: ignore
 
 INDIVIDUAL_JOB_PATTERNS: list[str] = [
     r"/jobs/view/",
@@ -32,6 +35,13 @@ AGGREGATE_URL_PATTERNS: list[str] = [
     r"/jobs/.*-jobs-",
     r"\?f_",
     r"\?location",
+]
+
+NON_JOB_TITLE_PATTERNS: list[str] = [
+    r"^Job Application\s+for\s+",
+    r"^Application\s+for\s+",
+    r"^Sign\s+In",
+    r"^Log\s+In",
 ]
 
 NON_JOB_URL_PATTERNS: list[str] = [
@@ -72,6 +82,9 @@ def search_web_for_jobs(
     # Fallback: general search for career pages
     site_queries.append(f"{query} {location} career")
 
+    if DDGS is None:
+        return []
+
     for q in site_queries:
         try:
             with DDGS() as ddgs:
@@ -90,6 +103,8 @@ def search_web_for_jobs(
                 if is_search_page(title, url):
                     continue
                 if any(re.search(p, url, re.IGNORECASE) for p in NON_JOB_URL_PATTERNS):
+                    continue
+                if any(re.search(p, title, re.IGNORECASE) for p in NON_JOB_TITLE_PATTERNS):
                     continue
 
                 job = {
@@ -128,6 +143,12 @@ def clean_title(title: str) -> str:
         flags=re.IGNORECASE,
     )
     title = re.sub(r"\s*[-–|]\s*(?:Hiring|Job|Opening|Vacancy).*", "", title, flags=re.IGNORECASE)
+    # "Company hiring Job Title in Location" → extract "Job Title"
+    m = re.search(r"^\s*[A-Z][A-Za-z0-9&.]+\s+(?:is\s+)?hiring\s+", title, re.IGNORECASE)
+    if m:
+        title = title[m.end() :].strip()
+        # Strip trailing location suffix like " in Bengaluru, Karnataka, India"
+        title = re.sub(r"\s+in\s+[A-Z][a-zA-Z\s,]*$", "", title).strip()
     segments = re.split(r"\s*[-–|]\s*", title)
     return segments[0].strip() if segments[0].strip() else title.strip()
 
@@ -268,8 +289,8 @@ _STOP_WORDS: set[str] = {
 
 def extract_company(url: str, snippet: str, title: str) -> str:
     patterns = [
-        r"(?:at|by)\s+([A-Z][A-Za-z0-9\s&.]+?)(?:\s+[-–]|\s+(?:is|has|in)\s+|$)",
-        r"([A-Z][A-Za-z0-9\s&]+)\s+(?:is\s+)?(?:hiring|seeking|looking)",
+        r"(?:at|by)\s+([A-Z][A-Za-z0-9&.]+?)(?:\s+[-–]|\s+(?:is|has|in)\s+|$)",
+        r"([A-Z][A-Za-z0-9&]+)\s+(?:is\s+)?(?:hiring|seeking|looking)",
     ]
     for p in patterns:
         m = re.search(p, snippet or "", re.IGNORECASE)

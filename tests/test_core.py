@@ -4,9 +4,9 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import unittest
-from profile import suggest_title
+from unittest import mock
 
-from ai import _extract_json
+from ai import _extract_json, ai_suggest_titles
 from main import _normalize, deduplicate
 from matcher import compute_relevance, tokenize
 from scrapers.indeed import resolve_indeed_url
@@ -219,27 +219,49 @@ class TestResolveIndeedURL(unittest.TestCase):
 
 
 class TestSuggestTitle(unittest.TestCase):
-    def test_devops_skills(self):
+    @mock.patch("ai.check_ai_available", return_value=True)
+    @mock.patch(
+        "ai._call_ai",
+        return_value='{"titles": ["DevOps Engineer", "Platform Engineer", "Cloud Engineer"]}',
+    )
+    def test_devops_skills(self, mock_call, mock_check):
         skills = ["aws", "docker", "kubernetes", "terraform", "ansible", "ci/cd", "linux"]
-        title = suggest_title(skills)
-        self.assertEqual(title, "DevOps Engineer")
+        titles = ai_suggest_titles(skills)
+        self.assertIsNotNone(titles)
+        self.assertEqual(titles[0], "DevOps Engineer")
 
-    def test_backend_skills(self):
+    @mock.patch("ai.check_ai_available", return_value=True)
+    @mock.patch(
+        "ai._call_ai",
+        return_value='{"titles": ["Backend Developer", "Python Developer", "Full Stack Developer"]}',
+    )
+    def test_backend_skills(self, mock_call, mock_check):
         skills = ["python", "django", "flask", "postgresql", "sql"]
-        title = suggest_title(skills)
-        self.assertEqual(title, "Backend Developer")
+        titles = ai_suggest_titles(skills)
+        self.assertIsNotNone(titles)
+        self.assertEqual(titles[0], "Backend Developer")
 
-    def test_frontend_skills(self):
+    @mock.patch("ai.check_ai_available", return_value=True)
+    @mock.patch(
+        "ai._call_ai",
+        return_value='{"titles": ["Frontend Developer", "UI Developer", "React Developer"]}',
+    )
+    def test_frontend_skills(self, mock_call, mock_check):
         skills = ["javascript", "react", "html", "css", "frontend"]
-        title = suggest_title(skills)
-        self.assertEqual(title, "Frontend Developer")
+        titles = ai_suggest_titles(skills)
+        self.assertIsNotNone(titles)
+        self.assertEqual(titles[0], "Frontend Developer")
 
     def test_empty_skills(self):
-        self.assertIsNone(suggest_title([]))
+        self.assertIsNone(ai_suggest_titles([]))
 
-    def test_unrecognized_skills(self):
+    @mock.patch("ai.check_ai_available", return_value=True)
+    @mock.patch("ai._call_ai", return_value='{"titles": ["COBOL Developer", "Mainframe Engineer"]}')
+    def test_unrecognized_skills(self, mock_call, mock_check):
         skills = ["cobol", "fortran", "punchcard"]
-        self.assertIsNone(suggest_title(skills))
+        titles = ai_suggest_titles(skills)
+        self.assertIsNotNone(titles)
+        self.assertEqual(titles[0], "COBOL Developer")
 
 
 class TestExtractJSON(unittest.TestCase):

@@ -5,7 +5,11 @@ from urllib.parse import parse_qs, urlparse
 import cloudscraper
 import requests
 from bs4 import BeautifulSoup
-from ddgs import DDGS
+
+try:
+    from ddgs import DDGS
+except ImportError:
+    DDGS = None  # type: ignore
 
 from .utils import resilient_get
 
@@ -115,6 +119,8 @@ def _search_indeed_via_ddgs(query: str, location: str) -> list[dict[str, str]]:
     if location:
         search_q += f" {location}"
 
+    if DDGS is None:
+        return []
     try:
         with DDGS() as ddgs:
             raw = ddgs.text(search_q, max_results=15)
@@ -136,7 +142,7 @@ def _search_indeed_via_ddgs(query: str, location: str) -> list[dict[str, str]]:
         clean_title = re.sub(
             r"\s*[-–|]\s*Indeed(\.com)?\s*$", "", title, flags=re.IGNORECASE
         ).strip()
-        parts = re.split(r"\s*[-–|]\s*", clean_title)
+        parts = re.split(r"\s+[-–|]\s+", clean_title)
         job_title = parts[0].strip() if parts else clean_title
         job_location = parts[1].strip() if len(parts) > 1 else ""
 
@@ -247,17 +253,28 @@ def _search_indeed_via_ddgs(query: str, location: str) -> list[dict[str, str]]:
             "via",
         }
         company = "Unknown"
-        for pat in [
-            (r"\b(at|by|via)\s+([A-Z][A-Za-z0-9\s&.]+?)(?:\s+[-–]|\s+(?:is|has|in)\s+|\.|$)", 2),
-            (r"([A-Z][A-Za-z0-9\s&]+)\s+(?:is\s+)?(?:hiring|seeking|looking)", 1),
-        ]:
-            m = re.search(pat[0], body, re.IGNORECASE)
-            if m:
-                candidate = m.group(pat[1]).strip()
-                first_word = candidate.split()[0].lower()
-                if len(candidate) >= 3 and len(candidate) <= 50 and first_word not in stop_words:
-                    company = candidate
-                    break
+        pat = r"\b(at|by|via)\s+([A-Z][A-Za-z0-9&.]+?)(?:\s+[-–]|\s+(?:is|has|in)\s+|\.|$)"
+        m = re.search(pat, body, re.IGNORECASE)
+        if m:
+            candidate = m.group(2).strip()
+            first_word = candidate.split()[0].lower()
+            if len(candidate) >= 3 and len(candidate) <= 50 and first_word not in stop_words:
+                company = candidate
+
+        # Fallback: extract company from title when it has 3+ parts: "Title - Company - Location"
+        if company == "Unknown" and len(parts) >= 3:
+            candidate = parts[1].strip()
+            first_word = candidate.split()[0].lower()
+            if len(candidate) >= 3 and first_word not in stop_words:
+                company = candidate
+
+        # Use remaining segments as location for 3+ part titles
+        if len(parts) >= 3:
+            job_location = " - ".join(p.strip() for p in parts[2:])
+        elif len(parts) == 2:
+            job_location = parts[1].strip()
+        else:
+            job_location = ""
 
         jobs.append(
             {

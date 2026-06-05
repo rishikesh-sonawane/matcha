@@ -469,7 +469,7 @@ Config files are loaded in order: `--config` flag > `./job-finder.yaml` > `~/.jo
 20. **Jobs with score 0 are silently filtered** in `prompt_loop` line 267
 21. **DuckDuckGo HTML endpoint now fully captcha-blocked** — `html.duckduckgo.com` returns 202 with image captcha for all automated requests. Replaced with `ddgs` Python library in `web_search.py`.
 22. **Indeed Cloudflare challenge breaks cloudscraper on Python 3.14** — cloudscraper works on Python 3.9 for Indeed but returns 403 on 3.14. The `ddgs` fallback (`site:in.indeed.com/viewjob`) is the workaround. Company extraction from ddgs snippets is limited ("Unknown" for many results).
-23. **`ddgs` is a new dependency** — requires `pip install ddgs`. Replaces the DuckDuckGo HTML scraper and serves as Indeed fallback on Python 3.14.
+23. **`ddgs` is a new dependency** — requires Python >= 3.10. Replaces the DuckDuckGo HTML scraper and serves as Indeed fallback on Python 3.14. CI matrix updated to drop Python 3.9 (was EOL Oct 2025). Both scrapers handle `ImportError` gracefully and return `[]` if `ddgs` is not installed.
 24. **Company extraction from search snippets is inherently unreliable** — `extract_company` uses regex + stop-word filtering + title-based + domain fallback but still misses many companies. Future work could use LLM-based extraction.
 25. **FuturePlan.txt** contains 25+ planned enhancements (tests, type hints, logging, rate limiting, caching, proxy rotation, config encryption, SQLite job tracking, scheduled mode, more scrapers, fuzzy dedup, health monitoring, profile merge, retry with tenacity, YAML config, better LinkedIn scraping)
 

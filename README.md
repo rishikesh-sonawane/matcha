@@ -3,7 +3,7 @@
 > **Multi-source job aggregator with AI-powered relevance ranking.**
 > Enter your profile once — get ranked, personalized job matches from across the web.
 
-[![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)]()
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)]()
 [![Rich TUI](https://img.shields.io/badge/built%20with-Rich-ffd700)]()
 [![AI Matching](https://img.shields.io/badge/feature-AI%20Scoring-8a2be2)]()
 
@@ -83,8 +83,8 @@ Job boards show you **every** posting matching a keyword. This tool shows you on
 
 ### System Requirements
 
-- **Python 3.9+** — Works with CLT Python 3.9 (`/Library/Developer/CommandLineTools/usr/bin/python3`) on macOS
-- **Python 3.14** — Also supported inside a virtual environment (see below)
+- **Python 3.10+** required for all scrapers (`ddgs` dependency). On Python 3.9 only Indeed works (via `cloudscraper`).
+- **Python 3.14** — Supported inside a virtual environment (see below)
 - **macOS only** — Not tested on Linux/Windows
 
 ### Setup
@@ -127,46 +127,87 @@ python3 main.py
 
 ## Usage
 
-### 1. Profile Setup
+### 1. Complete Flow
 
 ```
-╭──────────────────────────────────────────────╮
-│ Job Finder                                   │
-│ Find the most relevant jobs for your profile │
-╰──────────────────────────────────────────────╯
-Existing profile found:
+╭────────────────────────────────────────────────╮
+│ Job Finder                       unsave        │
+│ Multi-source job search with relevance ranking │
+╰────────────────────────────────────────────────╯
+
+Profile: Rishikesh Vijay Sonawane — CI/CD Infrastructure | DevOps Engineer
+Use existing profile? [y/n] (y): n
+
+How would you like to enter your profile?
+  1. Enter details manually
+  2. Upload a resume PDF
+  3. Provide a LinkedIn profile URL
+Choose [1/2/3] (1): 2
+Path to resume PDF: /path/to/resume.pdf
+
+Enhancing profile with AI...
+  AI-enhanced: title/experience/skills enriched
+
+Resume parsed:
   Name          Rishikesh Vijay Sonawane
   Title         CI/CD Infrastructure | DevOps Engineer
-  Skills        ansible, aws, ci/cd, django, docker, ...
+  Skills        38 detected: aws, ci/cd, docker, git, github actions, linux, terraform, EC2, IAM, VPC...
   Experience    ~4 years
-Use existing profile? [y/n] (y):
+
+Profile loaded from PDF:
+  Name          Rishikesh Vijay Sonawane
+  Title         CI/CD Infrastructure | DevOps Engineer
+  Skills        38 detected: aws, ci/cd, docker, git, github actions, linux, terraform, EC2, IAM, VPC...
+  Experience    ~4 years
+Does this look correct? You can supplement it. [y/n] (y): y
+Additional skills (comma-separated, or leave blank) ():
+
+Job search query (Platform Engineer): DevOps Engineer, Infrastructure Engineer, Cloud Engineer
+Location (or blank for remote) (Pune): bengaluru, pune, hyderabad
+Show jobs posted within how many days? (1): 3
+
+AI queries: DevOps Engineer, Infrastructure Engineer, Cloud Engineer, Platform Engineer AWS, ...
+  OK     Indeed                   83
+  OK     LinkedIn                 23
+  ...    Naukri                    0
+  OK     RemoteOK                 34
+  OK     Web Search                9
+
+Found 194 total jobs (AI)
+  83 from Indeed | 42 from LinkedIn | 34 from RemoteOK | 55 from Web Search
+
+
+                  Matching Jobs (page 1/20)
+ #     Title                    Company          Source      Match
+───────────────────────────────────────────────────────────────────
+ 1     Cloud Engineer,          Google           LinkedIn    82.0%
+       Developer Operations
+       in Bengaluru, Karnataka
+ 2     System Development       ADCI             Indeed      72.0%
+       Engineer II
+ 3     DevOps Engineer-II,      Amazon           LinkedIn    72.0%
+       JP-CP
+ 4     DevOps Engineer - 2      xponentiate      Indeed      45.0%
+ 5     DevOps Engineer II,      ADCI             Indeed      45.0%
+       AEP
+ ...
 ```
 
-Three entry methods:
-- **PDF Resume** — Extracts structured data with AI enhancement
-- **LinkedIn URL** — Scrapes public profile with fallback
-- **Manual** — Full manual control
+### 2. Profile Entry
 
-### 2. Search
+Three methods:
+- **PDF Resume** — Extracts structured data via `pdfplumber`, AI-enriches for deeper skill/title detection
+- **LinkedIn URL** — Scrapes public profile with DuckDuckGo fallback (when LinkedIn blocks with HTTP 999)
+- **Manual** — Full control over every field; always works
+
+### 3. Search & Results
 
 ```
 Job search query (Platform Engineer):
 Location (or leave blank for remote): Pune
 ```
 
-### 3. Results
-
-```
-Found 97 total jobs — 50 from LinkedIn | 6 from Naukri | 38 from RemoteOK | 4 from Web Search
-
-  #  Title                    Company         Source    Link                               Match
- ─── ──────────────────────── ─────────────── ──────── ────────────────────────────── ─────────
-  1  Platform Engineer        Barclays        Indeed    in.indeed.com/viewjob?jk=b5...     82%
-  2  Platform Engineer II     Mastercard      Indeed    in.indeed.com/viewjob?jk=e4...     78%
-  3  GCP Platform Engineer    Nexifyr         Web       nexifyr.com/careers/position...    71%
-  4  Platform Engineer        Evolent Health  Indeed    in.indeed.com/viewjob?jk=cc...     65%
-  ...
-```
+Jobs are searched across all configured sources in parallel using the base query plus AI-generated variants.
 
 Interactive features:
 - **Paginated browsing** — `↑↓` navigate, `n/p` page, `Enter` for details
@@ -176,7 +217,7 @@ Interactive features:
 - **Re-run** — Press `r` to search again with different terms
 - **Non-interactive mode** — Use `-b` or `--non-interactive` flag to skip all prompts and auto-search
 
-### 5. Config File (Optional)
+### 4. Config File (Optional)
 
 Create `job-finder.yaml` in the project directory or `~/.job-finder/settings.yaml`:
 

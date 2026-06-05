@@ -566,13 +566,13 @@ def main() -> None:
 
     config = load_config()
     default_query = (
-        config.get("last_query")
-        or settings["search"].get("query")
-        or profile.get("title")
+        profile.get("title")
         or profile.get("headline")
+        or settings["search"].get("query")
+        or config.get("last_query")
         or ""
     )
-    default_location = config.get("last_location") or settings["search"].get("location") or ""
+    default_location = profile.get("location") or settings["search"].get("location") or config.get("last_location") or ""
     default_days = config.get("last_days") or settings["search"].get("days", 7)
 
     if args.non_interactive:
