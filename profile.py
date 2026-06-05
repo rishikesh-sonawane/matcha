@@ -496,7 +496,9 @@ def build_or_load_profile(force_new=False):
                 info += f", ~{exp}y exp"
             info += ")"
             console.print(f"[dim]Profile: {info}[/dim]")
-            return existing
+            if Confirm.ask("Use existing profile?", default=True):
+                return existing
+            console.print()
 
     console.print("[bold]How would you like to enter your profile?[/bold]")
     console.print("  1. Enter details manually")
