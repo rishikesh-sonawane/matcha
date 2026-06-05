@@ -87,23 +87,27 @@ Job boards show you **every** posting matching a keyword. This tool shows you on
 - **Python 3.14** — Supported inside a virtual environment (see below)
 - **macOS only** — Not tested on Linux/Windows
 
-### Setup
+### Quick Start (from existing clone)
+
+```bash
+python3 -m venv venv
+venv/bin/pip install -r requirements.txt
+venv/bin/python3 main.py
+```
+
+This creates a virtual environment, installs dependencies, and runs the app — without needing to manually activate the venv.
+
+### Fresh Setup
 
 ```bash
 git clone https://github.com/yourusername/matcha.git
 cd matcha
-pip3 install -r requirements.txt
-python3 main.py
-```
-
-**Important for Python 3.14 (Homebrew):** Create a virtual environment first to avoid urllib3 v2 + macOS LibreSSL segfault:
-
-```bash
 python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-python3 main.py
+venv/bin/pip install -r requirements.txt
+venv/bin/python3 main.py
 ```
+
+> **Note:** A virtual environment is required — it avoids urllib3 v2 + macOS LibreSSL segfaults on Homebrew Python, and ensures dependencies install into the correct location. If you see `Defaulting to user installation because normal site-packages is not writeable`, the venv is not activated or the symlinks are broken — recreate it with `rm -rf venv && python3 -m venv venv`.
 
 ### Dependencies
 
