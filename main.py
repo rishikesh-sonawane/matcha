@@ -70,12 +70,17 @@ def configure_ai():
         default=False,
     ):
         return
-    from ai import configure_ai as set_ai_key
+    from ai import configure_ai as set_ai_config
 
-    key = Prompt.ask("Enter your AI API key (or set $MINIMAX env var)", password=False)
+    key = Prompt.ask("Enter your AI API key (or set $AI_API_KEY env var)", password=False)
+    url = Prompt.ask(
+        "API endpoint URL",
+        default="https://api.openai.com/v1/chat/completions",
+    )
+    model = Prompt.ask("Model name", default="gpt-4o-mini")
     if key.strip():
-        set_ai_key(key.strip())
-        console.print("[green]AI key saved![/green]")
+        set_ai_config(key.strip(), url.strip(), model.strip())
+        console.print("[green]AI configuration saved![/green]")
 
 
 def run_scraper(
@@ -88,7 +93,8 @@ def run_scraper(
     try:
         results = scraper_func(query, location, days=days)
         return name, results
-    except Exception:
+    except Exception as e:
+        console.print(f"[dim]Scraper error [{name}]: {e}[/dim]")
         return name, []
 
 
@@ -217,9 +223,12 @@ def rank_jobs(
                 }
                 for f in as_completed(ai_futures):
                     i = ai_futures[f]
-                    relevance = f.result()
-                    if relevance:
-                        ranked[i] = (relevance["score"], ranked[i][1], relevance["reasons"])
+                    try:
+                        relevance = f.result()
+                        if relevance:
+                            ranked[i] = (relevance["score"], ranked[i][1], relevance["reasons"])
+                    except Exception as e:
+                        console.print(f"[red]AI scoring error for job #{i + 1}: {e}[/red]")
                     progress.update(task, advance=1)
         ranked.sort(key=lambda x: x[0], reverse=True)
 
@@ -613,7 +622,10 @@ def main() -> None:
 
     jobs, source_counts = search_jobs(queries, location, days=days)
     if not jobs:
-        console.print("[yellow]No jobs found. Try different search terms.[/yellow]")
+        failed = [name for name in SCRAPER_DEFS if source_counts.get(name, 0) == 0]
+        if failed:
+            console.print(f"[yellow]All scrapers returned no results: {', '.join(failed)}[/yellow]")
+        console.print("[yellow]No jobs found. Try different search terms or check your network.[/yellow]")
         return
 
     ranked = rank_jobs(jobs, profile, use_ai=use_ai)

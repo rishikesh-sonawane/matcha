@@ -301,19 +301,46 @@ The prompt is tuned to be **critical** — scores of 80+ are reserved for strong
 
 ## Optional: AI Integration
 
-For AI-powered features (profile extraction, title suggestion, query expansion, relevance scoring), set the `$MINIMAX` environment variable or run `--configure`:
+AI powers profile extraction, query expansion, and relevance scoring — but **the app works fine without it**. All core features (multi-source search, heuristic ranking, dedup, TUI) run with zero API keys.
+
+### Setup
+
+The app works with any OpenAI-compatible API provider. Configure via environment variables:
 
 ```bash
-export MINIMAX="your_key_here"
+# OpenCode Zen (Big Pickle model — free)
+export AI_API_KEY="sk-..."
+export AI_API_URL="https://opencode.ai/zen/v1/chat/completions"
+export AI_MODEL="big-pickle"
+
+# Or OpenAI
+export AI_API_KEY="sk-proj-..."
+export AI_API_URL="https://api.openai.com/v1/chat/completions"
+export AI_MODEL="gpt-4o-mini"
 ```
 
-The AI provider uses the **Kilo Gateway** (`api.kilo.ai`) with model `kilo-auto/small` — a free-tier-compatible endpoint.
+Or run `matcha --configure` to save them permanently:
 
-With AI enabled:
-- Resume PDFs are parsed entirely by AI — extracts name, skills (30+), title, experience, and summary in one pass
-- Search queries are expanded to 3–5 diverse variants targeting adjacent roles
-- Top 15 jobs are re-scored by AI for more accurate relevance ranking
-- Job titles are suggested from your skill set (no hardcoded mappings)
+```
+Enter your AI API key: sk-...
+API endpoint URL (https://opencode.ai/zen/v1/chat/completions):
+Model name (big-pickle):
+```
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `AI_API_KEY` | — | API bearer token |
+| `AI_API_URL` | — (no default) | OpenAI-compatible chat completions endpoint |
+| `AI_MODEL` | — (no default) | Model name to use |
+
+> **Note:** There is no default provider. You must set all three variables for AI features to work. The environment variables `MINIMAX` and `OPENAI_BASE_URL` are also checked for backward compatibility.
+
+### What AI unlocks
+
+- **PDF resume parsing** — extracts name, skills (30+), title, experience, and summary in a single pass
+- **Query expansion** — generates 3–5 diverse search queries targeting adjacent roles
+- **AI re-scoring** — top 15 jobs re-evaluated by the LLM for more accurate relevance
+- **Title suggestion** — suggests job titles matching your skill set
 
 ---
 
@@ -324,7 +351,7 @@ matcha/
 ├── main.py                  # CLI entry point, orchestration, UI
 ├── profile.py               # AI-only profile ingestion (PDF, LinkedIn, manual)
 ├── matcher.py               # Two-pass relevance scoring engine
-├── ai.py                    # AI provider client (Kilo Gateway)
+├── ai.py                    # OpenAI-compatible AI client
 ├── config.py                # Persistent config and profile storage
 ├── models.py                # Pydantic v2 data models
 ├── settings.py              # YAML config loader

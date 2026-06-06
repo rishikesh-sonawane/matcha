@@ -4,41 +4,68 @@ import re
 from typing import Any, Optional
 
 import requests
+from rich.console import Console
 
 from config import load_config, save_config
 
-AI_API_URL = "https://api.kilo.ai/api/gateway/chat/completions"
-AI_MODEL = "kilo-auto/small"
-CONFIG_KEY = "ai_key"
-ENV_VAR = "MINIMAX"
+console = Console()
+
+def _env_or_config(key: str, config_key: str, default: str = "") -> str:
+    val = os.environ.get(key, "")
+    if val:
+        return val
+    return load_config().get(config_key, default)
 
 
 def _get_api_key() -> str:
-    key = os.environ.get(ENV_VAR, "")
-    if key:
-        return key
-    config = load_config()
-    return config.get(CONFIG_KEY, "")
+    return _env_or_config("AI_API_KEY", "ai_key", os.environ.get("MINIMAX", ""))
+
+
+def _get_api_url() -> str:
+    return _env_or_config("AI_API_URL", "ai_url", os.environ.get("OPENAI_BASE_URL", ""))
+
+
+def _get_model() -> str:
+    return _env_or_config("AI_MODEL", "ai_model", "")
 
 
 def check_ai_available() -> bool:
-    return bool(_get_api_key())
+    if not _get_api_key():
+        return False
+    if not _get_api_url():
+        return False
+    if not _get_model():
+        return False
+    return True
 
 
-def configure_ai(key: str) -> None:
+def configure_ai(key: str, url: str = "", model: str = "") -> None:
     config = load_config()
-    config[CONFIG_KEY] = key
+    config["ai_key"] = key
+    if url:
+        config["ai_url"] = url
+    if model:
+        config["ai_model"] = model
     save_config(config)
 
 
 def _call_ai(
     messages: list[dict[str, Any]],
     response_format: Optional[dict[str, Any]] = None,
-    max_tokens: int = 500,
-    timeout: int = 30,
+    max_tokens: int = 8192,
+    timeout: int = 120,
 ) -> Optional[str]:
     key = _get_api_key()
+    url = _get_api_url()
+    model = _get_model()
     if not key:
+        console.print("[red]AI Error:[/red] $AI_API_KEY is not set. Run with --configure or set the env var.")
+        return None
+    if not url:
+        console.print("[red]AI Error:[/red] $AI_API_URL is not set. Run with --configure or set the env var.")
+        return None
+    if not model:
+        console.print("[red]AI Error:[/red] $AI_MODEL is not set. Run with --configure or set the env var.")
         return None
 
     headers = {
@@ -46,7 +73,7 @@ def _call_ai(
         "Content-Type": "application/json",
     }
     payload = {
-        "model": AI_MODEL,
+        "model": model,
         "messages": messages,
         "max_tokens": max_tokens,
         "temperature": 0.1,
@@ -56,18 +83,56 @@ def _call_ai(
 
     for attempt in range(2):
         try:
-            resp = requests.post(AI_API_URL, headers=headers, json=payload, timeout=timeout)
+            resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
+            if resp.status_code == 401:
+                console.print("[red]AI Error: Unauthorized (HTTP 401).[/red] Check your $AI_API_KEY.")
+                return None
+            if resp.status_code == 404:
+                console.print(f"[red]AI Error: Endpoint not found (HTTP 404).[/red] Check your $AI_API_URL:\n  {url}")
+                return None
+            if resp.status_code == 429:
+                console.print("[red]AI Error: Rate limited (HTTP 429).[/red] Try again later.")
+                return None
             if resp.status_code != 200:
+                detail = resp.text[:300]
+                console.print(f"[red]AI Error: HTTP {resp.status_code}[/red]\n  {detail}")
                 return None
             data = resp.json()
             choices = data.get("choices", [])
             if not choices:
+                console.print("[red]AI Error:[/red] API returned empty response (no choices).")
                 return None
             content = choices[0].get("message", {}).get("content", "")
+            if not content:
+                finish = choices[0].get("finish_reason", "unknown")
+                usage = data.get("usage", {})
+                comp = usage.get("completion_tokens", 0)
+                reasoning = (
+                    usage.get("completion_tokens_details", {})
+                    .get("reasoning_tokens", 0)
+                )
+                console.print(
+                    f"[red]AI Error:[/red] Model returned empty content "
+                    f"(finish_reason={finish}, completion_tokens={comp}, "
+                    f"reasoning_tokens={reasoning}). "
+                    f"Increase max_tokens for reasoning models."
+                )
+                return None
             return content
+        except requests.ConnectionError:
+            console.print(f"[red]AI Error: Could not connect to[/red] {url}\n  Check the URL and your network connection.")
+            return None
         except requests.ReadTimeout:
-            continue
-        except Exception:
+            if attempt == 0:
+                console.print("[yellow]AI request timed out, retrying...[/yellow]")
+                continue
+            console.print(f"[red]AI Error: Request timed out after {timeout}s.[/red]")
+            return None
+        except requests.RequestException as e:
+            console.print(f"[red]AI Error:[/red] {e}")
+            return None
+        except Exception as e:
+            console.print(f"[red]AI Error: Unexpected error:[/red] {e}")
             return None
     return None
 
@@ -115,13 +180,14 @@ def ai_extract_profile(text: str) -> Optional[dict[str, Any]]:
     prompt = PROFILE_EXTRACTION_PROMPT.format(text=text[:4000])
     result = _call_ai(
         [{"role": "user", "content": prompt}],
-        max_tokens=800,
-        timeout=45,
+        max_tokens=16384,
+        timeout=300,
     )
     if not result:
         return None
     parsed = _extract_json(result)
     if not parsed or not isinstance(parsed, dict):
+        console.print("[red]AI Error:[/red] Could not parse profile extraction response as JSON.")
         return None
     parsed.setdefault("name", "")
     parsed.setdefault("title", "")
@@ -157,15 +223,17 @@ def ai_suggest_titles(skills: list[str]) -> Optional[list[str]]:
     prompt = SUGGEST_TITLES_PROMPT.format(skills=", ".join(skills))
     result = _call_ai(
         [{"role": "user", "content": prompt}],
-        max_tokens=200,
+        max_tokens=4096,
     )
     if not result:
         return None
     parsed = _extract_json(result)
     if not parsed or not isinstance(parsed, dict):
+        console.print("[red]AI Error:[/red] Could not parse title suggestion response as JSON.")
         return None
     titles = parsed.get("titles", [])
     if not isinstance(titles, list) or len(titles) < 1:
+        console.print("[red]AI Error:[/red] Title suggestion response missing 'titles' list.")
         return None
     return [t.strip() for t in titles if t.strip()][:5]
 
@@ -211,15 +279,17 @@ def ai_generate_queries(profile: dict[str, Any]) -> Optional[list[str]]:
     )
     result = _call_ai(
         [{"role": "user", "content": prompt}],
-        max_tokens=200,
+        max_tokens=4096,
     )
     if not result:
         return None
     parsed = _extract_json(result)
     if not parsed or not isinstance(parsed, dict):
+        console.print("[red]AI Error:[/red] Could not parse query generation response as JSON.")
         return None
     queries = parsed.get("queries", [])
     if not isinstance(queries, list) or len(queries) < 1:
+        console.print("[red]AI Error:[/red] Query generation response missing 'queries' list.")
         return None
     return [q.strip() for q in queries if q.strip()][:5]
 
@@ -289,15 +359,18 @@ def ai_score_job(profile: dict[str, Any], job: dict[str, Any]) -> Optional[dict[
     )
     result = _call_ai(
         [{"role": "user", "content": prompt}],
-        max_tokens=300,
+        max_tokens=16384,
+        timeout=300,
     )
     if not result:
         return None
     parsed = _extract_json(result)
     if not parsed or not isinstance(parsed, dict):
+        console.print("[red]AI Error:[/red] Could not parse job scoring response as JSON.")
         return None
     score = parsed.get("score")
     if not isinstance(score, (int, float)):
+        console.print("[red]AI Error:[/red] Job scoring response missing valid 'score' field.")
         return None
     return {
         "score": max(0, min(100, round(float(score), 1))),

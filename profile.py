@@ -12,6 +12,7 @@ from rich.table import Table
 
 from ai import ai_extract_profile, ai_suggest_titles, check_ai_available
 from config import load_profile, save_profile
+from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 
 console = Console()
 
@@ -61,13 +62,26 @@ def parse_resume_pdf(path: str) -> Optional[dict[str, Any]]:
         return None
 
     if not check_ai_available():
-        console.print("[red]AI key required.[/red] Set $MINIMAX or run with --configure")
+        console.print("[red]AI not configured for resume parsing.[/red]")
+        console.print("  Set $AI_API_KEY, $AI_API_URL, and $AI_MODEL, or run with --configure")
+        console.print("  [yellow]Falling back to manual entry...[/yellow]")
         return None
 
-    console.print("[dim]Extracting profile with AI...[/dim]")
-    ai_profile = ai_extract_profile(text[:4000])
+    from concurrent.futures import ThreadPoolExecutor
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        TimeElapsedColumn(),
+        console=console,
+        transient=True,
+    ) as progress:
+        progress.add_task("[yellow]Extracting profile with AI...", total=None)
+        ai_profile = ai_extract_profile(text[:4000])
     if not ai_profile:
-        console.print("[red]AI extraction failed — check your AI key and network.[/red]")
+        console.print("[red]AI profile extraction failed.[/red]")
+        console.print("  Check that your AI provider is reachable and the model supports structured output.")
+        console.print("  [yellow]Falling back to manual entry...[/yellow]")
         return None
 
     text_lower = text.lower()
@@ -331,8 +345,8 @@ def build_or_load_profile(force_new: bool = False) -> Optional[dict[str, Any]]:
 
     if not check_ai_available():
         console.print(
-            "[yellow]AI key not configured.[/yellow]\n"
-            "  Set the $MINIMAX environment variable or run with --configure.\n"
+            "[yellow]AI not configured.[/yellow]\n"
+            "  Set $AI_API_KEY, $AI_API_URL, and $AI_MODEL, or run with --configure.\n"
             "  You can still enter profile details manually."
         )
 
