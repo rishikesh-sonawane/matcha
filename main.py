@@ -70,12 +70,14 @@ def configure_ai():
         default=False,
     ):
         return
-    from ai import configure_ai as set_ai_key
+    from ai import configure_ai as set_ai_config
 
-    key = Prompt.ask("Enter your AI API key (or set $MINIMAX env var)", password=False)
+    key = Prompt.ask("Enter your AI API key (or set $AI_API_KEY env var)", password=False)
+    url = Prompt.ask("Enter AI API URL (or set $AI_API_URL)", default="")
+    model = Prompt.ask("Enter AI model name (or set $AI_MODEL)", default="")
     if key.strip():
-        set_ai_key(key.strip())
-        console.print("[green]AI key saved![/green]")
+        set_ai_config(key.strip(), url.strip(), model.strip())
+        console.print("[green]AI configuration saved![/green]")
 
 
 def run_scraper(
@@ -201,7 +203,7 @@ def rank_jobs(
     ranked.sort(key=lambda x: x[0], reverse=True)
 
     if use_ai:
-        ai_top_n = min(15, len(ranked))
+        ai_top_n = min(50, len(ranked))
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),

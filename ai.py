@@ -7,38 +7,58 @@ import requests
 
 from config import load_config, save_config
 
-AI_API_URL = "https://api.kilo.ai/api/gateway/chat/completions"
-AI_MODEL = "kilo-auto/small"
+AI_API_URL = ""
+AI_MODEL = ""
 CONFIG_KEY = "ai_key"
 ENV_VAR = "MINIMAX"
+CONFIG_URL_KEY = "ai_url"
+CONFIG_MODEL_KEY = "ai_model"
+
+
+def _env_or_config(env_var: str, config_key: str, default: str = "") -> str:
+    val = os.environ.get(env_var, "")
+    if val:
+        return val
+    config = load_config()
+    return config.get(config_key, default)
 
 
 def _get_api_key() -> str:
-    key = os.environ.get(ENV_VAR, "")
-    if key:
-        return key
-    config = load_config()
-    return config.get(CONFIG_KEY, "")
+    return _env_or_config(ENV_VAR, CONFIG_KEY)
+
+
+def _get_api_url() -> str:
+    return _env_or_config("AI_API_URL", CONFIG_URL_KEY)
+
+
+def _get_model() -> str:
+    return _env_or_config("AI_MODEL", CONFIG_MODEL_KEY)
 
 
 def check_ai_available() -> bool:
-    return bool(_get_api_key())
+    return bool(_get_api_key() and _get_api_url() and _get_model())
 
 
-def configure_ai(key: str) -> None:
+def configure_ai(key: str, url: str = "", model: str = "") -> None:
     config = load_config()
     config[CONFIG_KEY] = key
+    if url:
+        config[CONFIG_URL_KEY] = url
+    if model:
+        config[CONFIG_MODEL_KEY] = model
     save_config(config)
 
 
 def _call_ai(
     messages: list[dict[str, Any]],
     response_format: Optional[dict[str, Any]] = None,
-    max_tokens: int = 500,
-    timeout: int = 30,
+    max_tokens: int = 8192,
+    timeout: int = 120,
 ) -> Optional[str]:
     key = _get_api_key()
-    if not key:
+    url = _get_api_url()
+    model = _get_model()
+    if not key or not url or not model:
         return None
 
     headers = {
@@ -46,7 +66,7 @@ def _call_ai(
         "Content-Type": "application/json",
     }
     payload = {
-        "model": AI_MODEL,
+        "model": model,
         "messages": messages,
         "max_tokens": max_tokens,
         "temperature": 0.1,
@@ -56,7 +76,7 @@ def _call_ai(
 
     for attempt in range(2):
         try:
-            resp = requests.post(AI_API_URL, headers=headers, json=payload, timeout=timeout)
+            resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
             if resp.status_code != 200:
                 return None
             data = resp.json()
@@ -64,6 +84,19 @@ def _call_ai(
             if not choices:
                 return None
             content = choices[0].get("message", {}).get("content", "")
+            if not content:
+                usage = data.get("usage", {})
+                finish = choices[0].get("finish_reason", "unknown")
+                comp_tokens = usage.get("completion_tokens", 0)
+                reason_tokens = usage.get("reasoning_tokens", 0)
+                print(
+                    f"AI returned empty content. "
+                    f"finish_reason={finish}, "
+                    f"completion_tokens={comp_tokens}, "
+                    f"reasoning_tokens={reason_tokens}. "
+                    f"Increase max_tokens for reasoning models."
+                )
+                return None
             return content
         except requests.ReadTimeout:
             continue
@@ -115,8 +148,8 @@ def ai_extract_profile(text: str) -> Optional[dict[str, Any]]:
     prompt = PROFILE_EXTRACTION_PROMPT.format(text=text[:4000])
     result = _call_ai(
         [{"role": "user", "content": prompt}],
-        max_tokens=800,
-        timeout=45,
+        max_tokens=16384,
+        timeout=300,
     )
     if not result:
         return None
@@ -157,7 +190,7 @@ def ai_suggest_titles(skills: list[str]) -> Optional[list[str]]:
     prompt = SUGGEST_TITLES_PROMPT.format(skills=", ".join(skills))
     result = _call_ai(
         [{"role": "user", "content": prompt}],
-        max_tokens=200,
+        max_tokens=4096,
     )
     if not result:
         return None
@@ -211,7 +244,7 @@ def ai_generate_queries(profile: dict[str, Any]) -> Optional[list[str]]:
     )
     result = _call_ai(
         [{"role": "user", "content": prompt}],
-        max_tokens=200,
+        max_tokens=4096,
     )
     if not result:
         return None
@@ -289,7 +322,8 @@ def ai_score_job(profile: dict[str, Any], job: dict[str, Any]) -> Optional[dict[
     )
     result = _call_ai(
         [{"role": "user", "content": prompt}],
-        max_tokens=300,
+        max_tokens=16384,
+        timeout=300,
     )
     if not result:
         return None
