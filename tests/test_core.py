@@ -5,9 +5,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import unittest
 from unittest import mock
+from unittest.mock import patch
 
 from ai import _extract_json, ai_suggest_titles
-from main import _normalize, deduplicate
+from main import _normalize, deduplicate, search_jobs
 from matcher import compute_relevance, tokenize
 from scrapers.indeed import resolve_indeed_url
 
@@ -291,6 +292,29 @@ class TestExtractJSON(unittest.TestCase):
 
     def test_empty_string(self):
         self.assertIsNone(_extract_json(""))
+
+
+class TestSearchJobs(unittest.TestCase):
+    @patch("main.SCRAPER_DEFS", {})
+    def test_empty_queries(self):
+        jobs, counts, errors = search_jobs([], location="", days=7, max_pages=1)
+        self.assertEqual(jobs, [])
+        self.assertEqual(counts, {})
+        self.assertEqual(errors, {})
+
+    @patch("main.SCRAPER_DEFS", {})
+    def test_none_queries(self):
+        jobs, counts, errors = search_jobs(None, location="", days=7, max_pages=1)
+        self.assertEqual(jobs, [])
+        self.assertEqual(counts, {})
+        self.assertEqual(errors, {})
+
+    @patch("main.SCRAPER_DEFS", {})
+    def test_empty_string_query(self):
+        jobs, counts, errors = search_jobs([""], location="", days=7, max_pages=1)
+        self.assertEqual(jobs, [])
+        self.assertEqual(counts, {})
+        self.assertEqual(errors, {})
 
 
 if __name__ == "__main__":

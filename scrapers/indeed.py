@@ -1,3 +1,4 @@
+import logging
 import re
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -9,44 +10,39 @@ from bs4 import BeautifulSoup
 try:
     from ddgs import DDGS
 except ImportError:
-    DDGS = None  # type: ignore
+    DDGS = None
 
-from .utils import resilient_get
+from models import ScraperResult
+from .utils import limiter, resilient_get
+
+logger = logging.getLogger(__name__)
 
 
-def resolve_indeed_url(url: str) -> str:
-    """Resolve Indeed tracking URLs to actual job page URLs."""
+def resolve_indeed_url(url: str, domain: str = "in.indeed.com") -> str:
     parsed = urlparse(url)
     params = parse_qs(parsed.query)
 
     if "rc/clk" in url:
         jk = params.get("jk", [None])[0]
         if jk:
-            return f"https://in.indeed.com/viewjob?jk={jk}"
+            return f"https://{domain}/viewjob?jk={jk}"
 
     if "pagead/clk" in url:
         jk = params.get("jk", [None])[0]
         if jk:
-            return f"https://in.indeed.com/viewjob?jk={jk}"
+            return f"https://{domain}/viewjob?jk={jk}"
         try:
             scraper = cloudscraper.create_scraper()
             resp = scraper.head(url, allow_redirects=True, timeout=10)
             if resp.url and "indeed.com" in resp.url and "pagead/clk" not in resp.url:
                 return resp.url
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("pagead/clk redirect failed: %s", e)
 
     return url
 
 
-INDIA_JOB_DOMAINS: dict[str, str] = {
-    "in.indeed.com": "India",
-    "in.indeed.com/m/careers": "India",
-}
-
-
 def _fetch_indeed_page(url: str, params: dict[str, str]) -> requests.Response:
-    """Try resilient_get first, fall back to cloudscraper."""
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -60,13 +56,13 @@ def _fetch_indeed_page(url: str, params: dict[str, str]) -> requests.Response:
         resp = resilient_get(url, params=params, headers=headers, timeout=20)
         if resp.status_code == 200:
             return resp
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("resilient_get failed for Indeed: %s", e)
     scraper = cloudscraper.create_scraper()
     return scraper.get(url, params=params, timeout=20, allow_redirects=True)
 
 
-def _parse_indeed_card(card: Any, location: str) -> dict[str, str] | None:
+def _parse_indeed_card(card: Any, location: str, domain: str) -> dict[str, str] | None:
     try:
         title_el = card.select_one("h3.jobTitle a span[title]") or card.select_one("h3.jobTitle a")
         company_el = card.select_one("[data-testid=company-name]")
@@ -86,9 +82,9 @@ def _parse_indeed_card(card: Any, location: str) -> dict[str, str] | None:
         if link_el:
             href = link_el.get("href", "")
             if href.startswith("http"):
-                link = resolve_indeed_url(href)
+                link = resolve_indeed_url(href, domain)
             else:
-                link = resolve_indeed_url(f"https://in.indeed.com{href}")
+                link = resolve_indeed_url(f"https://{domain}{href}", domain)
 
         description = salary
         snippet_el = card.select_one(".job-snippet") or card.select_one(
@@ -109,23 +105,27 @@ def _parse_indeed_card(card: Any, location: str) -> dict[str, str] | None:
             "url": link,
             "source": "Indeed",
         }
-    except Exception:
+    except (AttributeError, ValueError, TypeError) as e:
+        logger.warning("Failed to parse Indeed card: %s", e)
         return None
 
 
 def _search_indeed_via_ddgs(query: str, location: str) -> list[dict[str, str]]:
-    """Fallback: search Indeed job listings via DuckDuckGo API."""
     search_q = f"site:in.indeed.com/viewjob {query}"
     if location:
         search_q += f" {location}"
 
     if DDGS is None:
         return []
+    limiter.acquire("duckduckgo.com")
     try:
         with DDGS() as ddgs:
             raw = ddgs.text(search_q, max_results=15)
-    except Exception:
+    except Exception as e:
+        logger.warning("DDGS Indeed fallback failed: %s", e)
         return []
+
+    from scrapers.constants import STOP_WORDS
 
     jobs: list[dict[str, str]] = []
     seen: set[str] = set()
@@ -138,137 +138,27 @@ def _search_indeed_via_ddgs(query: str, location: str) -> list[dict[str, str]]:
         if not url or not title:
             continue
 
-        # Title format: "Job Title - Location - Indeed.com"
         clean_title = re.sub(
             r"\s*[-–|]\s*Indeed(\.com)?\s*$", "", title, flags=re.IGNORECASE
         ).strip()
         parts = re.split(r"\s+[-–|]\s+", clean_title)
         job_title = parts[0].strip() if parts else clean_title
-        job_location = parts[1].strip() if len(parts) > 1 else ""
 
-        stop_words = {
-            "the",
-            "a",
-            "an",
-            "is",
-            "are",
-            "was",
-            "were",
-            "be",
-            "been",
-            "being",
-            "have",
-            "has",
-            "had",
-            "do",
-            "does",
-            "did",
-            "will",
-            "would",
-            "could",
-            "should",
-            "may",
-            "might",
-            "must",
-            "shall",
-            "can",
-            "this",
-            "that",
-            "these",
-            "those",
-            "it",
-            "its",
-            "our",
-            "their",
-            "your",
-            "my",
-            "his",
-            "her",
-            "they",
-            "we",
-            "you",
-            "he",
-            "she",
-            "and",
-            "or",
-            "but",
-            "nor",
-            "for",
-            "with",
-            "about",
-            "between",
-            "through",
-            "during",
-            "before",
-            "after",
-            "above",
-            "below",
-            "from",
-            "up",
-            "down",
-            "of",
-            "in",
-            "on",
-            "at",
-            "by",
-            "to",
-            "into",
-            "over",
-            "under",
-            "again",
-            "further",
-            "then",
-            "once",
-            "here",
-            "there",
-            "all",
-            "each",
-            "every",
-            "both",
-            "few",
-            "more",
-            "most",
-            "some",
-            "any",
-            "no",
-            "not",
-            "only",
-            "own",
-            "same",
-            "so",
-            "than",
-            "too",
-            "very",
-            "overview",
-            "summary",
-            "about",
-            "description",
-            "role",
-            "position",
-            "job",
-            "apply",
-            "learn",
-            "join",
-            "team",
-            "via",
-        }
         company = "Unknown"
-        pat = r"\b(at|by|via)\s+([A-Z][A-Za-z0-9&.]+?)(?:\s+[-–]|\s+(?:is|has|in)\s+|\.|$)"
+        pat = r"\b(at|by|via)\s+([A-Z][A-Za-z0-9&. ]+?)(?:\s+[-–]|\s+(?:is|has|in)\s+|\.|$)"
         m = re.search(pat, body, re.IGNORECASE)
         if m:
             candidate = m.group(2).strip()
             first_word = candidate.split()[0].lower()
-            if len(candidate) >= 3 and len(candidate) <= 50 and first_word not in stop_words:
+            if len(candidate) >= 3 and len(candidate) <= 50 and first_word not in STOP_WORDS:
                 company = candidate
 
-        # Fallback: extract company from title when it has 3+ parts: "Title - Company - Location"
         if company == "Unknown" and len(parts) >= 3:
             candidate = parts[1].strip()
             first_word = candidate.split()[0].lower()
-            if len(candidate) >= 3 and first_word not in stop_words:
+            if len(candidate) >= 3 and first_word not in STOP_WORDS:
                 company = candidate
 
-        # Use remaining segments as location for 3+ part titles
         if len(parts) >= 3:
             job_location = " - ".join(p.strip() for p in parts[2:])
         elif len(parts) == 2:
@@ -294,25 +184,43 @@ def _search_indeed_via_ddgs(query: str, location: str) -> list[dict[str, str]]:
 def search_indeed_jobs(
     query: str,
     location: str = "",
+    domain: str = "in.indeed.com",
     **kwargs: Any,
-) -> list[dict[str, str]]:
+) -> ScraperResult:
+    errors: list[str] = []
     jobs: list[dict[str, str]] = []
     seen: set[tuple[str, str]] = set()
 
-    base_url = "https://in.indeed.com/jobs"
+    base_url = f"https://{domain}/jobs"
+    days = kwargs.get("days")
+    max_pages = kwargs.get("max_pages", 1)
     params: dict[str, str] = {
         "q": query,
         "l": location or "",
     }
+    if days:
+        params["fromage"] = str(days)
 
-    resp = _fetch_indeed_page(base_url, params)
-    if resp.status_code == 200:
+    logger.info("Searching Indeed (%s): q=%s location=%s days=%s max_pages=%s", domain, query, location, days, max_pages)
+    for page in range(max_pages):
+        page_params = dict(params)
+        if page > 0:
+            page_params["start"] = str(page * 10)
+        resp = _fetch_indeed_page(base_url, page_params)
+        if resp.status_code != 200:
+            logger.warning("Indeed page %d returned status %d", page + 1, resp.status_code)
+            errors.append(f"Page {page + 1}: HTTP {resp.status_code}")
+            break
         try:
             soup = BeautifulSoup(resp.text, "html.parser")
             cards = soup.select(".job_seen_beacon") or soup.select("[data-jk]")
 
+            if not cards:
+                logger.info("Indeed page %d: no job cards found, stopping pagination", page + 1)
+                break
+
             for card in cards:
-                job = _parse_indeed_card(card, location)
+                job = _parse_indeed_card(card, location, domain)
                 if job is None:
                     continue
                 dedup_key = (job["title"].lower(), job["company"].lower())
@@ -320,10 +228,16 @@ def search_indeed_jobs(
                     continue
                 seen.add(dedup_key)
                 jobs.append(job)
-        except Exception:
-            pass
+
+            logger.info("Indeed page %d: %d jobs parsed (total %d)", page + 1, len(cards), len(jobs))
+        except Exception as e:
+            msg = f"Failed to parse Indeed HTML page {page + 1}: {e}"
+            logger.warning(msg)
+            errors.append(msg)
+            break
 
     if not jobs:
+        logger.info("Indeed HTML returned 0 jobs, falling back to DDGS")
         jobs = _search_indeed_via_ddgs(query, location)
 
-    return jobs
+    return ScraperResult(jobs=jobs, errors=errors, source="Indeed")

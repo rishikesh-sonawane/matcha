@@ -1,0 +1,116 @@
+import re
+
+STOP_WORDS: frozenset[str] = frozenset({
+    "a", "an", "the", "and", "or", "nor", "but", "for", "with", "about",
+    "between", "through", "during", "before", "after", "above", "below",
+    "from", "up", "down", "of", "in", "on", "at", "by", "to", "into",
+    "over", "under", "again", "further", "then", "once", "here", "there",
+    "all", "each", "every", "both", "few", "more", "most", "some", "any",
+    "no", "not", "only", "own", "same", "so", "than", "too", "very",
+    "is", "are", "was", "were", "be", "been", "being", "have", "has",
+    "had", "do", "does", "did", "will", "would", "could", "should",
+    "may", "might", "must", "shall", "can",
+    "this", "that", "these", "those",
+    "it", "its", "our", "their", "your", "my", "his", "her", "they",
+    "we", "you", "he", "she", "me",
+    "overview", "summary", "description", "role", "position", "job",
+    "apply", "learn", "join", "team", "via",
+})
+
+JOB_BOILERPLATE: frozenset[str] = frozenset({
+    "overview", "summary", "description", "role", "position", "job",
+    "apply", "learn", "join", "team", "via", "hiring", "opening",
+    "vacancy", "vacancies", "career", "careers", "employment",
+})
+
+SKIP_DOMAIN_PARTS: frozenset[str] = frozenset({
+    "www", "ww1", "ww2", "in", "uk", "de", "fr", "au", "ca", "br", "jp",
+    "app", "careers", "jobs", "boards", "career", "join", "employment",
+    "recruitment", "apply", "search", "job",
+})
+
+SEARCH_PAGE_PATTERNS: list[re.Pattern] = [
+    re.compile(r"jobs\s+in\s", re.IGNORECASE),
+    re.compile(r"jobs\s+available", re.IGNORECASE),
+    re.compile(r"Top\s+\d+", re.IGNORECASE),
+    re.compile(r"\d+\+?\s+.*jobs", re.IGNORECASE),
+    re.compile(r"Job\s+Vacancies", re.IGNORECASE),
+]
+
+NON_JOB_TITLE_PATTERNS: list[re.Pattern] = [
+    re.compile(r"^page\s+\d+", re.IGNORECASE),
+    re.compile(r"^\d+\s*(jobs|results)", re.IGNORECASE),
+    re.compile(r"^(search|sign\s+in|log\s+in|register|apply)", re.IGNORECASE),
+    re.compile(r"^Job Application\s+for\s+", re.IGNORECASE),
+    re.compile(r"^Application\s+for\s+", re.IGNORECASE),
+    re.compile(r"^Sign\s+In", re.IGNORECASE),
+    re.compile(r"^Log\s+In", re.IGNORECASE),
+]
+
+NON_JOB_URL_PATTERNS: list[re.Pattern] = [
+    re.compile(r"/auth/", re.IGNORECASE),
+    re.compile(r"/login", re.IGNORECASE),
+    re.compile(r"/signup", re.IGNORECASE),
+    re.compile(r"/register", re.IGNORECASE),
+    re.compile(r"/password/", re.IGNORECASE),
+    re.compile(r"/session/", re.IGNORECASE),
+]
+
+NAUKRI_NON_JOB_PATHS: list[str] = [
+    "/code360/",
+    "/campus/",
+    "/blog/",
+    "/interview-",
+    "/cloudgateway",
+    "companies.naukri.com",
+]
+
+INDIVIDUAL_JOB_PATTERNS: list[re.Pattern] = [
+    re.compile(r"/jobs/view/", re.IGNORECASE),
+    re.compile(r"/job/view/", re.IGNORECASE),
+    re.compile(r"/viewjob", re.IGNORECASE),
+    re.compile(r"/job/\d+", re.IGNORECASE),
+    re.compile(r"/employment/", re.IGNORECASE),
+    re.compile(r"/careers/", re.IGNORECASE),
+    re.compile(r"/job-opening/", re.IGNORECASE),
+    re.compile(r"/position/", re.IGNORECASE),
+    re.compile(r"/o/[a-zA-Z]", re.IGNORECASE),
+    re.compile(r"/jobs/\d+", re.IGNORECASE),
+    re.compile(r"-job-", re.IGNORECASE),
+    re.compile(r"/listings/", re.IGNORECASE),
+]
+
+AGGREGATE_URL_PATTERNS: list[re.Pattern] = [
+    re.compile(r"/jobs(\?|$)", re.IGNORECASE),
+    re.compile(r"/jobs/.*-jobs-", re.IGNORECASE),
+    re.compile(r"\?f_", re.IGNORECASE),
+    re.compile(r"\?location", re.IGNORECASE),
+]
+
+JOB_SOURCE_DOMAINS: dict[str, str] = {
+    "linkedin.com": "LinkedIn",
+    "indeed.com": "Indeed",
+    "glassdoor.com": "Glassdoor",
+    "monster.com": "Monster",
+    "ziprecruiter.com": "ZipRecruiter",
+    "dice.com": "Dice",
+    "simplyhired.com": "SimplyHired",
+    "wellfound.com": "Wellfound",
+    "greenhouse.io": "Greenhouse",
+    "lever.co": "Lever",
+    "ashbyhq.com": "Ashby",
+}
+
+MONTH_NAMES: dict[str, int] = {
+    "january": 1, "february": 2, "march": 3, "april": 4,
+    "may": 5, "june": 6, "july": 7, "august": 8,
+    "september": 9, "october": 10, "november": 11, "december": 12,
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4,
+    "jun": 6, "jul": 7, "aug": 8,
+    "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+
+COMPANY_EXTRACTION_PATTERNS: list[re.Pattern] = [
+    re.compile(r"(?:at|by|via)\s+([A-Z][A-Za-z0-9&. ]+?)(?:\s+[-\u2013]|\s+(?:is|has|in)\s+|$|\.)", re.IGNORECASE),
+    re.compile(r"([A-Z][A-Za-z0-9&. ]+?)\s+(?:is\s+)?(?:hiring|seeking|looking)", re.IGNORECASE),
+]

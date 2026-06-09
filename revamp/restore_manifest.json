@@ -1,0 +1,62 @@
+{
+  "project": "Matcha",
+  "phase": "3_development_active",
+  "last_checkpoint": "Phase 4 started — pagination, indeed_domain config chain, docker infrastructure",
+  "milestone": "Phase 3 complete. Phase 4: pagination (indeed/linkedin/serpapi), indeed_domain chain, docker-compose fix, .dockerignore",
+  "files": {
+    "main.py": {
+      "status": "updated — iterative loop, dedup bugfix, ScraperResult support, logging, query validation gate, zero-score removal, configurable AI top_n/timeout, max_pages/indeed_domain search_jobs propagation"
+    },
+    "ai.py": {
+      "status": "updated — timeout parameterized (default 60s)"
+    },
+    "matcher.py": {
+      "status": "updated — full rewrite: balanced weights (35/25/15/15/10), token-boundary matching, seniority scoring, floor=5"
+    },
+    "profile.py": {
+      "status": "updated — resilient_get for LinkedIn scraping, rate limiter compliance, logging"
+    },
+    "config.py": {
+      "status": "updated — Pydantic ConfigSchema validation, keyring credential storage, logging"
+    },
+    "settings.py": {
+      "status": "updated — Pydantic Settings validation, new fields (max_pages, indeed_domain, top_n, timeout)"
+    },
+    "models.py": {
+      "status": "updated — ScraperResult dataclass, ConfigSchema, enhanced Settings model"
+    },
+    "scrapers/__init__.py": {
+      "status": "updated — added missing search_indeed_jobs and resolve_indeed_url exports"
+    },
+    "scrapers/utils.py": {
+      "status": "updated — ScraperResult import, logging, enhanced retry logging"
+    },
+    "scrapers/indeed.py": {
+      "status": "updated — constants import, ScraperResult return, logging, rate limiter for DDGS, configurable domain, pagination (max_pages)"
+    },
+    "scrapers/linkedin.py": {
+      "status": "updated — logging, ScraperResult return, error handling, pagination (max_pages)"
+    },
+    "scrapers/naukri.py": {
+      "status": "updated — constants import, ScraperResult return, logging, rate limiter for DDGS"
+    },
+    "scrapers/remoteok.py": {
+      "status": "updated — constants import, ScraperResult return, logging"
+    },
+    "scrapers/serpapi_jobs.py": {
+      "status": "updated — ScraperResult return, logging, error handling, pagination (max_pages)"
+    },
+    "scrapers/web_search.py": {
+      "status": "updated — constants import, ScraperResult return, logging, rate limiter for DDGS"
+    },
+    "scrapers/constants.py": {
+      "status": "created — single source for stop words, job boilerplate, patterns, domain lists"
+    },
+    "docker-compose.yml": {
+      "status": "fixed — valid YAML with services/volumes sections"
+    },
+    ".dockerignore": {
+      "status": "created"
+    }
+  }
+}

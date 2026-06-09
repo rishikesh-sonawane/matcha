@@ -1,3 +1,4 @@
+import logging
 import re
 from pathlib import Path
 from typing import Any, Optional
@@ -12,6 +13,9 @@ from rich.table import Table
 
 from ai import ai_extract_profile, ai_suggest_titles, check_ai_available
 from config import load_profile, save_profile
+from scrapers.utils import limiter, resilient_get
+
+logger = logging.getLogger(__name__)
 
 console = Console()
 
@@ -142,7 +146,8 @@ def search_linkedin_profile_via_web(username: str) -> Optional[dict[str, Any]]:
     for query in queries:
         url = f"https://html.duckduckgo.com/html/?q={quote(query)}"
         try:
-            resp = requests.get(url, headers=HEADERS, timeout=15)
+            limiter.acquire("duckduckgo.com")
+            resp = resilient_get(url, headers=HEADERS, timeout=15)
             if resp.status_code != 200:
                 continue
             soup = BeautifulSoup(resp.text, "html.parser")
@@ -243,11 +248,11 @@ def scrape_linkedin_profile(url: str) -> Optional[dict[str, Any]]:
     console.print(f"[yellow]Fetching LinkedIn profile: {username}...[/yellow]")
 
     try:
-        resp = requests.get(
+        limiter.acquire("linkedin.com")
+        resp = resilient_get(
             f"https://www.linkedin.com/in/{username}",
             headers=HEADERS,
             timeout=15,
-            allow_redirects=True,
         )
         if resp.status_code != 200:
             return search_linkedin_profile_via_web(username)

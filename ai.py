@@ -1,7 +1,10 @@
 import json
+import logging
 import os
 import re
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 import requests
 
@@ -53,7 +56,7 @@ def _call_ai(
     messages: list[dict[str, Any]],
     response_format: Optional[dict[str, Any]] = None,
     max_tokens: int = 8192,
-    timeout: int = 120,
+    timeout: int = 60,
 ) -> Optional[str]:
     key = _get_api_key()
     url = _get_api_url()
@@ -78,6 +81,12 @@ def _call_ai(
         try:
             resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
             if resp.status_code != 200:
+                if attempt < 1:
+                    logger.warning(
+                        "AI API returned %d, retrying (attempt %d/2)",
+                        resp.status_code, attempt + 1,
+                    )
+                    continue
                 return None
             data = resp.json()
             choices = data.get("choices", [])
@@ -89,18 +98,24 @@ def _call_ai(
                 finish = choices[0].get("finish_reason", "unknown")
                 comp_tokens = usage.get("completion_tokens", 0)
                 reason_tokens = usage.get("reasoning_tokens", 0)
-                print(
-                    f"AI returned empty content. "
-                    f"finish_reason={finish}, "
-                    f"completion_tokens={comp_tokens}, "
-                    f"reasoning_tokens={reason_tokens}. "
-                    f"Increase max_tokens for reasoning models."
+                logger.warning(
+                    "AI returned empty content. "
+                    "finish_reason=%s, completion_tokens=%s, reasoning_tokens=%s. "
+                    "Increase max_tokens for reasoning models.",
+                    finish, comp_tokens, reason_tokens,
                 )
                 return None
             return content
-        except requests.ReadTimeout:
-            continue
-        except Exception:
+        except (requests.ConnectionError, requests.Timeout) as e:
+            if attempt < 1:
+                logger.warning(
+                    "AI request failed: %s, retrying (attempt %d/2)", e, attempt + 1,
+                )
+                continue
+            logger.warning("AI request failed after 2 attempts: %s", e)
+            return None
+        except requests.RequestException as e:
+            logger.warning("AI request failed: %s", e)
             return None
     return None
 
@@ -244,7 +259,7 @@ def ai_generate_queries(profile: dict[str, Any]) -> Optional[list[str]]:
     )
     result = _call_ai(
         [{"role": "user", "content": prompt}],
-        max_tokens=4096,
+        max_tokens=8192,
     )
     if not result:
         return None
@@ -282,7 +297,7 @@ Return valid JSON:
 Scoring criteria:
 - Skills match (40%): how many of the candidate's core skills are relevant
 - Title/role match (25%): does the job leverage the candidate's actual expertise?
-- Experience fit (20%): is the seniority level appropriate?
+- Experience fit (20%): is the seniority level appropriate for someone with {experience} years? penalize roles requiring significantly more experience (principal, architect, staff, distinguished) or less (intern, junior)
 - Location fit (15%): same city = best, same region = OK, remote = neutral
 
 Guidelines:
@@ -290,10 +305,11 @@ Guidelines:
 - Score 50-79 for adjacent roles with partial relevance
 - Score 25-49 for tangential roles
 - Score 0-24 for irrelevant roles
-- Include specific, honest reasons mentioning what's missing if relevant"""
+- Include specific, honest reasons mentioning what's missing if relevant
+- A candidate with ~4 years experience is NOT a fit for principal, architect, staff, or distinguished engineer roles — heavily penalize these regardless of skills"""
 
 
-def ai_score_job(profile: dict[str, Any], job: dict[str, Any]) -> Optional[dict[str, Any]]:
+def ai_score_job(profile: dict[str, Any], job: dict[str, Any], timeout: int = 60) -> Optional[dict[str, Any]]:
     if not check_ai_available():
         return None
     title = profile.get("title", "") or profile.get("headline", "")
@@ -323,7 +339,7 @@ def ai_score_job(profile: dict[str, Any], job: dict[str, Any]) -> Optional[dict[
     result = _call_ai(
         [{"role": "user", "content": prompt}],
         max_tokens=16384,
-        timeout=300,
+        timeout=timeout,
     )
     if not result:
         return None

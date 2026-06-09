@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 import argparse
+import logging
+import logging.handlers
+import os
 import re
 import sys
 import time
 import webbrowser
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from profile import build_or_load_profile
+from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
+from pathlib import Path
 from typing import Any, Optional
+
+from profile import build_or_load_profile
 
 from prompt_toolkit import Application
 from prompt_toolkit.formatted_text import ANSI
@@ -25,6 +30,7 @@ from actions import is_job_saved, load_saved_jobs, save_job, unsave_job
 from ai import ai_generate_queries, check_ai_available
 from config import load_config, save_config
 from matcher import compute_relevance, compute_relevance_ai
+from models import ScraperResult
 from scrapers.indeed import search_indeed_jobs
 from scrapers.linkedin import search_linkedin_jobs
 from scrapers.naukri import search_naukri_jobs
@@ -34,6 +40,21 @@ from scrapers.web_search import search_web_for_jobs
 from settings import load_settings
 
 console = Console()
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[
+        logging.handlers.RotatingFileHandler(
+            Path.home() / ".matcha" / "logs" / "matcha.log",
+            maxBytes=5_000_000,
+            backupCount=3,
+        ),
+    ],
+)
+for _lib in ("primp", "httpx", "ddgs", "urllib3"):
+    logging.getLogger(_lib).setLevel(logging.WARNING)
+logger = logging.getLogger("matcha")
 
 
 SCRAPER_DEFS = {
@@ -86,12 +107,17 @@ def run_scraper(
     query: str,
     location: str,
     days: Optional[int] = None,
-) -> tuple[str, list[dict[str, Any]]]:
+    max_pages: int = 1,
+    **kwargs: Any,
+) -> tuple[str, ScraperResult]:
     try:
-        results = scraper_func(query, location, days=days)
-        return name, results
-    except Exception:
-        return name, []
+        result = scraper_func(query, location, days=days, max_pages=max_pages, **kwargs)
+        if isinstance(result, ScraperResult):
+            return name, result
+        return name, ScraperResult(jobs=result, source=name.split("(")[0])
+    except Exception as e:
+        logger.error("Scraper %s crashed: %s", name, e, exc_info=True)
+        return name, ScraperResult(errors=[str(e)], source=name.split("(")[0])
 
 
 def _normalize(text: str) -> str:
@@ -114,11 +140,14 @@ def deduplicate(
         is_duplicate = False
         for s_title, s_company in seen:
             title_sim = fuzz.token_sort_ratio(norm_title, s_title)
-            company_sim = (
-                fuzz.token_sort_ratio(norm_company, s_company)
-                if not norm_company or not s_company
-                else fuzz.token_set_ratio(norm_company, s_company)
-            )
+            if norm_company and s_company:
+                company_sim = fuzz.token_set_ratio(norm_company, s_company)
+            else:
+                company_sim = (
+                    fuzz.token_sort_ratio(norm_company, s_company)
+                    if norm_company or s_company
+                    else 100
+                )
             if title_sim >= title_threshold and company_sim >= company_threshold:
                 is_duplicate = True
                 break
@@ -132,19 +161,30 @@ def search_jobs(
     queries: list[str],
     location: str,
     days: Optional[int] = None,
-) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    max_pages: int = 1,
+    indeed_domain: str = "in.indeed.com",
+) -> tuple[list[dict[str, Any]], dict[str, int], dict[str, list[str]]]:
     if isinstance(queries, str):
         queries = [queries]
+
+    queries = [q for q in (queries or []) if q]
+    if not queries:
+        return [], {}, {}
 
     scrapers = dict(SCRAPER_DEFS)
     if check_serpapi_available():
         scrapers["Google Jobs"] = search_serpapi_jobs
 
     all_jobs = []
-    source_counts = {}
+    source_counts: dict[str, int] = {}
+    source_errors: dict[str, list[str]] = {}
     pending = {name: True for name in scrapers}
 
     total_tasks = len(scrapers) * len(queries)
+
+    scraper_kwargs: dict[str, dict[str, Any]] = {}
+    if "Indeed" in scrapers:
+        scraper_kwargs["Indeed"] = {"domain": indeed_domain}
 
     with Live(console=console, refresh_per_second=4, transient=True) as live:
 
@@ -159,33 +199,74 @@ def search_jobs(
             t.add_column("Source", width=14, no_wrap=True)
             t.add_column("Results", width=8, justify="right")
             for name in sorted(scrapers):
-                status = "..." if pending.get(name) else "OK"
+                status = (
+                    "..."
+                    if pending.get(name)
+                    else "OK"
+                    if source_errors.get(name) is None
+                    else "ERR"
+                )
                 count = source_counts.get(name, 0)
-                s = f"[green]{status}[/green]" if status == "OK" else f"[yellow]{status}[/yellow]"
-                c = f"[green]{count}[/green]" if count > 0 else "[dim]0[/dim]"
+                s = (
+                    f"[green]{status}[/green]"
+                    if status == "OK"
+                    else f"[yellow]{status}[/yellow]"
+                    if status == "..."
+                    else f"[red]{status}[/red]"
+                )
+                c = (
+                    f"[green]{count}[/green]"
+                    if count > 0
+                    else (
+                        f"[red]{len(source_errors.get(name, []))} err[/red]"
+                        if source_errors.get(name)
+                        else "[dim]0[/dim]"
+                    )
+                )
                 t.add_row(s, name, c)
             return t
 
         live.update(_status_table())
 
-        with ThreadPoolExecutor(max_workers=min(total_tasks, 12)) as executor:
+        executor = ThreadPoolExecutor(max_workers=min(total_tasks, 12))
+        try:
             futures = {}
             for name, func in scrapers.items():
+                extra = scraper_kwargs.get(name, {})
                 for q in queries:
-                    f = executor.submit(run_scraper, f"{name}({q})", func, q, location, days)
+                    f = executor.submit(
+                        run_scraper, f"{name}({q})", func, q, location, days, max_pages, **extra
+                    )
                     futures[f] = name
 
-            for future in as_completed(futures):
-                name, jobs = future.result()
-                source_name = name.split("(")[0]
-                unique = deduplicate(jobs)
-                source_counts[source_name] = source_counts.get(source_name, 0) + len(unique)
-                pending[source_name] = False
-                all_jobs.extend(unique)
+            _last_state: Optional[tuple[bytes, ...]] = None
+            try:
+                for future in as_completed(futures, timeout=45):
+                    source_name = futures[future]
+                    _, result = future.result()
+                    pending[source_name] = False
+                    if result.errors:
+                        source_errors.setdefault(source_name, []).extend(result.errors)
+                    unique = deduplicate(result.jobs)
+                    source_counts[source_name] = source_counts.get(source_name, 0) + len(unique)
+                    all_jobs.extend(unique)
+                    _state = (
+                        str(pending).encode(),
+                        str(source_counts).encode(),
+                        str(source_errors).encode(),
+                    )
+                    if _state != _last_state:
+                        live.update(_status_table())
+                        _last_state = _state
+                    time.sleep(0.05)
+            except TimeoutError:
+                logger.warning("Scraper batch timed out after 45s, returning partial results")
                 live.update(_status_table())
-                time.sleep(0.05)
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
-    return all_jobs, source_counts
+    all_jobs = deduplicate(all_jobs)
+    return all_jobs, source_counts, source_errors
 
 
 RankedJob = tuple[float, dict[str, Any], list[str]]
@@ -195,6 +276,8 @@ def rank_jobs(
     jobs: list[dict[str, Any]],
     profile: dict[str, Any],
     use_ai: bool = False,
+    ai_top_n: int = 30,
+    ai_timeout: int = 60,
 ) -> list[RankedJob]:
     ranked: list[RankedJob] = []
     for job in jobs:
@@ -203,7 +286,7 @@ def rank_jobs(
     ranked.sort(key=lambda x: x[0], reverse=True)
 
     if use_ai:
-        ai_top_n = min(50, len(ranked))
+        ai_top_n = min(len(ranked), ai_top_n)
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -214,7 +297,9 @@ def rank_jobs(
             task = progress.add_task("[yellow]AI-scoring top candidates...", total=ai_top_n)
             with ThreadPoolExecutor(max_workers=min(ai_top_n, 8)) as ai_executor:
                 ai_futures = {
-                    ai_executor.submit(compute_relevance_ai, ranked[i][1], profile): i
+                    ai_executor.submit(
+                        compute_relevance_ai, ranked[i][1], profile, ai_timeout=ai_timeout
+                    ): i
                     for i in range(ai_top_n)
                 }
                 for f in as_completed(ai_futures):
@@ -257,9 +342,16 @@ def build_results_table(
     table.add_column("Match", justify="right", width=6, no_wrap=True)
 
     for i, (score, job, reasons) in enumerate(ranked[start:end], start + 1):
-        score_color = "green" if score >= 60 else "yellow" if score >= 25 else "red"
+        if score >= 60:
+            score_color = "green"
+        elif score >= 25:
+            score_color = "yellow"
+        elif score >= 5:
+            score_color = "dim"
+        else:
+            score_color = "red"
         url = job.get("url", "")
-        saved_mark = " [yellow]★[/yellow]" if url and is_job_saved(url, saved_ids) else ""
+        saved_mark = " [yellow]\u2605[/yellow]" if url and is_job_saved(url, saved_ids) else ""
         row_style = (
             "reverse bold" if highlight is not None and (i - 1) == (start + highlight) else None
         )
@@ -286,7 +378,7 @@ def show_job_detail(job: dict[str, Any], score: float, reasons: list[str]) -> No
             f"[cyan]URL:[/cyan] {job.get('url', 'N/A')}\n"
             f"[cyan]Match Score:[/cyan] [bold]{score}%[/bold]\n\n"
             f"[bold]Why this matches:[/bold]\n"
-            + "\n".join(f"  • {r}" for r in reasons)
+            + "\n".join(f"  \u2022 {r}" for r in reasons)
             + (
                 f"\n\n[dim]Description:[/dim]\n{job.get('description', '')[:500]}"
                 if job.get("description")
@@ -298,14 +390,41 @@ def show_job_detail(job: dict[str, Any], score: float, reasons: list[str]) -> No
     )
 
 
+def _dedup_queries(queries: list[str]) -> list[str]:
+    if len(queries) < 2:
+        return queries
+    unique: list[str] = []
+    for q in queries:
+        is_dup = False
+        q_norm = _normalize(q)
+        for existing in unique:
+            if fuzz.token_sort_ratio(q_norm, _normalize(existing)) > 85:
+                is_dup = True
+                break
+        if not is_dup:
+            unique.append(q)
+    return unique
+
+
+def _validate_queries(queries: list[str]) -> list[str]:
+    from scrapers.constants import STOP_WORDS
+
+    valid: list[str] = []
+    for q in queries:
+        tokens = [t for t in q.lower().split() if t not in STOP_WORDS and len(t) > 1]
+        if len(tokens) >= 2:
+            valid.append(q)
+    return valid
+
+
 def prompt_loop(
     ranked: list[RankedJob],
     source_counts: dict[str, int],
+    source_errors: dict[str, list[str]],
     ai_enabled: bool,
 ) -> Optional[str]:
-    ranked = [(s, j, r) for s, j, r in ranked if s > 0]
     if not ranked:
-        console.print("[yellow]No jobs matched your profile sufficiently.[/yellow]")
+        console.print("[yellow]No jobs found. Try different search terms.[/yellow]")
         return
 
     summary_parts = [
@@ -313,9 +432,16 @@ def prompt_loop(
         for name, count in sorted(source_counts.items())
         if count > 0
     ]
+    error_parts = [
+        f"[red]{name}: {len(errs)} error(s)[/red]"
+        for name, errs in sorted(source_errors.items())
+        if errs
+    ]
     ai_tag = " [bold yellow](AI)[/bold yellow]" if ai_enabled else ""
     console.print(f"\n[bold]Found {len(ranked)} total jobs[/bold]{ai_tag}")
     console.print("  " + " | ".join(summary_parts))
+    if error_parts:
+        console.print("  [bold]Errors:[/bold] " + " | ".join(error_parts))
 
     page_size = 10
     total_pages = max(1, (len(ranked) + page_size - 1) // page_size)
@@ -527,9 +653,9 @@ def prompt_loop(
         return "re_run"
 
 
-def main() -> None:
+def run() -> None:
     parser = argparse.ArgumentParser(
-        description="Matcha — multi-source job search with relevance ranking"
+        description="Matcha \u2014 multi-source job search with relevance ranking"
     )
     parser.add_argument("--configure", action="store_true", help="Configure API keys (SerpAPI, AI)")
     parser.add_argument(
@@ -559,71 +685,97 @@ def main() -> None:
         )
     )
 
-    profile = build_or_load_profile(force_new=args.new_profile)
-    if not profile:
-        console.print("[red]Profile is required. Run with --new-profile to set one up.[/red]")
-        sys.exit(1)
-
-    use_ai = check_ai_available() and settings["ai"]["enabled"]
-
-    config = load_config()
-    default_query = (
-        profile.get("title")
-        or profile.get("headline")
-        or settings["search"].get("query")
-        or config.get("last_query")
-        or ""
-    )
-    default_location = (
-        profile.get("location")
-        or settings["search"].get("location")
-        or config.get("last_location")
-        or ""
-    )
-    default_days = config.get("last_days") or settings["search"].get("days", 7)
-
-    if args.non_interactive:
-        query = default_query
-        location = default_location
-        days = default_days
-        if not query:
-            console.print(
-                "[red]No search query configured. Set it in YAML config or use interactive mode.[/red]"
-            )
+    while True:
+        profile = build_or_load_profile(force_new=args.new_profile)
+        if not profile:
+            console.print("[red]Profile is required. Run with --new-profile to set one up.[/red]")
             sys.exit(1)
-    else:
-        console.print()
-        query = Prompt.ask("Job search query", default=default_query)
-        location = Prompt.ask("Location (or blank for remote)", default=default_location)
-        days_str = Prompt.ask("Show jobs posted within how many days?", default=str(default_days))
-        try:
-            days = max(1, int(days_str))
-        except ValueError:
-            days = None
 
-    save_config({"last_query": query, "last_location": location, "last_days": days})
-    profile["location"] = location
+        use_ai = check_ai_available() and settings["ai"]["enabled"]
 
-    queries = [query]
-    if use_ai:
-        ai_queries = ai_generate_queries(profile)
-        if ai_queries:
-            extra = [q for q in ai_queries if q.lower() != query.lower()]
-            if extra:
-                queries.extend(extra)
-                console.print(f"[dim]AI queries: {', '.join(queries)}[/dim]")
+        config = load_config()
+        default_query = (
+            profile.get("title")
+            or profile.get("headline")
+            or settings["search"].get("query")
+            or config.get("last_query")
+            or ""
+        )
+        default_location = (
+            profile.get("location")
+            or settings["search"].get("location")
+            or config.get("last_location")
+            or ""
+        )
+        default_days = config.get("last_days") or settings["search"].get("days", 7)
 
-    jobs, source_counts = search_jobs(queries, location, days=days)
-    if not jobs:
-        console.print("[yellow]No jobs found. Try different search terms.[/yellow]")
-        return
+        if args.non_interactive:
+            query = default_query
+            location = default_location
+            days = default_days
+            if not query:
+                console.print(
+                    "[red]No search query configured. Set it in YAML config or use interactive mode.[/red]"
+                )
+                sys.exit(1)
+        else:
+            console.print()
+            query = Prompt.ask("Job search query", default=default_query)
+            location = Prompt.ask("Location (or blank for remote)", default=default_location)
+            days_str = Prompt.ask(
+                "Show jobs posted within how many days?", default=str(default_days)
+            )
+            try:
+                days = max(1, int(days_str))
+            except ValueError:
+                days = None
 
-    ranked = rank_jobs(jobs, profile, use_ai=use_ai)
-    result = prompt_loop(ranked, source_counts, ai_enabled=use_ai)
+        save_config({"last_query": query, "last_location": location, "last_days": days})
+        profile["location"] = location
 
-    if result == "re_run":
-        console.print()
-        main()
+        queries = [query]
+        if use_ai:
+            console.print("[yellow]Generating AI-powered search queries...[/yellow]")
+            ai_queries = ai_generate_queries(profile)
+            if ai_queries:
+                extra = [q for q in ai_queries if q.lower() != query.lower()]
+                if extra:
+                    extra = _dedup_queries(extra)
+                    extra = _validate_queries(extra)
+                    queries.extend(extra)
+                    console.print(f"[dim]AI queries: {', '.join(queries)}[/dim]")
+
+        max_pages = settings.get("search", {}).get("max_pages", 2)
+        indeed_domain = settings.get("scrapers", {}).get("indeed_domain", "in.indeed.com")
+        jobs, source_counts, source_errors = search_jobs(
+            queries, location, days=days, max_pages=max_pages, indeed_domain=indeed_domain
+        )
+        if not jobs:
+            console.print("[yellow]No jobs found. Try different search terms.[/yellow]")
+            result = Prompt.ask("Search again?", default="y")
+            if result.lower() in ("y", "yes"):
+                continue
+            break
+
+        ai_top_n = settings.get("ai", {}).get("top_n", 30)
+        ai_timeout = settings.get("ai", {}).get("timeout", 60)
+        ranked = rank_jobs(jobs, profile, use_ai=use_ai, ai_top_n=ai_top_n, ai_timeout=ai_timeout)
+        result = prompt_loop(ranked, source_counts, source_errors, ai_enabled=use_ai)
+
+        if result != "re_run":
+            break
+
+        args.new_profile = False
+
+
+def main() -> None:
+    try:
+        run()
+    except Exception:
+        logger.exception("Unhandled exception in main")
+        console.print("[red]An unexpected error occurred. Check logs for details.[/red]")
+        sys.exit(1)
+    os._exit(0)
 
 
 if __name__ == "__main__":
