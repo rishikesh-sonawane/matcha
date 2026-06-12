@@ -11,8 +11,6 @@ import requests_cache
 from requests import Response
 from requests.exceptions import ConnectionError, Timeout
 
-from models import ScraperResult
-
 logger = logging.getLogger(__name__)
 
 RETRYABLE_STATUSES: set[int] = {429, 502, 503, 504}
@@ -100,7 +98,10 @@ def resilient_get(
                 wait = 2**attempt
                 logger.warning(
                     "Retryable status %d on %s, retrying in %ds (attempt %d/3)",
-                    resp.status_code, url, wait, attempt + 1,
+                    resp.status_code,
+                    url,
+                    wait,
+                    attempt + 1,
                 )
                 time.sleep(wait)
                 continue
@@ -113,7 +114,11 @@ def resilient_get(
                 wait = 2**attempt
                 logger.warning(
                     "Request failed %s on %s, retrying in %ds (attempt %d/3): %s",
-                    type(e).__name__, url, wait, attempt + 1, e,
+                    type(e).__name__,
+                    url,
+                    wait,
+                    attempt + 1,
+                    e,
                 )
                 time.sleep(wait)
                 continue

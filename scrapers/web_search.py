@@ -11,7 +11,7 @@ except ImportError:
 
 from models import ScraperResult
 from scrapers.constants import (
-    INDIVIDUAL_JOB_PATTERNS,
+    COMPANY_EXTRACTION_PATTERNS,
     JOB_SOURCE_DOMAINS,
     MONTH_NAMES,
     NON_JOB_TITLE_PATTERNS,
@@ -19,8 +19,8 @@ from scrapers.constants import (
     SEARCH_PAGE_PATTERNS,
     SKIP_DOMAIN_PARTS,
     STOP_WORDS,
-    COMPANY_EXTRACTION_PATTERNS,
 )
+
 from .utils import limiter
 
 logger = logging.getLogger(__name__)

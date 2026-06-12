@@ -9,6 +9,7 @@ except ImportError:
 
 from models import ScraperResult
 from scrapers.constants import NAUKRI_NON_JOB_PATHS, NON_JOB_TITLE_PATTERNS, STOP_WORDS
+
 from .utils import limiter
 
 logger = logging.getLogger(__name__)

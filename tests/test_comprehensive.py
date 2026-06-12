@@ -44,9 +44,7 @@ class TestAICallRetry(unittest.TestCase):
     def test_connection_error_recovers(self, mock_post, *_):
         mock_response = mock.MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "choices": [{"message": {"content": "hello"}}]
-        }
+        mock_response.json.return_value = {"choices": [{"message": {"content": "hello"}}]}
         mock_post.side_effect = [requests.ConnectionError("DNS failure"), mock_response]
         from ai import _call_ai
 
@@ -78,9 +76,7 @@ class TestAICallRetry(unittest.TestCase):
         resp_429.status_code = 429
         resp_ok = mock.MagicMock()
         resp_ok.status_code = 200
-        resp_ok.json.return_value = {
-            "choices": [{"message": {"content": "recovered"}}]
-        }
+        resp_ok.json.return_value = {"choices": [{"message": {"content": "recovered"}}]}
         mock_post.side_effect = [resp_429, resp_ok]
         from ai import _call_ai
 
@@ -290,9 +286,7 @@ class TestScraperResult(unittest.TestCase):
     def test_with_jobs(self):
         from models import ScraperResult
 
-        r = ScraperResult(
-            jobs=[{"title": "Engineer"}], source="Indeed"
-        )
+        r = ScraperResult(jobs=[{"title": "Engineer"}], source="Indeed")
         self.assertEqual(len(r.jobs), 1)
         self.assertEqual(r.source, "Indeed")
 
@@ -325,11 +319,13 @@ class TestConfigValidation(unittest.TestCase):
     def test_settings_override(self):
         from models import Settings
 
-        s = Settings(**{
-            "search": {"max_pages": 5},
-            "ai": {"top_n": 10, "timeout": 120},
-            "scrapers": {"indeed_domain": "ca.indeed.com"},
-        })
+        s = Settings(
+            **{
+                "search": {"max_pages": 5},
+                "ai": {"top_n": 10, "timeout": 120},
+                "scrapers": {"indeed_domain": "ca.indeed.com"},
+            }
+        )
         self.assertEqual(s.search.max_pages, 5)
         self.assertEqual(s.ai.top_n, 10)
         self.assertEqual(s.ai.timeout, 120)
@@ -439,9 +435,10 @@ class TestSearchJobsScraperKwargs(unittest.TestCase):
         scrapers = {"Indeed": mock.MagicMock()}
 
         fake_future = mock.MagicMock()
-        fake_future.result.return_value = ("Indeed", mock.MagicMock(
-            jobs=[], errors=[], source="Indeed"
-        ))
+        fake_future.result.return_value = (
+            "Indeed",
+            mock.MagicMock(jobs=[], errors=[], source="Indeed"),
+        )
 
         fake_executor = mock.MagicMock()
         fake_executor.submit.return_value = fake_future

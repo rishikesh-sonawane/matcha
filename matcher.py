@@ -117,9 +117,7 @@ def compute_relevance(job: dict[str, Any], profile: dict[str, Any]) -> dict[str,
     job_description = (job.get("description") or "").lower()
     job_text = f"{job_title} {job_description}"
 
-    skill_matches = [
-        s for s in profile_skills if _word_boundary_match(job_text, s)
-    ]
+    skill_matches = [s for s in profile_skills if _word_boundary_match(job_text, s)]
     if profile_skills:
         skill_ratio = len(skill_matches) / len(profile_skills)
         score += skill_ratio * 35.0
@@ -140,15 +138,11 @@ def compute_relevance(job: dict[str, Any], profile: dict[str, Any]) -> dict[str,
         if overlap:
             reasons.append(f"Title overlap: {', '.join(sorted(overlap)[:5])}")
 
-    sen_score, sen_reasons = _seniority_score(
-        profile.get("experience", ""), job.get("title", "")
-    )
+    sen_score, sen_reasons = _seniority_score(profile.get("experience", ""), job.get("title", ""))
     score += sen_score
     reasons.extend(sen_reasons)
 
-    loc_score, loc_reasons = _location_score(
-        job.get("location", ""), profile.get("location", "")
-    )
+    loc_score, loc_reasons = _location_score(job.get("location", ""), profile.get("location", ""))
     score += loc_score
     reasons.extend(loc_reasons)
 

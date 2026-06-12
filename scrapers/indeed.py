@@ -13,6 +13,7 @@ except ImportError:
     DDGS = None
 
 from models import ScraperResult
+
 from .utils import limiter, resilient_get
 
 logger = logging.getLogger(__name__)
@@ -201,7 +202,14 @@ def search_indeed_jobs(
     if days:
         params["fromage"] = str(days)
 
-    logger.info("Searching Indeed (%s): q=%s location=%s days=%s max_pages=%s", domain, query, location, days, max_pages)
+    logger.info(
+        "Searching Indeed (%s): q=%s location=%s days=%s max_pages=%s",
+        domain,
+        query,
+        location,
+        days,
+        max_pages,
+    )
     for page in range(max_pages):
         page_params = dict(params)
         if page > 0:
@@ -229,7 +237,9 @@ def search_indeed_jobs(
                 seen.add(dedup_key)
                 jobs.append(job)
 
-            logger.info("Indeed page %d: %d jobs parsed (total %d)", page + 1, len(cards), len(jobs))
+            logger.info(
+                "Indeed page %d: %d jobs parsed (total %d)", page + 1, len(cards), len(jobs)
+            )
         except Exception as e:
             msg = f"Failed to parse Indeed HTML page {page + 1}: {e}"
             logger.warning(msg)

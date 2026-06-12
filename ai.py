@@ -4,11 +4,11 @@ import os
 import re
 from typing import Any, Optional
 
-logger = logging.getLogger(__name__)
-
 import requests
 
 from config import load_config, save_config
+
+logger = logging.getLogger(__name__)
 
 AI_API_URL = ""
 AI_MODEL = ""
@@ -84,7 +84,8 @@ def _call_ai(
                 if attempt < 1:
                     logger.warning(
                         "AI API returned %d, retrying (attempt %d/2)",
-                        resp.status_code, attempt + 1,
+                        resp.status_code,
+                        attempt + 1,
                     )
                     continue
                 return None
@@ -102,14 +103,18 @@ def _call_ai(
                     "AI returned empty content. "
                     "finish_reason=%s, completion_tokens=%s, reasoning_tokens=%s. "
                     "Increase max_tokens for reasoning models.",
-                    finish, comp_tokens, reason_tokens,
+                    finish,
+                    comp_tokens,
+                    reason_tokens,
                 )
                 return None
             return content
         except (requests.ConnectionError, requests.Timeout) as e:
             if attempt < 1:
                 logger.warning(
-                    "AI request failed: %s, retrying (attempt %d/2)", e, attempt + 1,
+                    "AI request failed: %s, retrying (attempt %d/2)",
+                    e,
+                    attempt + 1,
                 )
                 continue
             logger.warning("AI request failed after 2 attempts: %s", e)
@@ -309,7 +314,9 @@ Guidelines:
 - A candidate with ~4 years experience is NOT a fit for principal, architect, staff, or distinguished engineer roles — heavily penalize these regardless of skills"""
 
 
-def ai_score_job(profile: dict[str, Any], job: dict[str, Any], timeout: int = 60) -> Optional[dict[str, Any]]:
+def ai_score_job(
+    profile: dict[str, Any], job: dict[str, Any], timeout: int = 60
+) -> Optional[dict[str, Any]]:
     if not check_ai_available():
         return None
     title = profile.get("title", "") or profile.get("headline", "")

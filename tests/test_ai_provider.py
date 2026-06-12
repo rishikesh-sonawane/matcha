@@ -118,7 +118,9 @@ class TestMaxTokens(unittest.TestCase):
 
         with mock.patch("ai._call_ai", return_value='{"queries": ["python backend"]}') as mock_call:
             with mock.patch("ai.check_ai_available", return_value=True):
-                ai_generate_queries({"title": "Dev", "skills": ["Python"], "summary": "x", "location": "Remote"})
+                ai_generate_queries(
+                    {"title": "Dev", "skills": ["Python"], "summary": "x", "location": "Remote"}
+                )
                 self.assertEqual(mock_call.call_args.kwargs["max_tokens"], 8192)
 
     def test_suggest_titles_uses_4096(self):

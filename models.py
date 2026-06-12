@@ -1,12 +1,12 @@
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
-
 
 #
 # Runtime models
 #
+
 
 @dataclass
 class ScraperResult:
@@ -18,6 +18,7 @@ class ScraperResult:
 #
 # Pydantic persisted models
 #
+
 
 class Job(BaseModel):
     title: str = ""

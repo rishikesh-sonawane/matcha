@@ -6,6 +6,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from models import ScraperResult
+
 from .utils import resilient_get
 
 logger = logging.getLogger(__name__)
@@ -36,7 +37,9 @@ def search_linkedin_jobs(
     max_pages = kwargs.get("max_pages", 1)
     f_tpr = f"r{days * SECONDS_PER_DAY}"
 
-    logger.info("Searching LinkedIn: q=%s location=%s days=%s max_pages=%s", query, loc, days, max_pages)
+    logger.info(
+        "Searching LinkedIn: q=%s location=%s days=%s max_pages=%s", query, loc, days, max_pages
+    )
     try:
         for page in range(max_pages):
             start = page * 25
@@ -78,7 +81,9 @@ def search_linkedin_jobs(
                     link = ""
                     if link_el:
                         href = link_el.get("href", "")
-                        link = href if href.startswith("http") else f"https://www.linkedin.com{href}"
+                        link = (
+                            href if href.startswith("http") else f"https://www.linkedin.com{href}"
+                        )
 
                     if title:
                         jobs.append(
@@ -95,7 +100,9 @@ def search_linkedin_jobs(
                     logger.warning("Failed to parse LinkedIn card: %s", e)
                     continue
 
-            logger.info("LinkedIn page %d: %d jobs parsed (total %d)", page + 1, len(job_cards), len(jobs))
+            logger.info(
+                "LinkedIn page %d: %d jobs parsed (total %d)", page + 1, len(job_cards), len(jobs)
+            )
 
         return ScraperResult(jobs=jobs, errors=errors, source="LinkedIn")
 

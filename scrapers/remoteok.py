@@ -7,6 +7,7 @@ import requests
 
 from models import ScraperResult
 from scrapers.constants import STOP_WORDS
+
 from .utils import resilient_get
 
 logger = logging.getLogger(__name__)

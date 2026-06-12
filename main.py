@@ -9,9 +9,8 @@ import time
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 from pathlib import Path
-from typing import Any, Optional
-
 from profile import build_or_load_profile
+from typing import Any, Optional
 
 from prompt_toolkit import Application
 from prompt_toolkit.formatted_text import ANSI

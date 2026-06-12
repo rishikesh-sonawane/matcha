@@ -16,6 +16,7 @@ FERNET_KEY_FILE = CONFIG_DIR / "fernet.key"
 _KEYRING_AVAILABLE: bool = False
 try:
     import keyring
+
     _KEYRING_AVAILABLE = True
 except ImportError:
     pass
@@ -24,6 +25,7 @@ _FERNET_AVAILABLE: bool = False
 _Fernet: type | None = None
 try:
     from cryptography.fernet import Fernet as _Fernet
+
     _FERNET_AVAILABLE = True
 except ImportError:
     pass

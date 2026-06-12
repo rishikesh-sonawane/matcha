@@ -4,6 +4,7 @@ from typing import Any
 import requests
 
 from models import ScraperResult
+
 from .utils import resilient_get
 
 logger = logging.getLogger(__name__)
@@ -109,7 +110,12 @@ def search_serpapi_jobs(
                     logger.warning("Failed to parse SerpAPI result: %s", e)
                     continue
 
-            logger.info("Google Jobs page %d: %d jobs parsed (total %d)", page + 1, len(jobs_results), len(jobs))
+            logger.info(
+                "Google Jobs page %d: %d jobs parsed (total %d)",
+                page + 1,
+                len(jobs_results),
+                len(jobs),
+            )
 
         return ScraperResult(jobs=jobs, errors=errors, source="Google Jobs")
 
