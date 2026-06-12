@@ -1,9 +1,16 @@
+import logging
 import re
+import time
 from typing import Any
 
 import requests
 
+from models import ScraperResult
+from scrapers.constants import STOP_WORDS
+
 from .utils import resilient_get
+
+logger = logging.getLogger(__name__)
 
 HEADERS: dict[str, str] = {
     "User-Agent": (
@@ -18,52 +25,19 @@ def search_remoteok_jobs(
     query: str,
     location: str = "",
     **kwargs: Any,
-) -> list[dict[str, Any]]:
-    jobs = []
+) -> ScraperResult:
+    errors: list[str] = []
+    jobs: list[dict[str, Any]] = []
+    days = kwargs.get("days")
+    cutoff = time.time() - (days * 86400) if days else 0
     query_lower = query.lower()
     query_terms = set(query_lower.split())
 
-    stop_words = {
-        "a",
-        "an",
-        "the",
-        "and",
-        "or",
-        "of",
-        "in",
-        "with",
-        "for",
-        "at",
-        "to",
-        "is",
-        "are",
-        "was",
-        "were",
-        "i",
-        "my",
-        "me",
-        "we",
-        "our",
-        "you",
-        "your",
-        "it",
-        "its",
-        "on",
-        "by",
-        "as",
-        "be",
-        "but",
-        "from",
-        "not",
-        "so",
-        "up",
-        "all",
-    }
-    significant_terms = {t for t in query_terms if t not in stop_words and len(t) > 1}
-
+    significant_terms = {t for t in query_terms if t not in STOP_WORDS and len(t) > 1}
     if not significant_terms:
         significant_terms = query_terms
 
+    logger.info("Searching RemoteOK: q=%s", query)
     try:
         resp = resilient_get(
             "https://remoteok.com/api",
@@ -71,11 +45,14 @@ def search_remoteok_jobs(
             timeout=15,
         )
         if resp.status_code != 200:
-            return jobs
+            msg = f"RemoteOK returned status {resp.status_code}"
+            logger.warning(msg)
+            errors.append(msg)
+            return ScraperResult(jobs=jobs, errors=errors, source="RemoteOK")
 
         data = resp.json()
         if not isinstance(data, list) or len(data) < 2:
-            return jobs
+            return ScraperResult(jobs=jobs, errors=errors, source="RemoteOK")
 
         raw_jobs = data[1:]
 
@@ -87,6 +64,9 @@ def search_remoteok_jobs(
                 description = item.get("description") or ""
                 url = item.get("url") or ""
                 tags = [t.lower() for t in (item.get("tags") or [])]
+                epoch = item.get("epoch") or item.get("date") or 0
+                if cutoff and isinstance(epoch, (int, float)) and epoch < cutoff:
+                    continue
 
                 if not title:
                     continue
@@ -110,10 +90,14 @@ def search_remoteok_jobs(
                         "source": "RemoteOK",
                     }
                 )
-            except Exception:
+            except Exception as e:
+                logger.warning("Failed to parse RemoteOK job: %s", e)
                 continue
 
-        return jobs
+        return ScraperResult(jobs=jobs, errors=errors, source="RemoteOK")
 
-    except requests.RequestException:
-        return jobs
+    except requests.RequestException as e:
+        msg = f"RemoteOK request failed: {e}"
+        logger.warning(msg)
+        errors.append(msg)
+        return ScraperResult(jobs=jobs, errors=errors, source="RemoteOK")

@@ -1,3 +1,4 @@
+import logging
 import re
 from typing import Any
 
@@ -6,18 +7,16 @@ try:
 except ImportError:
     DDGS = None
 
+from models import ScraperResult
+from scrapers.constants import NAUKRI_NON_JOB_PATHS, NON_JOB_TITLE_PATTERNS, STOP_WORDS
+
+from .utils import limiter
+
+logger = logging.getLogger(__name__)
+
 HEADERS: dict[str, str] = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 }
-
-NON_JOB_PATHS: list[str] = [
-    "/code360/",
-    "/campus/",
-    "/blog/",
-    "/interview-",
-    "/cloudgateway",
-    "companies.naukri.com",
-]
 
 
 def _is_job_url(url: str) -> bool:
@@ -28,20 +27,40 @@ def search_naukri_jobs(
     query: str,
     location: str = "",
     **kwargs: Any,
-) -> list[dict[str, str]]:
+) -> ScraperResult:
+    errors: list[str] = []
     if DDGS is None:
-        return []
+        return ScraperResult(errors=["ddgs library not available"], source="Naukri")
+
+    days = kwargs.get("days")
+    timelimit = ""
+    if days:
+        if days <= 1:
+            timelimit = "d"
+        elif days <= 7:
+            timelimit = "w"
+        else:
+            timelimit = "m"
 
     search_query = f"{query} {location}".strip()
     site_query = f"site:naukri.com {search_query}"
     seen_urls: set[str] = set()
     jobs: list[dict[str, str]] = []
 
+    logger.info("Searching Naukri: q=%s location=%s", query, location)
+    limiter.acquire("duckduckgo.com")
     try:
         with DDGS() as ddgs:
-            raw = list(ddgs.text(site_query, max_results=20))
-    except Exception:
-        return []
+            raw = list(
+                ddgs.text(site_query, max_results=20, timelimit=timelimit)
+                if timelimit
+                else ddgs.text(site_query, max_results=20)
+            )
+    except Exception as e:
+        msg = f"Naukri DDGS search failed: {e}"
+        logger.warning(msg)
+        errors.append(msg)
+        return ScraperResult(errors=errors, source="Naukri")
 
     for item in raw:
         try:
@@ -51,34 +70,37 @@ def search_naukri_jobs(
 
             if not title or not url or "naukri.com" not in url.lower():
                 continue
-            if any(p in url for p in NON_JOB_PATHS):
+            if any(p in url for p in NAUKRI_NON_JOB_PATHS):
+                continue
+            if any(re.search(p, title) for p in NON_JOB_TITLE_PATTERNS):
                 continue
             if url in seen_urls:
                 continue
             seen_urls.add(url)
 
-            job = build_job(title, body, url, location, query)
+            job = _build_job(title, body, url, location, query)
             if job and job["title"]:
                 jobs.append(job)
-        except Exception:
+        except Exception as e:
+            logger.warning("Failed to parse Naukri result: %s", e)
             continue
 
-    return jobs
+    return ScraperResult(jobs=jobs, errors=errors, source="Naukri")
 
 
-def build_job(
+def _build_job(
     title: str,
     snippet: str,
     url: str,
     search_location: str,
     query: str,
 ) -> dict[str, str]:
-    title_clean = clean_title(title)
+    title_clean = _clean_title(title)
     if not title_clean or title_clean.startswith("naukri"):
         title_clean = _title_from_url(url) or title_clean or title
 
-    company = extract_company(url, snippet, title, title_clean)
-    location = extract_location(snippet, search_location)
+    company = _extract_company(url, snippet, title, title_clean)
+    location = _extract_location(snippet, search_location)
 
     return {
         "title": title_clean or title,
@@ -90,7 +112,7 @@ def build_job(
     }
 
 
-def clean_title(title: str) -> str:
+def _clean_title(title: str) -> str:
     if not title:
         return ""
     title = re.sub(r"\s*[-–|]\s*Naukri\.?com.*", "", title, flags=re.IGNORECASE)
@@ -116,133 +138,20 @@ def _title_from_url(url: str) -> str:
     m = re.search(r"naukri\.com/([^/]+?)(?:-jobs|$)", url)
     if m:
         raw = m.group(1).replace("-", " ").title().strip()
-        # Strip location suffix like "in Pune" → keep just the role
         raw = re.sub(r"\s+In\s+\w.*", "", raw).strip()
         return raw
     return ""
 
 
-def _is_search_page(url: str) -> bool:
-    return bool(re.search(r"-jobs-in-\w", url)) or "naukri.com/jobs?" in url
+def _extract_company(url: str, snippet: str, title: str, title_clean: str = "") -> str:
+    from scrapers.constants import COMPANY_EXTRACTION_PATTERNS
 
-
-_STOP_WORDS: set[str] = {
-    "the",
-    "a",
-    "an",
-    "is",
-    "are",
-    "was",
-    "were",
-    "be",
-    "been",
-    "being",
-    "have",
-    "has",
-    "had",
-    "do",
-    "does",
-    "did",
-    "will",
-    "would",
-    "could",
-    "should",
-    "may",
-    "might",
-    "must",
-    "shall",
-    "can",
-    "this",
-    "that",
-    "these",
-    "those",
-    "it",
-    "its",
-    "our",
-    "their",
-    "your",
-    "my",
-    "his",
-    "her",
-    "they",
-    "we",
-    "you",
-    "he",
-    "she",
-    "and",
-    "or",
-    "but",
-    "nor",
-    "for",
-    "with",
-    "about",
-    "between",
-    "through",
-    "during",
-    "before",
-    "after",
-    "above",
-    "below",
-    "from",
-    "up",
-    "down",
-    "of",
-    "in",
-    "on",
-    "at",
-    "by",
-    "to",
-    "into",
-    "over",
-    "under",
-    "again",
-    "further",
-    "then",
-    "once",
-    "here",
-    "there",
-    "all",
-    "each",
-    "every",
-    "both",
-    "few",
-    "more",
-    "most",
-    "any",
-    "no",
-    "not",
-    "only",
-    "same",
-    "so",
-    "than",
-    "too",
-    "very",
-    "overview",
-    "summary",
-    "description",
-    "role",
-    "position",
-    "job",
-    "apply",
-    "learn",
-    "join",
-    "team",
-    "via",
-    "naukri",
-}
-
-
-def extract_company(url: str, snippet: str, title: str, title_clean: str = "") -> str:
-    patterns = [
-        r"(?:at|by)\s+([A-Z][A-Za-z0-9&.]+?)(?:\s+[-–]|\s+(?:is|has|in)\s+|$|\.)",
-        r"([A-Z][A-Za-z0-9&]+)\s+(?:is\s+)?(?:hiring|seeking|looking)",
-    ]
-    for p in patterns:
-        m = re.search(p, snippet or "", re.IGNORECASE)
+    for p in COMPANY_EXTRACTION_PATTERNS:
+        m = re.search(p, snippet or "")
         if m:
             candidate = m.group(1).strip()
             first_word = candidate.split()[0].lower()
-            if len(candidate) >= 3 and first_word not in _STOP_WORDS:
+            if len(candidate) >= 3 and first_word not in STOP_WORDS:
                 return candidate
 
     m = re.search(r"^([A-Z][A-Za-z0-9\s&.]+?)\s+(?:is\s+)?hiring\s+", title or "", re.IGNORECASE)
@@ -261,13 +170,13 @@ def extract_company(url: str, snippet: str, title: str, title_clean: str = "") -
     return "Naukri"
 
 
-def extract_location(snippet: str, search_location: str) -> str:
+def _extract_location(snippet: str, search_location: str) -> str:
     patterns = [
-        r"in\s+([A-Z][a-zA-Z\s]+(?:,\s*[A-Z]{2})?)",
-        r"([A-Z][a-zA-Z\s]+(?:,\s*[A-Z]{2}))(?:\s+[.…]|\s*$)",
+        re.compile(r"in\s+([A-Z][a-zA-Z\s]+(?:,\s*[A-Z]{2})?)", re.IGNORECASE),
+        re.compile(r"([A-Z][a-zA-Z\s]+(?:,\s*[A-Z]{2}))(?:\s+[.…]|\s*$)", re.IGNORECASE),
     ]
     for p in patterns:
-        m = re.search(p, snippet or "", re.IGNORECASE)
+        m = re.search(p, snippet or "")
         if m:
             loc = m.group(1).strip()
             if len(loc) < 30:

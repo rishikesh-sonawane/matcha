@@ -9,5 +9,10 @@ ignore = ["E501"]
 [tool.ruff.format]
 quote-style = "double"
 
+[tool.bandit]
+exclude_dirs = ["tests", "venv", ".git", ".github"]
+skips = ["B101", "B404", "B603", "B607"]
+targets = ["ai.py", "config.py", "main.py", "matcher.py", "profile.py", "scrapers"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,24 +1,41 @@
+import logging
 from pathlib import Path
 from typing import Any, Optional
 
 import yaml
 
+from models import Settings
+
+logger = logging.getLogger(__name__)
+
 LOCAL_CONFIG = Path("matcha.yaml")
 USER_CONFIG = Path.home() / ".matcha" / "settings.yaml"
 
-DEFAULT_CONFIG = {
+_DEFAULTS: dict[str, Any] = {
     "search": {
         "query": "",
         "location": "",
         "days": 7,
+        "max_pages": 2,
     },
     "ai": {
         "enabled": True,
+        "top_n": 30,
+        "timeout": 60,
     },
     "scrapers": {
         "serpapi": False,
+        "indeed_domain": "in.indeed.com",
     },
 }
+
+
+def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> None:
+    for key, value in overlay.items():
+        if key in base and isinstance(base[key], dict) and isinstance(value, dict):
+            _deep_merge(base[key], value)
+        else:
+            base[key] = value
 
 
 def load_settings(config_path: Optional[str] = None) -> dict[str, Any]:
@@ -28,21 +45,23 @@ def load_settings(config_path: Optional[str] = None) -> dict[str, Any]:
     paths.append(LOCAL_CONFIG)
     paths.append(USER_CONFIG)
 
-    settings: dict[str, Any] = dict(DEFAULT_CONFIG)
+    settings: dict[str, Any] = dict(_DEFAULTS)
 
     for p in paths:
         if p.exists():
-            with open(p) as f:
-                loaded = yaml.safe_load(f)
-                if loaded:
-                    _deep_merge(settings, loaded)
+            try:
+                with open(p) as f:
+                    loaded = yaml.safe_load(f)
+                    if loaded:
+                        _deep_merge(settings, loaded)
+            except (yaml.YAMLError, OSError) as e:
+                logger.warning("Failed to load settings from %s: %s", p, e)
+
+    try:
+        validated = Settings(**settings)
+        merged = validated.model_dump()
+        settings.update({k: v for k, v in merged.items() if v is not None})
+    except Exception as e:
+        logger.warning("Settings validation failed: %s", e)
 
     return settings
-
-
-def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> None:
-    for key, value in overlay.items():
-        if key in base and isinstance(base[key], dict) and isinstance(value, dict):
-            _deep_merge(base[key], value)
-        else:
-            base[key] = value
