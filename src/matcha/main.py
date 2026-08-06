@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import json
 import logging
 import logging.handlers
 import re
@@ -7,6 +8,7 @@ import sys
 import time
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -30,7 +32,7 @@ from matcha.ai import (
     check_ai_available,
     reset_budget,
 )
-from matcha.config import load_config, save_config
+from matcha.config import load_config, load_profile, save_config
 from matcha.filters import apply_filters, build_filter_summary, provenance_tags
 from matcha.matcher import (
     ai_eligible,
@@ -49,8 +51,44 @@ from matcha.sources.naukri import search_naukri_jobs
 from matcha.sources.remoteok import search_remoteok_jobs
 from matcha.sources.serpapi_jobs import check_serpapi_available, search_serpapi_jobs
 from matcha.sources.web_search import search_web_for_jobs
+from matcha.track import mark_seen, partition_new
+from matcha.track import stats as track_stats
 
 console = Console()
+_err_console = Console(stderr=True)  # status notes that must not corrupt piped JSON
+
+
+class _NullLive:
+    """No-op stand-in for rich ``Live`` when running headless (quiet mode).
+
+    `matcha search --json` must not corrupt stdout with progress frames.
+    """
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        return None
+
+    def update(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+
+class _NullProgress:
+    """No-op stand-in for rich ``Progress`` when running headless."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        return None
+
+    def add_task(self, *args: Any, **kwargs: Any) -> int:
+        return 0
+
+    def update(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
 
 _log_dir = Path.home() / ".matcha" / "logs"
 _log_dir.mkdir(parents=True, exist_ok=True)
@@ -237,6 +275,7 @@ def search_jobs(
     days: int | None = None,
     max_pages: int = 1,
     indeed_domain: str = "in.indeed.com",
+    quiet: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, int], dict[str, list[str]]]:
     if isinstance(queries, str):
         queries = [queries]
@@ -260,7 +299,10 @@ def search_jobs(
     if "Indeed" in scrapers:
         scraper_kwargs["Indeed"] = {"domain": indeed_domain}
 
-    with Live(console=console, refresh_per_second=4, transient=True) as live:
+    live_ctx: Any = (
+        Live(console=console, refresh_per_second=4, transient=True) if not quiet else _NullLive()
+    )
+    with live_ctx as live:
 
         def _status_table():
             t = Table(
@@ -359,6 +401,7 @@ def rank_jobs(
     ai_top_n: int = 30,
     ai_timeout: int = 60,
     normalize_flatline: bool = False,
+    quiet: bool = False,
 ) -> list[RankedJob]:
     ranked: list[RankedJob] = []
     for job in jobs:
@@ -372,13 +415,18 @@ def rank_jobs(
         ai_idx = [i for i, (_, job, _) in enumerate(ranked) if ai_eligible(job)]
         ai_idx = ai_idx[: min(len(ai_idx), ai_top_n)]
         if ai_idx:
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                BarColumn(),
-                console=console,
-                transient=True,
-            ) as progress:
+            progress_ctx: Any = (
+                Progress(
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    BarColumn(),
+                    console=console,
+                    transient=True,
+                )
+                if not quiet
+                else _NullProgress()
+            )
+            with progress_ctx as progress:
                 task = progress.add_task("[yellow]AI-scoring top candidates...", total=len(ai_idx))
                 with ThreadPoolExecutor(max_workers=min(len(ai_idx), 8)) as ai_executor:
                     ai_futures = {
@@ -409,6 +457,334 @@ def rank_jobs(
             ranked = [(scores[i], ranked[i][1], ranked[i][2]) for i in range(len(ranked))]
 
     return ranked
+
+
+def run_search(
+    profile: dict[str, Any],
+    query: str,
+    location: str,
+    days: int | None,
+    settings: dict[str, Any],
+    config: dict[str, Any],
+    *,
+    ai_enabled: bool = False,
+    use_ai_queries: bool = True,
+    enrich: bool = True,
+    quiet: bool = False,
+) -> dict[str, Any]:
+    """One pass through the full pipeline (Phase 6, strategy §13).
+
+    profile → queries (AI expansion) → search → normalize → central filters
+    → rank → enrich top N. Shared by the TUI run loop and the headless
+    ``search``/``watch``/MCP surfaces so every front-end is identical.
+    ``quiet=True`` suppresses all console UI (JSON-safe stdout).
+    """
+    ai_top_n = int(settings.get("ai", {}).get("top_n", 30))
+    ai_timeout = int(settings.get("ai", {}).get("timeout", 60))
+    ai_max_calls = int(settings.get("ai", {}).get("max_calls", 60))
+    # Phase 5 (§10.2): fresh AI budget per run (queries + scoring share it).
+    reset_budget(max_calls=ai_max_calls)
+
+    queries = [query]
+    if ai_enabled and use_ai_queries:
+        if not quiet:
+            console.print("[yellow]Generating AI-powered search queries...[/yellow]")
+        ai_queries = ai_generate_queries(profile)
+        if ai_queries:
+            extra = [q for q in ai_queries if q.lower() != query.lower()]
+            if extra:
+                extra = _dedup_queries(extra)
+                extra = _validate_queries(extra)
+                queries.extend(extra)
+                if extra and not quiet:
+                    console.print(f"[dim]AI queries: {', '.join(queries)}[/dim]")
+
+    max_pages = int(settings.get("search", {}).get("max_pages", 2))
+    indeed_domain = settings.get("scrapers", {}).get("indeed_domain", "in.indeed.com")
+    jobs, source_counts, source_errors = search_jobs(
+        queries,
+        location,
+        days=days,
+        max_pages=max_pages,
+        indeed_domain=indeed_domain,
+        quiet=quiet,
+    )
+    found_count = len(jobs)
+
+    filter_summary = ""
+    if jobs:
+        filters_cfg = dict(settings.get("filters", {}))
+        if days is not None:
+            filters_cfg["days"] = days
+        if not quiet:
+            with console.status("[yellow]Filtering results...[/yellow]"):
+                jobs = normalize_jobs(jobs)
+                jobs, filter_reports = apply_filters(jobs, profile, filters_cfg)
+        else:
+            jobs = normalize_jobs(jobs)
+            jobs, filter_reports = apply_filters(jobs, profile, filters_cfg)
+        filter_summary = build_filter_summary(filter_reports)
+
+    normalize_flatline = settings.get("ranking", {}).get("normalize_scores", False)
+    ranked = rank_jobs(
+        jobs,
+        profile,
+        use_ai=ai_enabled,
+        ai_top_n=ai_top_n,
+        ai_timeout=ai_timeout,
+        normalize_flatline=normalize_flatline,
+        quiet=quiet,
+    )
+
+    enriched_count = 0
+    enrich_cfg = settings.get("enrichment", {})
+    if enrich and enrich_cfg.get("enabled", True) and ranked:
+        from matcha.sources.enrichment import enrich_top_n
+
+        enrich_kwargs = {
+            "top_n": int(enrich_cfg.get("top_n", 30)),
+            "max_workers": int(enrich_cfg.get("max_workers", 5)),
+            "timeout": int(enrich_cfg.get("timeout", 30)),
+            "config": config,
+        }
+        if not quiet:
+            with console.status("[yellow]Enriching top jobs with full details...[/yellow]"):
+                enriched_count, ranked = enrich_top_n(ranked, **enrich_kwargs)
+        else:
+            enriched_count, ranked = enrich_top_n(ranked, **enrich_kwargs)
+        if enriched_count and not quiet:
+            console.print(
+                f"[dim]Enriched [cyan]{enriched_count}[/cyan] top jobs with details[/dim]"
+            )
+
+    return {
+        "ranked": ranked,
+        "source_counts": source_counts,
+        "source_errors": source_errors,
+        "filter_summary": filter_summary,
+        "found_count": found_count,
+        "ai_used": ai_enabled,
+        "ai_budget_used": budget_used(),
+        "enriched_count": enriched_count,
+    }
+
+
+def _job_json(score: float, job: dict[str, Any], reasons: list[str]) -> dict[str, Any]:
+    """One ranked job as a JSON-safe dict (job fields + match_score + reasons)."""
+    out = dict(job)
+    out["match_score"] = round(float(score), 1)
+    out["reasons"] = list(reasons)
+    return out
+
+
+def build_search_payload(
+    query: str,
+    location: str,
+    days: int | None,
+    run_result: dict[str, Any],
+    command: str = "search",
+) -> dict[str, Any]:
+    """The structured JSON document for search/watch/MCP output (strategy §13)."""
+    return {
+        "command": command,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "query": query,
+        "location": location,
+        "days": days,
+        "ai_used": bool(run_result.get("ai_used")),
+        "ai_budget_used": int(run_result.get("ai_budget_used", 0)),
+        "source_counts": dict(run_result.get("source_counts", {})),
+        "source_errors": {str(k): list(v) for k, v in run_result.get("source_errors", {}).items()},
+        "filter_summary": run_result.get("filter_summary", ""),
+        "found_count": int(run_result.get("found_count", 0)),
+        "enriched_count": int(run_result.get("enriched_count", 0)),
+        "jobs": [
+            _job_json(score, job, reasons) for score, job, reasons in run_result.get("ranked", [])
+        ],
+    }
+
+
+def _print_human_summary(
+    run_result: dict[str, Any],
+    top: int = 10,
+    extra: list[RankedJob] | None = None,
+    header: str = "",
+) -> None:
+    """Compact human-readable summary (search/watch without --json)."""
+    ranked = run_result.get("ranked", []) if extra is None else extra
+    if header:
+        console.print(header)
+    source_parts = [
+        f"[cyan]{count}[/] from [bold]{name}[/]"
+        for name, count in sorted(run_result.get("source_counts", {}).items())
+        if count > 0
+    ]
+    if source_parts:
+        console.print("  " + " | ".join(source_parts))
+    if run_result.get("filter_summary"):
+        console.print(f"  [dim]Filtered: {len(ranked)} kept ({run_result['filter_summary']})[/dim]")
+    if run_result.get("ai_budget_used"):
+        console.print(f"  [dim]AI budget: {run_result['ai_budget_used']} used[/dim]")
+    if not ranked:
+        if extra is not None:
+            console.print("  [dim]No new jobs.[/dim]")
+        else:
+            console.print("[yellow]No jobs.[/yellow]")
+        return
+    shown = ranked[:top]
+    console.print(f"  [bold]Top {len(shown)} of {len(ranked)}:[/bold]")
+    for i, (score, job, _reasons) in enumerate(shown, 1):
+        tags = "".join(f"[dim][{t}][/dim]" for t in provenance_tags(job))
+        console.print(
+            f"  {i:>3}. {job.get('title', 'N/A')} @ {job.get('company', 'N/A')} — "
+            f"{job.get('source', '?')} — [{score:.1f}%]{tags}"
+        )
+
+
+def _emit_json(
+    args: argparse.Namespace,
+    doc: dict[str, Any],
+    run_result: dict[str, Any],
+    extra: list[RankedJob] | None = None,
+    header: str = "",
+) -> None:
+    """Shared search/watch output: JSON to stdout/file and/or human summary."""
+    text = json.dumps(doc, ensure_ascii=False, indent=2)
+    if getattr(args, "output", None):
+        out = Path(args.output)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text + "\n", encoding="utf-8")
+        # stderr: `matcha search --json --output x.json` / `watch --json`
+        # must keep stdout a pure JSON stream (reviewer-caught in Phase 6).
+        _err_console.print(f"[dim]Wrote {out.resolve()}[/dim]")
+    if getattr(args, "json", False):
+        print(text)
+    else:
+        _print_human_summary(run_result, top=getattr(args, "top", 10), extra=extra, header=header)
+
+
+def _headless_credentials(
+    args: argparse.Namespace, settings: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any], str, str, int | None, bool]:
+    """Shared search/watch preamble: profile, config, query, location, days, ai."""
+    profile = load_profile()
+    if not profile:
+        console.print(
+            "[red]No saved profile found. Run `matcha` once interactively "
+            "(or `matcha --new-profile`) to create one.[/red]"
+        )
+        sys.exit(1)
+    config = load_config()
+    query = (
+        args.query or settings.get("search", {}).get("query", "") or config.get("last_query", "")
+    )
+    if args.location is not None:
+        location = args.location
+    else:
+        location = (
+            settings.get("search", {}).get("location", "") or config.get("last_location", "") or ""
+        )
+    if args.days is not None:
+        days = max(0, int(args.days))
+    else:
+        days = config.get("last_days") or settings.get("search", {}).get("days", 7)
+    if not query:
+        console.print("[red]No query. Use --query or set `search.query` in the YAML config.[/red]")
+        sys.exit(1)
+    ai_enabled = check_ai_available() and settings.get("ai", {}).get("enabled", True)
+    return profile, config, query, location, days, ai_enabled
+
+
+def cmd_search(args: argparse.Namespace, settings: dict[str, Any]) -> None:
+    """`matcha search` — one headless ranked search (JSON-capable)."""
+    profile, config, query, location, days, ai_enabled = _headless_credentials(args, settings)
+    run_result = run_search(
+        profile,
+        query,
+        location,
+        days,
+        settings,
+        config,
+        ai_enabled=ai_enabled,
+        use_ai_queries=not args.no_ai_queries,
+        enrich=not args.no_enrich,
+        quiet=True,
+    )
+    doc = build_search_payload(query, location, days, run_result, command="search")
+    _emit_json(args, doc, run_result)
+
+
+def cmd_watch(args: argparse.Namespace, settings: dict[str, Any]) -> None:
+    """`matcha watch` — headless search that surfaces only NEW jobs.
+
+    Marks every result URL as seen (unless ``--no-mark-seen``) and writes
+    the full JSON document to ``--output`` (default ``~/.matcha/latest.json``)
+    so cron/agent loops can diff across runs.
+    """
+    profile, config, query, location, days, ai_enabled = _headless_credentials(args, settings)
+    run_result = run_search(
+        profile,
+        query,
+        location,
+        days,
+        settings,
+        config,
+        ai_enabled=ai_enabled,
+        use_ai_queries=not args.no_ai_queries,
+        enrich=not args.no_enrich,
+        quiet=True,
+    )
+    ranked = run_result["ranked"]
+    jobs = [job for _score, job, _reasons in ranked]
+    new_jobs, seen_jobs = partition_new(jobs)
+    ranked_by_id = {id(job): (score, job, reasons) for score, job, reasons in ranked}
+    new_ranked = [ranked_by_id[id(job)] for job in new_jobs if id(job) in ranked_by_id]
+
+    if args.no_mark_seen:
+        marked = 0
+    else:
+        marked = mark_seen(jobs)
+
+    doc = build_search_payload(query, location, days, run_result, command="watch")
+    doc["new_count"] = len(new_jobs)
+    doc["seen_count"] = len(seen_jobs)
+    doc["new_jobs"] = [_job_json(score, job, reasons) for score, job, reasons in new_ranked]
+    doc["seen_urls_total"] = track_stats()["seen_urls_total"]
+    doc["marked_seen"] = marked
+
+    if args.output is None:
+        args.output = str(Path.home() / ".matcha" / "latest.json")
+    header = (
+        f"[bold]Watch: {len(new_jobs)} new[/bold] "
+        f"({len(seen_jobs)} previously seen, {len(jobs)} total)"
+    )
+    _emit_json(args, doc, run_result, extra=new_ranked, header=header)
+
+
+def cmd_skill(args: argparse.Namespace) -> None:
+    """`matcha skill` — install/uninstall the agent skill (SKILL.md)."""
+    from matcha.skill import default_destinations, install_skill, uninstall_skill
+
+    dests = [Path(args.dest)] if args.dest else default_destinations()
+    if args.install:
+        for dest in dests:
+            out = install_skill(dest)
+            console.print(f"[green]Installed skill → {out}[/green]")
+    elif args.uninstall:
+        for dest in dests:
+            if uninstall_skill(dest):
+                console.print(f"[dim]Removed {dest}[/dim]")
+            else:
+                console.print(f"[dim]Nothing to remove at {dest}[/dim]")
+    else:
+        console.print("Usage: matcha skill --install [--dest PATH] | --uninstall [--dest PATH]")
+
+
+def cmd_mcp() -> None:
+    """`matcha mcp` — run the optional MCP server (stdio transport)."""
+    from matcha import mcp_server
+
+    mcp_server.run()
 
 
 def build_results_table(
@@ -774,6 +1150,59 @@ def run() -> None:
     subparsers = parser.add_subparsers(dest="command")
     doctor_parser = subparsers.add_parser("doctor", help="Check job-source health")
     doctor_parser.add_argument("--json", action="store_true", help="Emit the report as JSON")
+
+    # Phase 6 (strategy §13): agent + automation surface.
+    search_parser = subparsers.add_parser(
+        "search", help="Headless ranked job search (JSON-capable)"
+    )
+    search_parser.add_argument("-q", "--query", type=str, default=None)
+    search_parser.add_argument("-l", "--location", type=str, default=None)
+    search_parser.add_argument("-d", "--days", type=int, default=None)
+    search_parser.add_argument(
+        "--json", action="store_true", help="Emit the result document as JSON on stdout"
+    )
+    search_parser.add_argument(
+        "--output", type=str, default=None, help="Also write the JSON document to this file"
+    )
+    search_parser.add_argument(
+        "--top", type=int, default=10, help="Length of the human summary (default 10)"
+    )
+    search_parser.add_argument(
+        "--no-ai-queries", action="store_true", help="Skip AI query expansion"
+    )
+    search_parser.add_argument("--no-enrich", action="store_true", help="Skip top-N enrichment")
+
+    watch_parser = subparsers.add_parser(
+        "watch", help="One-shot search that surfaces only NEW jobs"
+    )
+    watch_parser.add_argument("-q", "--query", type=str, default=None)
+    watch_parser.add_argument("-l", "--location", type=str, default=None)
+    watch_parser.add_argument("-d", "--days", type=int, default=None)
+    watch_parser.add_argument(
+        "--json", action="store_true", help="Emit the result document as JSON on stdout"
+    )
+    watch_parser.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        help="JSON output file (default ~/.matcha/latest.json)",
+    )
+    watch_parser.add_argument("--top", type=int, default=10)
+    watch_parser.add_argument("--no-ai-queries", action="store_true")
+    watch_parser.add_argument("--no-enrich", action="store_true")
+    watch_parser.add_argument(
+        "--no-mark-seen", action="store_true", help="Don't record results in seen_urls"
+    )
+
+    skill_parser = subparsers.add_parser(
+        "skill", help="Install/uninstall the agent skill (SKILL.md)"
+    )
+    skill_parser.add_argument("--install", action="store_true", help="Install the skill")
+    skill_parser.add_argument("--uninstall", action="store_true", help="Remove an installed skill")
+    skill_parser.add_argument("--dest", type=str, default=None, help="Explicit install path")
+
+    subparsers.add_parser("mcp", help="Run the optional MCP server (stdio transport)")
+
     parser.add_argument(
         "--configure",
         action="store_true",
@@ -804,6 +1233,20 @@ def run() -> None:
             console.print(format_report(results))
         return
 
+    # Phase 6 (strategy §13): headless agent + automation commands.
+    if args.command == "search":
+        cmd_search(args, load_settings(config_path=args.config))
+        return
+    if args.command == "watch":
+        cmd_watch(args, load_settings(config_path=args.config))
+        return
+    if args.command == "skill":
+        cmd_skill(args)
+        return
+    if args.command == "mcp":
+        cmd_mcp()
+        return
+
     if args.configure:
         configure_serpapi()
         configure_ai()
@@ -828,9 +1271,6 @@ def run() -> None:
             sys.exit(1)
 
         use_ai = check_ai_available() and settings["ai"]["enabled"]
-
-        # Phase 5 (§10.2): fresh AI budget per run (queries + scoring share it).
-        reset_budget(max_calls=settings.get("ai", {}).get("max_calls", 60))
 
         config = load_config()
         default_query = (
@@ -877,41 +1317,31 @@ def run() -> None:
         save_config({"last_query": query, "last_location": location, "last_days": days})
         profile["location"] = location
 
-        queries = [query]
-        if use_ai:
-            console.print("[yellow]Generating AI-powered search queries...[/yellow]")
-            ai_queries = ai_generate_queries(profile)
-            if ai_queries:
-                extra = [q for q in ai_queries if q.lower() != query.lower()]
-                if extra:
-                    extra = _dedup_queries(extra)
-                    extra = _validate_queries(extra)
-                    queries.extend(extra)
-                    console.print(f"[dim]AI queries: {', '.join(queries)}[/dim]")
-
-        max_pages = settings.get("search", {}).get("max_pages", 2)
-        indeed_domain = settings.get("scrapers", {}).get("indeed_domain", "in.indeed.com")
-        jobs, source_counts, source_errors = search_jobs(
-            queries, location, days=days, max_pages=max_pages, indeed_domain=indeed_domain
+        # Phase 6 (strategy §13): the same pipeline every front-end runs.
+        run_result = run_search(
+            profile,
+            query,
+            location,
+            days,
+            settings,
+            config,
+            ai_enabled=use_ai,
+            use_ai_queries=True,
+            enrich=True,
+            quiet=False,
         )
-        if not jobs:
+        ranked = run_result["ranked"]
+        source_counts = run_result["source_counts"]
+        source_errors = run_result["source_errors"]
+        filter_summary = run_result["filter_summary"]
+
+        if not run_result["found_count"]:
             console.print("[yellow]No jobs found. Try different search terms.[/yellow]")
             result = Prompt.ask("Search again?", default="y")
             if result.lower() in ("y", "yes"):
                 continue
             break
-
-        # Phase 2 (strategy §7): normalize → central filter pipeline. The age
-        # filter is the FINAL authority on job freshness — scrapers pass the
-        # same window only to fetch less, never to bypass it.
-        filters_cfg = dict(settings.get("filters", {}))
-        if days is not None:
-            filters_cfg["days"] = days
-        with console.status("[yellow]Filtering results...[/yellow]"):
-            jobs = normalize_jobs(jobs)
-            jobs, filter_reports = apply_filters(jobs, profile, filters_cfg)
-        filter_summary = build_filter_summary(filter_reports)
-        if not jobs:
+        if not ranked:
             console.print("[yellow]No jobs survived the filters.[/yellow]")
             if filter_summary:
                 console.print(f"  [dim]Dropped: {filter_summary}[/dim]")
@@ -920,44 +1350,15 @@ def run() -> None:
                 continue
             break
 
-        ai_top_n = settings.get("ai", {}).get("top_n", 30)
-        ai_timeout = settings.get("ai", {}).get("timeout", 60)
-        normalize_flatline = settings.get("ranking", {}).get("normalize_scores", False)
-        ranked = rank_jobs(
-            jobs,
-            profile,
-            use_ai=use_ai,
-            ai_top_n=ai_top_n,
-            ai_timeout=ai_timeout,
-            normalize_flatline=normalize_flatline,
-        )
-
-        # Phase 1 part 3 (strategy §7 step 7 / §8): enrich the top N with real
-        # posting details (OpenCLI job-detail, Jina fallback). Silently skips
-        # when not consented or the browser bridge is down.
-        enrich_cfg = settings.get("enrichment", {})
-        if enrich_cfg.get("enabled", True) and ranked:
-            from matcha.sources.enrichment import enrich_top_n
-
-            with console.status("[yellow]Enriching top jobs with full details...[/yellow]"):
-                enriched, ranked = enrich_top_n(
-                    ranked,
-                    top_n=int(enrich_cfg.get("top_n", 30)),
-                    max_workers=int(enrich_cfg.get("max_workers", 5)),
-                    timeout=int(enrich_cfg.get("timeout", 30)),
-                    config=config,
-                )
-            if enriched:
-                console.print(f"[dim]Enriched [cyan]{enriched}[/cyan] top jobs with details[/dim]")
-
         # Phase 5 (§10.2): surface the budget guard outcome in the run summary.
-        ai_calls = budget_used()
+        ai_calls = run_result["ai_budget_used"]
         if use_ai and ai_calls:
             max_calls = settings.get("ai", {}).get("max_calls", 60)
             remaining = max(0, max_calls - ai_calls)
             console.print(
                 f"[dim]AI budget: {ai_calls}/{max_calls} calls used ({remaining} left)[/dim]"
             )
+
         result = prompt_loop(
             ranked,
             source_counts,

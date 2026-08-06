@@ -65,6 +65,16 @@
 > provider/prompt change); `matcha --configure` provider wizard;
 > `configure_provider()`; GROQ seed model updated to gpt-oss-120b (EOL
 > 2026-08-16). 430/430 tests; ruff/format/bandit clean.)
+> Rev 13 (adds: **Phase 6 DONE — agent + automation** — §13 implemented:
+> shared headless pipeline `run_search` (profile → queries → search →
+> normalize → filter → rank → enrich) driving the TUI AND the new
+> `matcha search`/`watch` subcommands; `search --json` structured document
+> (`build_search_payload`); `track.py` new-vs-seen over SQLite
+> (`seen_urls` in jobs.db) so `watch` surfaces only NEW jobs and writes
+> `~/.matcha/latest.json`; bilingual `skill/SKILL.md` + `matcha skill
+> --install/--uninstall`; optional MCP server (`matcha mcp`, guarded
+> `mcp>=1.0` extra) exposing `matcha_status` + `matcha_search`. 455/455
+> tests; ruff/format/bandit clean.)
 
 ---
 
@@ -764,16 +774,37 @@ pass. Prompt changes are diff-reviewable.
 
 ---
 
-## 13. Agent & Automation Surface
+## 13. Agent & Automation Surface — IMPLEMENTED (Rev 13)
 
-- **`--json`** — ranked, enriched, filtered jobs as structured JSON on stdout.
-- **SKILL.md** (`skill/SKILL.md`, zh+en) installed to `~/.agents/skills/matcha`
-  / `~/.claude/skills/matcha`: run `matcha doctor --json` → `matcha search
-  --query … --location … --days 7 --json` → summarize top matches.
-- **`matcha watch`** — one-shot, cron-able; writes `~/.matcha/latest.json`;
-  plus **new-vs-seen** diffing (`track.py`) so `watch` surfaces only jobs not
-  already seen (SQLite `seen_urls`).
-- **Optional MCP server** — see §10.4.
+> ✅ **Implemented (Phase 6, 2026-08-06).** One shared pipeline
+> (`main.run_search`) feeds the TUI and every headless surface; commands are
+> `matcha search` / `matcha watch` / `matcha skill` / `matcha mcp`.
+> Verified live: `search --json` (72 found → 70 kept, full document),
+> `watch` new-vs-seen over `~/.matcha/jobs.db` (`seen_urls`), skill
+> install/uninstall, MCP guard hint when `mcp` is absent. 455/455 tests;
+> ruff/format/bandit clean.
+
+- **`matcha search -q Q -l LOC -d N [--json] [--output FILE]`** — one
+  headless pass through the full pipeline; `--json` prints the structured
+  document (command/generated_at/query/location/days/ai_used/
+  ai_budget_used/source_counts/source_errors/filter_summary/found_count/
+  enriched_count/jobs[], each job = search fields + `match_score` +
+  `reasons`). No profile/query → clear error + exit 1.
+- **SKILL.md** — `src/matcha/skill/SKILL.md` (bilingual zh+en, YAML
+  frontmatter), installed to `~/.agents/skills/matcha` and
+  `~/.claude/skills/matcha` via `matcha skill --install [--dest PATH]`
+  (uninstall supported). Workflow documented inside: `doctor --json` →
+  `search --json` → summarize top matches.
+- **`matcha watch`** — one-shot, cron-able; runs the same pipeline, diffs
+  against the `seen_urls` table (`track.py`, shared `jobs.db`), reports
+  `new_count`/`seen_count`/`new_jobs`, marks results seen (unless
+  `--no-mark-seen`), and writes the full document to `--output` (default
+  `~/.matcha/latest.json`). Only `watch` consumes the seen table — TUI runs
+  never pollute the newness signal.
+- **Optional MCP server** — `matcha mcp` starts a stdio FastMCP server
+  (`mcp>=1.0` optional extra) exposing read-only `matcha_status` (doctor
+  JSON) and `matcha_search` (same document as `search --json`); errors are
+  credential-scrubbed; graceful hint when `mcp` isn't installed (§10.4).
 
 ---
 
@@ -1018,10 +1049,17 @@ no key leak; cache hits on re-run.
 > zero config (heuristic-only) and with Groq/OpenRouter/Kilo/local. 430/430
 > tests; ruff/format/bandit clean.
 
-### Phase 6 — Agent + automation (2–3 days)
+### Phase 6 — Agent + automation (2–3 days) ✅ COMPLETE (2026-08-06)
 `--json`, SKILL.md + installer, `matcha watch` + new-vs-seen, optional MCP.
 **Accept:** an agent drives a full search via the skill; `watch` surfaces only
 new jobs.
+
+> ✅ **Phase 6 COMPLETE (2026-08-06).** `run_search` shared pipeline;
+> `search --json` document; `track.py` seen_urls + `watch` (new-vs-seen,
+> latest.json); bilingual SKILL.md + `matcha skill --install/--uninstall`;
+> optional guarded MCP server (`matcha mcp`, `agent` extra). 24 hermetic
+> tests (`tests/test_track.py`, `tests/test_skill.py`,
+> `tests/test_agent_surface.py`). 455/455 tests; ruff/format/bandit clean.
 
 ### Phase 7 — Hardening (1–2 days)
 Circuit breakers, config hardening, GitHub profile enrichment, RSS source,
@@ -1037,7 +1075,7 @@ coverage ≥80%, README + docs.
 - [x] Salary-floor filter + `[salary?]` tagging
 - [x] Data-quality gate (placeholder/tracking-URL/garbage rejection)
 - [ ] Canonical URL + fuzzy dedup with **keep-best by data_quality**
-- [ ] New-vs-seen tracking for `watch`
+- [x] New-vs-seen tracking for `watch`
 - [ ] Circuit breakers per source
 - [ ] Typed error taxonomy; zero bare `except`
 - [x] AI: provider-agnostic REST client, free-tier presets, model tiers, disk cache, budget guard, heuristic-only fallback
@@ -1048,6 +1086,7 @@ coverage ≥80%, README + docs.
 - [x] Filter/pipeline stage counts surfaced in TUI + JSON
 - [x] Confidence-weighted scoring + provenance tags ([full]/[snippet]) — Phase 4
 - [ ] AI verdict pass (top-K "would you apply?" line) — optional, AI-gated
+- [x] `--json` + SKILL.md + installer + `matcha watch` new-vs-seen + optional MCP — Phase 6
 - [ ] RSS source + GitHub profile enrichment (optional)
 
 ---

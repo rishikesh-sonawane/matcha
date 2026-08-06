@@ -169,6 +169,30 @@
   config; heuristic-only fallback when no key; TUI run summary shows
   `AI budget: N/M used (R left)`.
 
+### ADR 17: One shared headless pipeline; agents get JSON + SKILL.md + optional MCP
+- **Status:** **Implemented** (Phase 6, 2026-08-06)
+- **Decision:** The full search pipeline was extracted into
+  `main.run_search(...)` — profile → queries → search → normalize → central
+  filters → rank → enrich — and is the single path behind the TUI AND the
+  new `matcha search`/`watch`/MCP surfaces (`quiet` mode swaps rich
+  Live/Progress for no-ops so headless stdout stays JSON-clean). Agents get:
+  (a) `search --json` — one structured document (`build_search_payload`:
+  jobs[] with `match_score` + `reasons` + provenance); (b) `watch` —
+  new-vs-seen via a `seen_urls` table in the shared `jobs.db` (`track.py`,
+  consumed ONLY by watch so interactive runs never pollute the newness
+  signal), writing `~/.matcha/latest.json`; (c) a bilingual SKILL.md shipped
+  as package data with an installer (`matcha skill --install` →
+  `~/.agents/skills/matcha` + `~/.claude/skills/matcha`); (d) an optional
+  MCP server (`matcha mcp`, `mcp>=1.0` optional extra, guarded import,
+  read-only `matcha_status` + `matcha_search` tools, credential-scrubbed
+  errors).
+- **Context:** Strategy ADR 06 made the agent surface first-class; the
+  acceptance criterion was "an agent drives a full search via the skill;
+  watch surfaces only new jobs". Agent-Reach's `skill/SKILL.md` and
+  `integrations/mcp_server.py` were used as reference patterns.
+- **Consequences:** One code path = no TUI/headless drift; `watch` is
+  cron-able; MCP stays optional (hint + exit 1 without the extra).
+
 ---
 
 ## Implemented (1.x) — historical decisions, already in the code

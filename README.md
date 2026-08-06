@@ -298,6 +298,40 @@ LinkedIn postings fall back to the zero-config Jina Reader
 (`https://r.jina.ai/`, capped at 10 jobs/batch); `data_quality` stays
 `partial` and is tagged `enrich_source: jina`.
 
+### 5. Agent & Automation Surface (Phase 6)
+
+The same pipeline (profile → search → filter → rank → enrich) that drives
+the TUI is available headlessly — the identical `run_search` path — so
+agents, cron, and scripts can drive Matcha without a terminal session.
+
+```bash
+# Ranked search as structured JSON (pipe to jq, feed an agent)
+matcha search -q "Platform Engineer" -l "Pune" -d 7 --json
+
+# Only-NEW jobs since the last watch (diff vs seen_urls, marks seen)
+matcha watch -q "Platform Engineer" -l "Pune" -d 7 --json
+
+# Write the result document to a file (watch defaults to ~/.matcha/latest.json)
+matcha search -q "Kubernetes SRE" --output ~/.matcha/latest.json
+
+# Install the bilingual agent skill (SKILL.md) so Claude/OpenCode can drive Matcha
+matcha skill --install          # → ~/.agents/skills/matcha + ~/.claude/skills/matcha
+matcha skill --uninstall
+
+# Optional MCP server (requires: pip install -e '.[agent]')
+matcha mcp
+```
+
+Each JSON document carries `{command, generated_at, query, location, days,
+ai_used, ai_budget_used, source_counts, source_errors, filter_summary,
+found_count, enriched_count, jobs[]}` — every job is its full search row plus
+`match_score` and `reasons`. `watch` adds `new_count`, `seen_count`,
+`new_jobs`, and `seen_urls_total` (new-vs-seen tracked in
+`~/.matcha/jobs.db` → `seen_urls`; only `watch` consumes it, so interactive
+runs never pollute the newness signal). `search`/`watch` need a saved profile
+(run `matcha` once interactively first); `--no-enrich`/`--no-ai-queries`
+trim the pipeline for fast scripted runs.
+
 ### Example Detail View
 
 ```
@@ -420,6 +454,9 @@ matcha/
         ├── agent_reach_io.py  # Thin adapter to `agent-reach` (doctor snapshot, gh)
         ├── ai.py            # AI provider client (presets, model tiers, budget guard)
         ├── ai_cache.py      # AI result disk cache (SQLite, opt-in TTL)
+        ├── track.py         # New-vs-seen URL tracking (`matcha watch`)
+        ├── mcp_server.py    # Optional MCP server (matcha_status, matcha_search)
+        ├── skill/           # Bundled agent SKILL.md (bilingual) + installer
         ├── config.py        # Persistent config and profile storage
         ├── models.py        # Pydantic v2 data models + ScraperResult
         ├── settings.py      # YAML config loader

@@ -1,5 +1,7 @@
 # Authoritative runtime dependency list: pyproject.toml [project].dependencies.
 # requirements.txt mirrors it for pip -r installs (venv bootstrap / CI).
+# Optional extra (NOT mirrored here — install on demand):
+#   pip install -e '.[agent]'   -> mcp (for `matcha mcp`; guarded at runtime).
 urllib3<2
 requests>=2.28.0
 requests-cache>=1.0.0

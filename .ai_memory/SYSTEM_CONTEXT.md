@@ -12,11 +12,12 @@ pass, enriches the top-N with full posting details, and presents them in a
 keyboard-driven TUI.
 
 The **Matcha 2.0 rebuild is largely complete**: Phases 0 (foundation),
-1 (data quality), 2 (normalize + filters), 4 (ranking recalibration) and
-5 (provider-agnostic AI client) are DONE. The source of truth for the
-rebuild is `revamp/matcha-2.0-strategy.md` (**Rev 12**). The codebase runs
-from the `src/matcha/` package layout with the `matcha` console script;
-root shims and `scrapers/` were deleted in Phase 1.
+1 (data quality), 2 (normalize + filters), 4 (ranking recalibration),
+5 (provider-agnostic AI client) and 6 (agent + automation) are DONE. The
+source of truth for the rebuild is
+`revamp/matcha-2.0-strategy.md` (**Rev 13**). The codebase runs from the
+`src/matcha/` package layout with the `matcha` console script; root shims
+and `scrapers/` were deleted in Phase 1.
 
 Core promise: *"enter your profile once, get ranked, personalized job
 matches"* — the original data-quality bottleneck is now addressed by
@@ -27,7 +28,7 @@ multi-backend sources, top-N enrichment, and a central filter pipeline.
 - **Personal tool, local-only, single user.** No multi-tenant, no web UI, no data selling.
 - **India-focused, region-configurable.** Naukri + India career sites stay; `indeed_domain` and city/region matching are configurable.
 - **Enrichment-only automation.** Open the apply page; **never auto-submit applications.**
-- **Human TUI and agent surface are equal front-ends.** Identical pipeline; TUI and `--json`/SKILL.md both first-class (2.0 goal — `--json`/watch are Phase 6).
+- **Human TUI and agent surface are equal front-ends.** Identical pipeline (`run_search`) drives the TUI and the headless surface — `matcha search --json`, `matcha watch` (new-vs-seen), `skill` installer, and the optional MCP server (all Phase 6).
 - **Graceful degradation everywhere.** Removing AI keys, OpenCLI, Agent-Reach, mcporter, or the network each still produces a working (if degraded) run with clear messaging (verified live for all of these).
 - **Robustness is a feature.** No silent failure; every source/backend/job failure is isolated, logged, and reported (doctor; circuit breakers are Phase 7).
 - **AI is optional and provider-agnostic.** No API key required to run (heuristic-only mode); OpenAI-compatible REST only — **implemented (Phase 5)**: provider presets in `ai.py` (Groq/Kilo/OpenRouter/OpenAI/local), model tiers best/fast, per-run budget guard, opt-in disk cache (`ai_cache.py`, `ai.cache_ttl`); legacy `MINIMAX` env kept as an alias. MCP used solely for data plumbing (Exa via mcporter) and optional agent exposure.
@@ -92,7 +93,7 @@ multi-backend sources, top-N enrichment, and a central filter pipeline.
 - **Session Journal (Crash-Safe):** Append one short timestamped line to `.ai_memory/session_log.md` after every completed step. If a session dies before the final sync, the next session reconstructs state from `git status`/`git diff` plus the journal tail.
 - **Root Cause Engineering Triage:** On failure, follow: `Symptoms → Root Cause Verification → Systematic Investigation → Mitigation Strategy → Permanent Prevention Execution`. Never guess.
 - **No Compromise on Security:** Zero hardcoded secrets; secrets via keyring/fernet; 0600 on sensitive files; credential masking in all output; symlink rejection; read-only config probes that never widen the credential boundary.
-- **Behavior-preserving refactors:** refactors must not change existing behavior; capture the test baseline before and after (430 tests today).
+- **Behavior-preserving refactors:** refactors must not change existing behavior; capture the test baseline before and after (455 tests today).
 
 ## 5. Directory Mapping Blueprint
 
@@ -106,7 +107,7 @@ matcha/                                  # project root (git, branch main)
 │   ├── session_log.md                   # append-only activity journal
 │   └── architectural_decisions.md       # ADRs — why decisions were made
 ├── revamp/                              # Matcha 2.0 planning (source of truth)
-│   ├── matcha-2.0-strategy.md           # ★ THE plan (Rev 12; Phases 0/1/2/4/5 marked done)
+│   ├── matcha-2.0-strategy.md           # ★ THE plan (Rev 13; Phases 0/1/2/4/5/6 marked done)
 │   ├── matcha-2.0-implementation-analysis.md  # findings register F-01..F-23 (mostly resolved)
 │   ├── phase-0-handoff-prompt.txt       # Phase 0 spec (implemented 2026-08-06)
 │   ├── opencli-integration-plan.md      # superseded-but-adopted background
@@ -117,6 +118,9 @@ matcha/                                  # project root (git, branch main)
 │   ├── profile.py                       # profile ingestion: PDF / LinkedIn / manual
 │   ├── ai.py                            # provider-agnostic AI client: presets, model tiers, budget guard (Phase 5)
 │   ├── ai_cache.py                      # AI result disk cache (SQLite, opt-in TTL) (Phase 5)
+│   ├── track.py                         # new-vs-seen URL tracking for `watch` (Phase 6)
+│   ├── mcp_server.py                    # optional MCP server: matcha_status / matcha_search (Phase 6)
+│   ├── skill/                           # bundled bilingual SKILL.md + installer (Phase 6)
 │   ├── matcher.py                       # confidence-weighted ranking (Phase 4) + AI wrapper
 │   ├── normalization.py                 # canonical Job: listed_epoch, salary_int, city/region, remote_ok (Phase 2)
 │   ├── filters.py                       # central pipeline: quality→age→must-skills→location→salary + provenance_tags (Phases 2/4)
@@ -129,10 +133,11 @@ matcha/                                  # project root (git, branch main)
 │       ├── linkedin.py   indeed.py   naukri.py   remoteok.py
 │       ├── web_search.py serpapi_jobs.py  career_sites.py
 │       └── backends/                    # opencli.py · mcporter.py · exa.py (Phase 1)
-├── tests/                               # 430 tests (unittest + pytest)
+├── tests/                               # 455 tests (unittest + pytest)
 │   ├── test_core.py test_ai_provider.py test_ai_client.py test_comprehensive.py test_probe.py
 │   ├── test_doctor.py test_source_contracts.py test_days_filter.py test_matcher_skill_focused.py
 │   ├── test_opencli.py test_enrichment.py test_exa_backend.py test_agent_reach_io.py
+│   ├── test_track.py test_skill.py test_agent_surface.py (Phase 6)
 │   ├── test_naukri_job_page.py test_normalization.py test_filters.py test_ranking.py
 ├── README.md  kilo.md  FuturePlan.txt  pyproject.toml  Makefile
 ├── Dockerfile  docker-compose.yml  .github/workflows/ci.yml

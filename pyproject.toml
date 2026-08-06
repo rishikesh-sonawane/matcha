@@ -29,8 +29,17 @@ dependencies = [
 [project.scripts]
 matcha = "matcha.main:main"
 
+# Optional agent surface (Phase 6, strategy §13): the MCP server is guarded
+# at runtime — install only when you want `matcha mcp`:
+#   pip install -e '.[agent]'
+[project.optional-dependencies]
+agent = ["mcp>=1.0"]
+
 [tool.setuptools]
 package-dir = {"" = "src"}
+
+[tool.setuptools.package-data]
+matcha = ["skill/*.md"]
 
 [tool.setuptools.dynamic]
 version = {attr = "matcha.__version__"}

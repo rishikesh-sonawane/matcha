@@ -2,20 +2,20 @@
 
 ## Current Focus
 
-**Phases 1, 2, 4 and 5 are COMPLETE.** The pipeline is now: profile → queries
-→ search → dedup → normalize → central filters → **confidence-weighted rank** →
-enrich top N → present. Filters are centrally enforced (quality → age →
-must-skills → location → salary) with per-stage counts; ranking is
+**Phases 1, 2, 4, 5 and 6 are COMPLETE.** The pipeline is now: profile →
+queries → search → dedup → normalize → central filters → **confidence-
+weighted rank** → enrich top N → present — shared via the `run_search`
+headless pipeline across the TUI and the agent surface (`matcha search
+--json`, `matcha watch`, MCP). Filters are centrally enforced (quality →
+age → must-skills → location → salary) with per-stage counts; ranking is
 confidence-weighted (full 1.0 · partial 0.85 · snippet 0.7) with
 recency/workplace/must-skill signals, a soft-mode rank cap, AI gated to
-enriched candidates, a flatline guard, and `[full]`/`[partial]`/`[snippet]`
-provenance tags beside `[age?]`/`[salary?]`. The AI brain is now a
-**provider-agnostic OpenAI-compatible REST client** (ai.py + ai_cache.py):
-provider presets (Groq/Kilo/OpenRouter/OpenAI/local-no-key), model tiers
-(best/fast), per-run budget guard (`ai.max_calls`, TUI summary line), and an
-opt-in disk cache (`ai.cache_ttl`, keyed on task+model+messages). **430/430
-tests pass.** Next: Phase 6 (agent + automation: `--json`, SKILL.md,
-`matcha watch`, MCP) — do NOT start yet.
+enriched candidates, and provenance tags. AI is provider-agnostic (presets,
+model tiers, budget guard, opt-in cache). New-vs-seen tracking
+(`track.py` seen_urls) powers `watch`; a bilingual SKILL.md installer and an
+optional guarded MCP server round out the agent surface. **455/455 tests
+pass.** Next: Phase 7 (hardening: circuit breakers, config hardening,
+mypy debt, RSS, coverage gate) — do NOT start yet.
 
 > 2026-08-06 session 1: full repo audit + `.ai_memory/` rewrite.
 > Session 2: Agent-Reach v1.5.0 study folded into revamp docs (strategy Rev 3).
@@ -38,6 +38,9 @@ tests pass.** Next: Phase 6 (agent + automation: `--json`, SKILL.md,
 > Session 13: **Phase 5 — Provider-agnostic AI client** (ai.py presets /
 >   tiers / budget guard + ai_cache.py opt-in SQLite disk cache + `matcha
 >   --configure` provider wizard).
+> Session 14: **Phase 6 — Agent + automation** (run_search shared pipeline,
+>   `search`/`watch`/`skill`/`mcp` subcommands, track.py seen_urls,
+>   SKILL.md installer, guarded MCP server).
 > Decisions locked in: shims-first (F-04); LinkedIn blank location = `"India"`
 > (F-08); console entry `matcha.main:main`; consent keys
 > `linkedin_consent`/`indeed_consent`; `-f json` locked (F-07); LinkedIn drops
@@ -56,7 +59,12 @@ tests pass.** Next: Phase 6 (agent + automation: `--json`, SKILL.md,
 > (`settings.ai.cache_ttl`, default 0) and keyed on task+model+messages so it
 > self-invalidates on provider/prompt change; `matcha --configure` now offers
 > the provider wizard; Groq seed model updated to `openai/gpt-oss-120b`
-> (`llama-3.3-70b-versatile` EOL 2026-08-16)**.
+> (`llama-3.3-70b-versatile` EOL 2026-08-16)**; **Phase 6: one shared
+> `run_search` pipeline drives TUI + `search`/`watch`/MCP; `watch` is the
+> ONLY consumer of `seen_urls` (TUI runs never pollute newness); the MCP
+> server is guarded (`mcp` optional extra, hint + exit 1 when absent);
+> `matcha.skill` is a PACKAGE (bundled SKILL.md + installer) — a same-named
+> module is shadowed by the package dir**.
 
 ---
 
@@ -183,17 +191,64 @@ tests pass.** Next: Phase 6 (agent + automation: `--json`, SKILL.md,
   clean; live smoke: groq preset URL/models resolve, local avail without key,
   budget 2→`None` with once-per-run warning, cache put/get/clear roundtrip.
 
-## Immediate Next Steps (Phase 6 boundary — do NOT start yet)
+## Phase 6 — Agent + automation surface (DONE 2026-08-06)
 
-1. **Phase 6 — Agent + automation**: `--json` output, SKILL.md + installer,
-   `matcha watch` + `track.py` (new-vs-seen SQLite), optional MCP server;
-   the optional AI verdict pass (§9.5, top-K "would you apply?" line) rides
-   on the now-provider-agnostic client.
+- [x] **`main.run_search()`** — the shared headless pipeline (profile → AI
+      query expansion → search_jobs → normalize → apply_filters → rank_jobs
+      → enrich_top_n) used by the TUI loop AND the new subcommands; `quiet`
+      mode (`_NullLive`/`_NullProgress` stand-ins) keeps stdout JSON-clean;
+      returns `{ranked, source_counts, source_errors, filter_summary,
+      found_count, ai_used, ai_budget_used, enriched_count}`.
+- [x] **`matcha search`** — `-q/-l/-d`, `--json` (structured document via
+      `build_search_payload`/`_job_json`: command/generated_at/query/
+      location/days/ai_used/ai_budget_used/source_counts/source_errors/
+      filter_summary/found_count/enriched_count/jobs[] with `match_score` +
+      `reasons`), `--output FILE`, `--top`, `--no-ai-queries`,
+      `--no-enrich`; shared `_headless_credentials` guard (no profile / no
+      query → error + exit 1).
+- [x] **`src/matcha/track.py`** — `seen_urls` table in the shared
+      `~/.matcha/jobs.db` (actions DB); `mark_seen` (upsert +
+      seen_count bump, returns newly inserted), `partition_new` (new vs
+      seen by URL), `stats`; no-URL jobs never marked. **Only `watch`
+      consumes it** — TUI runs don't pollute newness.
+- [x] **`matcha watch`** — same pipeline, diffs new/seen, marks seen
+      (`--no-mark-seen` opt-out), writes the full doc to `--output`
+      (default `~/.matcha/latest.json`), doc adds `new_count`/
+      `seen_count`/`new_jobs`/`seen_urls_total`/`marked_seen`.
+- [x] **SKILL.md + installer** — `src/matcha/skill/SKILL.md` (bilingual
+      zh+en, YAML frontmatter) bundled as package data (pyproject
+      `package-data`), `matcha.skill` package = data + installer
+      (`install_skill`/`uninstall_skill`/`default_destinations`);
+      `matcha skill --install/--uninstall [--dest]`.
+- [x] **MCP server** — `src/matcha/mcp_server.py`: guarded `mcp` import
+      (`pip install -e '.[agent]'`), FastMCP server with read-only
+      `matcha_status` (doctor JSON) + `matcha_search` (run_search →
+      build_search_payload), errors credential-scrubbed; `matcha mcp`
+      prints the install hint + exit 1 when `mcp` is absent.
+- [x] **pyproject** — `[project.optional-dependencies] agent = ["mcp>=1.0"]`;
+      `[tool.setuptools.package-data] matcha = ["skill/*.md"]`; requirements
+      header notes the extra.
+- [x] **Tests**: `tests/test_track.py` (6), `tests/test_skill.py` (5),
+      `tests/test_agent_surface.py` (13): payload shape + serializability,
+      quiet run_search with a fake scraper, enrich gating, watch
+      new/seen/seen_urls_total/marked_seen (tmp DB), `--no-mark-seen`,
+      headless guards (no profile / no query / defaults), cmd_search JSON
+      roundtrip, MCP guard (exit 1 + hint) + tool registration.
+- **Acceptance met:** 455/455 tests (unittest + pytest); ruff/format/bandit
+  clean; live smoke: `search --json` (72 found → 70 kept, full doc),
+  `watch` (70 new/0 seen, wrote latest.json), `skill --install` (SKILL.md
+  with frontmatter), `mcp` guard hint + exit 1.
+
+## Immediate Next Steps (Phase 7 boundary — do NOT start yet)
+
+1. **Phase 7 — Hardening**: circuit breakers (`sources/registry.py`,
+   persisted `source_state.json`), config hardening (atomic writes,
+   symlink rejection), GitHub profile enrichment, RSS source, coverage
+   ≥80%, **mypy debt cleanup (24 pre-existing legacy errors)**.
 2. **Phase 3-adjacent polish**: saved-jobs persist enriched+normalized fields
    (`actions.py` new columns: salary, salary_int, apply_url, listed_epoch);
-   salary filter already works via `profile.min_salary` / `settings`.
-3. **Do NOT build Phase 7+ features** (hardening: circuit breakers, config
-   hardening, RSS, coverage gate) until the above are specced.
+   optional AI verdict pass (§9.5).
+3. **Do NOT build beyond Phase 7 scope** without a fresh spec.
 
 ## Blockers / Notes
 

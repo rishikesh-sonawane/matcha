@@ -429,3 +429,72 @@ workplace / must-skill signals, soft-mode rank cap, provenance tags (strategy §
   start yet.
 
 ---
+
+## Session 14 — Phase 6: Agent + automation surface (2026-08-06)
+
+**Goal:** Phase 6 — ranked `--json`, SKILL.md + installer, `matcha watch`
+new-vs-seen, optional MCP server (strategy §13/§10.4).
+
+- **Research:** read Agent-Reach's `integrations/mcp_server.py` (guarded
+  `Server` + tool pattern, credential-scrubbed errors) and
+  `skill/SKILL.md` (bilingual YAML-frontmatter structure). Confirmed `mcp`
+  is NOT installed on this machine → the server must be a guarded optional
+  extra.
+- **Built (`main.py`):** `run_search()` — ONE shared headless pipeline
+  (profile → AI query expansion → search_jobs → normalize → apply_filters →
+  rank_jobs → enrich_top_n) used by the TUI loop AND the new subcommands;
+  returns `{ranked, source_counts, source_errors, filter_summary,
+  found_count, ai_used, ai_budget_used, enriched_count}`. `quiet` mode uses
+  `_NullLive`/`_NullProgress` stand-ins so headless stdout stays JSON-clean
+  (`search_jobs`/`rank_jobs` gained `quiet=False` kwargs — tests unaffected).
+  New subcommands: `search` (`-q/-l/-d --json --output --top
+  --no-ai-queries --no-enrich`), `watch` (+`--no-mark-seen`), `skill
+  --install/--uninstall [--dest]`, `mcp`. `build_search_payload`/`_job_json`
+  produce the JSON document; `_headless_credentials` guards (no profile / no
+  query → error + exit 1). TUI `run()` now calls `run_search` — behavior and
+  prints preserved (verified by the untouched TUI test surface).
+- **Built (`track.py`):** `seen_urls` table in the SHARED jobs.db (reuses
+  actions DB); `mark_seen` (upsert, `seen_count` bump, returns newly
+  inserted), `partition_new` (new vs seen by URL), `stats`. Only `watch`
+  consumes it — interactive runs never pollute the newness signal.
+- **Built (`skill/`):** bilingual `SKILL.md` (en+zh, YAML frontmatter, agent
+  workflow: doctor → search → summarize) bundled as package data; the
+  installer lives in the `matcha.skill` PACKAGE `__init__.py` (a same-named
+  `skill.py` module is shadowed by the package dir — caught by the test
+  suite; installer + data merged into one namespace). `matcha skill
+  --install` targets `~/.agents/skills/matcha` + `~/.claude/skills/matcha`
+  (or `--dest`).
+- **Built (`mcp_server.py`):** guarded FastMCP server (`mcp>=1.0` optional
+  extra, `pip install -e '.[agent]'`); tools `matcha_status` (doctor JSON)
+  and `matcha_search` (run_search → build_search_payload); errors
+  credential-scrubbed; `matcha mcp` prints the hint + exit 1 when `mcp` is
+  absent.
+- **Packaging:** pyproject `[project.optional-dependencies] agent =
+  ["mcp>=1.0"]` + `[tool.setuptools.package-data] matcha = ["skill/*.md"]`;
+  requirements.txt header notes the extra.
+- **Test bugs caught:** (1) location filter correctly dropped my "Remote"
+  fixture job (profile has a concrete city + no remote preference) → fixed
+  the fixture, not the filter; (2) `matcha.skill` name collision → installer
+  merged into the package; (3) `mock.patch.object(FastMCP)` needs
+  `create=True` when the name doesn't exist (mcp not installed).
+- **Review fixes:** `--json` + `--output` together printed the "Wrote …"
+  note to STDOUT **before** the JSON document — corrupting
+  `matcha search --json --output x.json` and EVERY `matcha watch --json`
+  (watch defaults `--output` to `~/.matcha/latest.json`) → the note now
+  goes to a stderr console (`_err_console = Console(stderr=True)`);
+  regression test asserts stdout stays a pure JSON stream, the file
+  matches stdout, and "Wrote" never touches stdout.
+- **Validation (all green):** 455/455 tests (unittest + pytest) — +25 new;
+  ruff / format / bandit clean. Live smoke: `matcha search --json` (72
+  found → 70 kept, full document incl. match_score/reasons/provenance),
+  `matcha watch` (70 new / 0 seen, wrote latest.json), `matcha skill
+  --install --dest /tmp/...` (SKILL.md with frontmatter), `matcha mcp`
+  (hint + exit 1).
+- **Docs:** strategy → Rev 13 (§13 IMPLEMENTED, Phase 6 ✅, §19 checklist);
+  README Agent & Automation section + project tree; memory bank synced.
+- **Next:** Phase 7 boundary: circuit breakers (`registry.py` + persisted
+  `source_state.json`), config hardening (atomic writes, symlink
+  rejection), GitHub profile enrichment, RSS source, coverage ≥80%, mypy
+  debt cleanup — do NOT start yet.
+
+---
