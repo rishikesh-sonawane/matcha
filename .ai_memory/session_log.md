@@ -72,4 +72,53 @@
 - **Step 7 — validation (all green):** **152/152 tests** (unittest + pytest); ruff check + format clean; pre-commit all 7 hooks passed; bandit (config honored) 0 issues exit 0; `matcha --help` / `matcha doctor` (live, 4/7 ready) / `matcha doctor --json` / `python3 -m matcha.main --help` all work; **pyinstaller onefile build succeeded and the 52MB binary runs `--help` and `doctor --json`** (build artifacts cleaned after). Code review passed; only nits raised and all addressed (egg-info, doc drift, dup deps, test path cleanup).
 - **Next:** Phase 1 part 2 — **OpenCLI backends for LinkedIn/Indeed (+ consent flow)**, Exa web backend, Naukri job-page extraction, `agent_reach_io.py`. Before `agent_reach_io.py`, verify the exact `agent-reach doctor --json` shape + `agent-reach install --channels=opencli` flags in `~/Code/projects/Agent-Reach/agent_reach/cli.py`.
 
+### 2026-08-06 — Session 6: Phase 1 part 2 — OpenCLI backends (DONE)
+
+- **Step 0 — housekeeping:** committed the Phase-1 entry-point migration; untracked 19 stray `.pyc` files that had been tracked since before `.gitignore` (`chore: untrack stray .pyc files`).
+- **Step 1 — interface locked (live + source):** `opencli --help` / `linkedin search --help` / `indeed search --help` confirmed flag sets and `-f json` (choices `table|plain|json|yaml|md|csv`) — **F-07 resolved**. Daemon live at `127.0.0.1:19825/status` (v1.8.4, `extensionConnected: false`). Row shapes locked from OpenCLI adapter sources: linkedin search `{rank,title,company,location,listed,salary,url}`; linkedin job-detail (no salary, F-06); indeed search `{rank,id,title,company,location,salary,tags,url}`; indeed job. Discovered **Indeed adapter is US-site** (`INDEED_ORIGIN = www.indeed.com`) — corrected strategy §6.2/§6.3.
+- **Step 2 — `src/matcha/sources/backends/opencli.py`:** ported Agent-Reach probe (no `opencli doctor`, strip `OPENCLI_DAEMON_PORT`, loopback `/status` + `X-OpenCLI: 1`, `extensionConnected`=ready); `consent_granted()` (flat key + `scrapers` subsection, defaults False); `run_opencli()` tolerant runner (ANSI/noise stripping, `raw_decode`, `{rows:...}` unwrap, BROWSER_CONNECT YAML extraction).
+- **Step 3 — sources:** `linkedin.py`/`indeed.py` search dispatchers (`opencli` when `_opencli_should_run` = consent+healthy, else guest-api/html; explicit `backend=` override documented as opt-in); row mapping keeps `salary`/`listed`/`apply_url`/`job_key`/`tags`; `--date-posted` (week/month/any) + `--fromage` (1/3/7/14) mappings. `check()` iterates `ordered_backends()` with consent gating; **dropped `ddgs` from LinkedIn** (never implemented in search — doctor honesty). `main.py configure_opencli()` consent flow gated on `ready`; ConfigSchema += `linkedin_consent`/`indeed_consent`.
+- **Step 4 — tests:** `tests/test_opencli.py` (46): probe contract, daemon fetch, consent, JSON parsing, runner (live-caught indented-YAML message regex bug fixed + regression test), dispatch, mapping. Suite: 152 → **198 tests**.
+- **Step 5 — validation (all green):** 198/198 (unittest + pytest); ruff/format clean; pre-commit all 7 hooks; bandit 0 issues; live `opencli_status()` correct; live BROWSER_CONNECT extraction clean; `matcha doctor` shows `guest-api` active (no consent); `matcha --configure` correctly gates the consent prompt when the bridge is down. Code review passed — nits all addressed (ddgs honesty, dead `_OPENCLI_INDEED_ORIGIN` const removed, explicit-backend comment, `json_output` param dropped).
+- **Docs:** strategy → Rev 5 (§6.2/§6.3 corrections + F-07/F-130 resolutions); implementation-analysis §2 + risk rows updated. Memory bank synced.
+- **Next:** top-N enrichment via `opencli linkedin job-detail` / `indeed job` (parallel ≤5, 30s, per-job isolation; no salary from detail), then Exa backend, Naukri job-page, `agent_reach_io.py`.
+
+### 2026-08-06 — Session 7: Phase 1 part 3 — top-N enrichment (DONE)
+
+- **Step 1 — backends/opencli.py:** added `linkedin_job_detail(url)` and
+  `indeed_job_detail(jk)` helpers (wrappers over `run_opencli`, return the
+  first row or None).
+- **Step 2 — `src/matcha/sources/enrichment.py`:** `enrich_job` (in-place,
+  returns bool) + `enrich_top_n` (`ThreadPoolExecutor min(max_workers,5)`,
+  returns `(enriched_count, ranked)`, jobs mutated in place). LinkedIn merges
+  description/apply_url/workplace_type/job_type/applicants/listed/company_url
+  (**never salary — F-06**); Indeed merges description/job_type/salary/url
+  (Indeed detail has salary). Per-job isolation: `enrich_error` on failure,
+  worker raises swallowed. **Jina zero-config fallback** (bridge down) for
+  LinkedIn only — deliberately NOT gated on OpenCLI consent (strategy §8
+  "zero-config"), capped at `_JINA_MAX_JOBS = 10` for rate limits,
+  `data_quality=partial` + `enrich_source=jina`.
+- **Step 3 — settings/models:** `EnrichmentConfig` (enabled/top_n 30/timeout
+  30/max_workers 5) + `_DEFAULTS["enrichment"]`.
+- **Step 4 — main.py:** enrichment wired after `rank_jobs` (console.status +
+  "Enriched N top jobs with details"); `show_job_detail` shows
+  Salary/Workplace/Posted/Applicants/Apply URL; `o` opens `apply_url` when
+  present.
+- **Step 5 — tests:** `tests/test_enrichment.py` (17): merge contracts incl.
+  F-06 no-salary assert, isolation (detail-None + raising worker), gates
+  (no consent → skip opencli path; **jina runs without consent**), top-N
+  selection/order, jina cap (15 jobs → 10 fetches), jina 429 failure.
+  First pass had env-dependent consent tests + decorator-order bug (unmocked
+  requests → real network); fixed to be hermetic. Suite: 198 → **215 tests**.
+- **Step 6 — validation (all green):** 215/215 (unittest + pytest); ruff /
+  format / bandit clean; live gate smoke: no-consent enrichment skips in
+  0.06s, zero network. Code review passed — nits addressed (test
+  hermeticity, jina cap, future.result guard, jina ungated by consent per
+  §8, message wording).
+- **Docs:** strategy → Rev 6 (§8 marked implemented + consent/cap notes);
+  README config example + detail-view example updated. Memory bank synced.
+- **Next:** Exa Web Search backend; Naukri job-page extraction;
+  `agent_reach_io.py`. Phase 2 boundary: re-rank on enriched signals,
+  saved-jobs enriched columns, filters module — do NOT start yet.
+
 ---

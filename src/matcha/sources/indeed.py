@@ -13,6 +13,7 @@ except ImportError:
     DDGS = None
 
 from matcha.models import ScraperResult
+from matcha.sources.backends.opencli import _opencli_should_run, run_opencli
 from matcha.sources.base import Source, probe_url
 
 from .utils import limiter, resilient_get
@@ -42,6 +43,102 @@ def resolve_indeed_url(url: str, domain: str = "in.indeed.com") -> str:
             logger.warning("pagead/clk redirect failed: %s", e)
 
     return url
+
+
+def search_indeed_jobs(
+    query: str,
+    location: str = "",
+    domain: str = "in.indeed.com",
+    **kwargs: Any,
+) -> ScraperResult:
+    """Acquire Indeed jobs, preferring the consented OpenCLI backend.
+
+    Phase 1 (strategy §6.3): the OpenCLI browser backend bypasses the
+    anti-bot gate that breaks ``cloudscraper`` on Python 3.14 and yields
+    salary + stable URLs. When consented but failing at call time, degrade
+    to the HTML/DDGS path instead of returning empty.
+    """
+    backend = kwargs.pop("backend", None)
+    config = kwargs.pop("config", None)
+    # An explicit backend= override is the caller opting in — it intentionally
+    # skips the consent+health gate (the opencli search still falls back to
+    # html when it cannot run). Implicit routing below always gates.
+    if backend is None:
+        backend = "opencli" if _opencli_should_run(config, "indeed") else "html"
+    if backend == "opencli":
+        result = _search_indeed_opencli(query, location, **kwargs)
+        if result is not None:
+            return result
+        logger.info("OpenCLI Indeed unavailable at search time; falling back to HTML")
+    return _search_indeed_html(query, location, domain=domain, **kwargs)
+
+
+def _search_indeed_opencli(
+    query: str,
+    location: str = "",
+    **kwargs: Any,
+) -> ScraperResult | None:
+    """Run ``opencli indeed search``; None = could not run (caller falls back).
+
+    Note: OpenCLI's Indeed adapter is hardcoded to the US site
+    (clis/indeed/utils.js INDEED_ORIGIN = https://www.indeed.com). --location
+    still filters results, but the index is US-global, not in.indeed.com.
+    """
+    days = kwargs.get("days")
+    limit = min(int(kwargs.get("limit") or 25), 25)  # Indeed caps at one page
+
+    args = ["indeed", "search", query, "--limit", str(limit)]
+    if location:
+        args += ["--location", location]
+    if days:
+        args += ["--fromage", str(_fromage_flag(days))]
+
+    result = run_opencli(args, timeout=int(kwargs.get("timeout") or 60))
+    if not result["ok"]:
+        logger.warning("OpenCLI Indeed search failed: %s", result["error"])
+        return None
+
+    jobs = _parse_indeed_rows(result["rows"], location)
+    return ScraperResult(jobs=jobs, source="Indeed", backend="opencli", data_quality="partial")
+
+
+def _fromage_flag(days: int) -> int:
+    """Map matcha's ``days`` filter onto Indeed's --fromage set (1/3/7/14)."""
+    days = max(1, int(days))
+    for allowed in (14, 7, 3, 1):
+        if days >= allowed:
+            return allowed
+    return 14
+
+
+def _parse_indeed_rows(rows: list[dict[str, Any]], default_location: str) -> list[dict[str, Any]]:
+    """Map OpenCLI Indeed search rows onto matcha job dicts.
+
+    OpenCLI row shape: {rank, id, title, company, location, salary, tags,
+    url}. ``id`` is the Indeed jk (job key) used later by ``indeed job`` for
+    enrichment; salary is kept for the Phase 1+ data-quality work.
+    """
+    jobs: list[dict[str, Any]] = []
+    for row in rows:
+        title = str(row.get("title") or "").strip()
+        if not title:
+            continue
+        job: dict[str, Any] = {
+            "title": title,
+            "company": str(row.get("company") or "").strip(),
+            "location": str(row.get("location") or "").strip() or default_location or "India",
+            "description": str(row.get("salary") or "").strip(),
+            "url": str(row.get("url") or "").strip(),
+            "source": "Indeed",
+        }
+        if row.get("salary"):
+            job["salary"] = str(row["salary"]).strip()
+        if row.get("id"):
+            job["job_key"] = str(row["id"]).strip()
+        if row.get("tags"):
+            job["tags"] = row["tags"]
+        jobs.append(job)
+    return jobs
 
 
 def _fetch_indeed_page(url: str, params: dict[str, str]) -> requests.Response:
@@ -183,7 +280,7 @@ def _search_indeed_via_ddgs(query: str, location: str) -> list[dict[str, str]]:
     return jobs
 
 
-def search_indeed_jobs(
+def _search_indeed_html(
     query: str,
     location: str = "",
     domain: str = "in.indeed.com",
@@ -260,23 +357,43 @@ def search_indeed_jobs(
 
 
 class IndeedSource(Source):
-    """Indeed India — direct HTML scraping, DDGS fallback."""
+    """Indeed — OpenCLI (browser, consented) preferred, HTML/DDGS fallback."""
 
     name = "indeed"
-    description = "Indeed India — HTML + DDGS fallback"
-    backends = ["html", "ddgs"]
+    description = "Indeed — OpenCLI browser backend, HTML + DDGS fallback"
+    backends = ["opencli", "html", "ddgs"]
     tier = 0
 
     def check(self, config: dict[str, Any] | None = None) -> tuple[str, str]:
-        status, msg = probe_url("https://in.indeed.com/jobs?q=engineer&l=India")
-        if status == "ok":
-            self.active_backend = "html"
-            return "ok", "Indeed India responding (HTTP 200)"
-        if status == "warn":
-            self.active_backend = None
-            return "warn", "Indeed is anti-bot gated; DDGS fallback available"
+        from matcha.sources.backends.opencli import consent_granted, opencli_status, opencli_summary
+
+        opencli_hint = ""
+        for backend in self.ordered_backends(config):
+            if backend == "opencli":
+                if not consent_granted(config, "indeed"):
+                    continue  # not opted in — skip without penalty
+                st = opencli_status()
+                if st.ready:
+                    self.active_backend = "opencli"
+                    return "ok", f"OpenCLI browser bridge connected (v{st.version})"
+                opencli_hint = opencli_summary(st)
+            elif backend == "html":
+                status, msg = probe_url("https://in.indeed.com/jobs?q=engineer&l=India")
+                if status == "ok":
+                    self.active_backend = "html"
+                    return "ok", "Indeed India responding (HTTP 200)"
+                if status == "warn":
+                    self.active_backend = None
+                    return "warn", "Indeed is anti-bot gated; DDGS fallback available"
+            elif backend == "ddgs":
+                status, msg = self._ddgs_status(DDGS is not None)
+                if status == "ok":
+                    self.active_backend = "ddgs"
+                    return "ok", msg
         self.active_backend = None
-        return "error", f"Indeed unreachable: {msg}"
+        if opencli_hint:
+            return "warn", f"OpenCLI not connected ({opencli_hint}); using fallbacks"
+        return "error", "Indeed unreachable via any backend"
 
     def search(self, query: str, location: str = "", **kwargs: Any) -> ScraperResult:
         return search_indeed_jobs(query, location, **kwargs)

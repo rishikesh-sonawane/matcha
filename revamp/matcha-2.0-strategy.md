@@ -5,6 +5,12 @@
 > **Date:** 2026-08-06 · Rev 2 (adds: robust pipeline, job-age filter, concrete AI integration, code-quality standards, gap closure)
 > Rev 3 (adds: verified Agent-Reach reference — exact probe/doctor/channel contracts, side-effect-free OpenCLI probing, credential-boundary config reads)
 > Rev 4 (adds: pre-implementation gap/blocker analysis — see `matcha-2.0-implementation-analysis.md`; OpenCLI flag + salary corrections, expanded Phase-0 scope, CI fixes)
+> Rev 5 (adds: Phase 0 + Phase 1-part-1 DONE; OpenCLI backends implemented —
+> consent keys resolved (F-130), `-f json` locked (F-07), Indeed-US-site + LinkedIn-drops-ddgs corrections, `matcha doctor` reports live backends)
+> Rev 6 (adds: Phase 1-part-3 enrichment DONE — §8 implemented in
+> `sources/enrichment.py`: OpenCLI job-detail top-N parallel ≤5 + per-job
+> isolation, Jina zero-config fallback (ungated by consent, capped at 10),
+> TUI shows salary/apply_url and `o` opens apply_url)
 
 ---
 
@@ -237,8 +243,8 @@ class Source(ABC):
 
 | Source | Preferred | Fallbacks | Data richness |
 |---|---|---|---|
-| **LinkedIn** | `opencli` (authenticated, 25–100/job, details) | `guest-api` (~10, no desc) ▸ `ddgs` | apply_url, salary, workplace_type, full description, applicants, listed |
-| **Indeed India** | `opencli` (browser, bypasses Cloudflare) | `html` (cloudscraper, py≤3.11) ▸ `ddgs` | full description, salary, apply link |
+| **LinkedIn** | `opencli` (authenticated, 25–100/job, details) | `guest-api` (~10, no desc) | apply_url, salary, workplace_type, full description, applicants, listed |
+| **Indeed** (US index) | `opencli` (browser, bypasses Cloudflare; adapter is US-site — §6.3) | `html` (cloudscraper, py≤3.11) ▸ `ddgs` | salary, tags, full description via `indeed job` |
 | **Naukri** | `job-page` (parse real `job-listings-*` pages) | `ddgs` (link discovery → enrich) | real description from posting page |
 | **RemoteOK** | `api` | — | structured, full description |
 | **Web Search** | `exa` (semantic, via mcporter) | `ddgs` | clean results, no regex-guessing |
@@ -264,9 +270,19 @@ Verified flag sets (OpenCLI 1.8.4, 2026-08-06): `--date-posted` ∈
 mid-senior|director|executive` · `--job-type` ∈ `full-time|part-time|contract|
 temporary|volunteer|internship|other` · `--remote` ∈ `on-site|hybrid|remote` ·
 `--limit/--start/--details` (details enriches rows inline, per-row failures
-don't abort). ⚠️ `-f json` is assumed but **unverified** — lock the exact
-output-format flag via `opencli linkedin search --help` before implementing
-(see F-07 in the implementation-analysis doc).
+don't abort). ✅ **F-07 resolved (Phase 1, 2026-08-06):** `-f json` is a
+verified `--help` choice (`table|plain|json|yaml|md|csv`) and emits
+`JSON.stringify(data, null, 2)` — a bare row array for search commands, e.g.
+LinkedIn `{rank, title, company, location, listed, salary, url}` (+ `--details`
+adds `description`/`apply_url`), possibly wrapped in `{rows: [...]}`. Indeed
+rows: `{rank, id, title, company, location, salary, tags, url}` (`id` = jk);
+`indeed job` returns `{id, title, company, location, salary, job_type,
+description, url}`. All locked from the OpenCLI adapter sources (same date).
+⚠️ **Indeed adapter is US-site:** `clis/indeed/utils.js` hardcodes
+`INDEED_ORIGIN = https://www.indeed.com` — `--location` still filters, but the
+index is US-global, not `in.indeed.com`. LinkedIn drop `ddgs` (Phase 0 listed
+it, but search never implemented a DDGS path; honest backends = `opencli ▸
+guest-api`).
 
 `job-detail` returns `title, company, location, workplace_type, job_type,
 applicants, listed, apply_url, company_url, description` — **no `salary`**
@@ -274,6 +290,13 @@ applicants, listed, apply_url, company_url, description` — **no `salary`**
 see F-06). Agent-Reach already installs/probes OpenCLI (`backends/opencli.py`,
 `agent-reach install --channels=opencli`); Matcha reuses that health signal
 (see §6.5).
+
+**Consent flow (F-130 resolved, Phase 1):** `matcha --configure` prompts
+"use your logged-in Chrome for LinkedIn/Indeed?" only when
+`opencli_status().ready` (never ask while the bridge is down); opt-in writes
+`linkedin_consent` / `indeed_consent` (bool, default false) to config.json.
+Sources use OpenCLI only when consented **and** healthy, degrading to
+guest-api/html when the bridge is down at call time.
 
 Rules:
 - Existing scrapers stay as **named fallbacks, never deleted**.
@@ -472,6 +495,17 @@ filters:
 ---
 
 ## 8. Enrichment Layer (scope = enrichment only)
+
+> ✅ **Implemented (Phase 1 part 3, 2026-08-06)** in
+> `src/matcha/sources/enrichment.py` — `enrich_job` + `enrich_top_n`
+> (`min(top_n,5)` workers, per-job isolation, `enrich_error` on failure),
+> both LinkedIn (job-detail) and Indeed (`indeed job <jk>`, which *does*
+> return salary) supported; Jina Reader fallback runs **without** OpenCLI
+> consent (zero-config per this section) and is capped at 10 jobs/batch;
+> configurable via `settings.enrichment` (enabled/top_n/timeout/max_workers);
+> TUI detail panel shows Salary/Workplace/Posted/Applicants/Apply URL and `o`
+> opens `apply_url` when present. Re-rank on enriched signals (step 8 of §7)
+> is still future work.
 
 After `rank_jobs`, enrich the top N (default 30) with a real LinkedIn posting
 URL via `opencli linkedin job-detail`:

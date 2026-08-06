@@ -63,6 +63,9 @@ class ConfigSchema(BaseModel):
     last_query: str = ""
     last_location: str = ""
     last_days: int = 7
+    # OpenCLI consent (strategy §6.3): opt-in to the browser-bridge backend.
+    linkedin_consent: bool = False
+    indeed_consent: bool = False
 
 
 class SearchConfig(BaseModel):
@@ -83,7 +86,15 @@ class ScraperConfig(BaseModel):
     indeed_domain: str = "in.indeed.com"
 
 
+class EnrichmentConfig(BaseModel):
+    enabled: bool = True
+    top_n: int = 30
+    timeout: int = 30
+    max_workers: int = 5
+
+
 class Settings(BaseModel):
     search: SearchConfig = Field(default_factory=SearchConfig)
     ai: AIConfig = Field(default_factory=AIConfig)
     scrapers: ScraperConfig = Field(default_factory=ScraperConfig)
+    enrichment: EnrichmentConfig = Field(default_factory=EnrichmentConfig)

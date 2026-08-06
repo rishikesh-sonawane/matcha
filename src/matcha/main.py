@@ -102,6 +102,53 @@ def configure_ai():
         console.print("[green]AI configuration saved![/green]")
 
 
+def configure_opencli():
+    """One-time consent flow for the OpenCLI browser bridge (strategy §6.3).
+
+    Gated on ``opencli_status().ready``: never ask when the bridge is down.
+    Opting in writes ``linkedin_consent`` / ``indeed_consent`` to config.json;
+    both default to False, so OpenCLI is only ever used after an explicit yes.
+    """
+    from matcha.sources.backends.opencli import OPENCLI_EXTENSION_URL, opencli_status
+
+    st = opencli_status()
+    if not st.installed:
+        console.print(
+            "[yellow]OpenCLI is not installed.[/yellow] It lets Matcha search "
+            "LinkedIn/Indeed through your logged-in Chrome for far richer results.\n"
+            f"  npm install -g @jackwener/opencli\n"
+            f"Then enable the extension: {OPENCLI_EXTENSION_URL}"
+        )
+        return
+    if st.broken:
+        console.print(
+            "[yellow]OpenCLI is installed but cannot execute[/yellow] "
+            "(broken node environment). Reinstall:\n  npm install -g @jackwener/opencli"
+        )
+        return
+    if not st.extension_connected:
+        console.print(
+            "[yellow]OpenCLI is installed but its browser bridge is not connected.[/yellow]\n"
+            "  1. Keep Chrome open with the OpenCLI extension enabled\n"
+            f"  2. Install/enable the extension: {OPENCLI_EXTENSION_URL}\n"
+            "  3. Run `matcha --configure` again"
+        )
+        return
+
+    config = load_config()
+    for label, key in (("LinkedIn", "linkedin_consent"), ("Indeed", "indeed_consent")):
+        if Confirm.ask(
+            f"[yellow]Use your logged-in Chrome for {label} searches?[/yellow] "
+            "(OpenCLI backend: salary, listed dates, stable URLs)",
+            default=False,
+        ):
+            config[key] = True
+    save_config(config)
+    console.print(
+        "[green]OpenCLI consent saved![/green] (run `matcha doctor` to see live backends)"
+    )
+
+
 def run_scraper(
     name: str,
     scraper_func: Any,
@@ -369,22 +416,31 @@ def build_results_table(
 
 
 def show_job_detail(job: dict[str, Any], score: float, reasons: list[str]) -> None:
+    lines = [f"[bold]{job.get('title', 'N/A')}[/bold]"]
+    lines.append(f"[cyan]Company:[/cyan] {job.get('company', 'N/A')}")
+    if job.get("salary"):
+        lines.append(f"[cyan]Salary:[/cyan] {job['salary']}")
+    if job.get("workplace_type"):
+        lines.append(f"[cyan]Workplace:[/cyan] {job['workplace_type']}")
+    if job.get("listed"):
+        lines.append(f"[cyan]Posted:[/cyan] {job['listed']}")
+    if job.get("applicants"):
+        lines.append(f"[cyan]Applicants:[/cyan] {job['applicants']}")
+    lines.append(f"[cyan]Location:[/cyan] {job.get('location', 'N/A')}")
+    lines.append(f"[cyan]Source:[/cyan] {job.get('source', 'N/A')}")
+    url = job.get("apply_url") or job.get("url", "")
+    label = "Apply URL" if job.get("apply_url") else "URL"
+    lines.append(f"[cyan]{label}:[/cyan] {url}")
+    lines.append(f"[cyan]Match Score:[/cyan] [bold]{score}%[/bold]")
+    lines.append("")
+    lines.append("[bold]Why this matches:[/bold]")
+    lines.extend(f"  \u2022 {r}" for r in reasons)
+    if job.get("description"):
+        lines.append(f"\n[dim]Description:[/dim]\n{job['description'][:800]}")
     console.print()
     console.print(
         Panel(
-            f"[bold]{job.get('title', 'N/A')}[/bold]\n"
-            f"[cyan]Company:[/cyan] {job.get('company', 'N/A')}\n"
-            f"[cyan]Location:[/cyan] {job.get('location', 'N/A')}\n"
-            f"[cyan]Source:[/cyan] {job.get('source', 'N/A')}\n"
-            f"[cyan]URL:[/cyan] {job.get('url', 'N/A')}\n"
-            f"[cyan]Match Score:[/cyan] [bold]{score}%[/bold]\n\n"
-            f"[bold]Why this matches:[/bold]\n"
-            + "\n".join(f"  \u2022 {r}" for r in reasons)
-            + (
-                f"\n\n[dim]Description:[/dim]\n{job.get('description', '')[:500]}"
-                if job.get("description")
-                else ""
-            ),
+            "\n".join(lines),
             title="[bold]Job Details[/bold]",
             border_style="green",
         )
@@ -612,7 +668,9 @@ def prompt_loop(
         elif st.mode == "detail":
             idx = st.detail_idx
         if 0 <= idx < len(ranked):
-            url = ranked[idx][1].get("url", "")
+            job = ranked[idx][1]
+            # Enriched jobs carry an apply_url (strategy §8) — prefer it.
+            url = job.get("apply_url") or job.get("url", "")
             if url:
                 webbrowser.open(url)
 
@@ -661,7 +719,11 @@ def run() -> None:
     subparsers = parser.add_subparsers(dest="command")
     doctor_parser = subparsers.add_parser("doctor", help="Check job-source health")
     doctor_parser.add_argument("--json", action="store_true", help="Emit the report as JSON")
-    parser.add_argument("--configure", action="store_true", help="Configure API keys (SerpAPI, AI)")
+    parser.add_argument(
+        "--configure",
+        action="store_true",
+        help="Configure API keys (SerpAPI, AI) + OpenCLI consent",
+    )
     parser.add_argument(
         "--new-profile", "-n", action="store_true", help="Re-enter profile from scratch"
     )
@@ -684,6 +746,7 @@ def run() -> None:
     if args.configure:
         configure_serpapi()
         configure_ai()
+        configure_opencli()
         console.print("[green]Configuration complete![/green] Run [bold]matcha[/bold] to search.")
         return
 
@@ -772,6 +835,24 @@ def run() -> None:
         ai_top_n = settings.get("ai", {}).get("top_n", 30)
         ai_timeout = settings.get("ai", {}).get("timeout", 60)
         ranked = rank_jobs(jobs, profile, use_ai=use_ai, ai_top_n=ai_top_n, ai_timeout=ai_timeout)
+
+        # Phase 1 part 3 (strategy §7 step 7 / §8): enrich the top N with real
+        # posting details (OpenCLI job-detail, Jina fallback). Silently skips
+        # when not consented or the browser bridge is down.
+        enrich_cfg = settings.get("enrichment", {})
+        if enrich_cfg.get("enabled", True) and ranked:
+            from matcha.sources.enrichment import enrich_top_n
+
+            with console.status("[yellow]Enriching top jobs with full details...[/yellow]"):
+                enriched, ranked = enrich_top_n(
+                    ranked,
+                    top_n=int(enrich_cfg.get("top_n", 30)),
+                    max_workers=int(enrich_cfg.get("max_workers", 5)),
+                    timeout=int(enrich_cfg.get("timeout", 30)),
+                    config=config,
+                )
+            if enriched:
+                console.print(f"[dim]Enriched [cyan]{enriched}[/cyan] top jobs with details[/dim]")
         result = prompt_loop(ranked, source_counts, source_errors, ai_enabled=use_ai)
 
         if result != "re_run":

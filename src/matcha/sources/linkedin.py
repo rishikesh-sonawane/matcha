@@ -6,6 +6,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from matcha.models import ScraperResult
+from matcha.sources.backends.opencli import _opencli_should_run, run_opencli
 from matcha.sources.base import Source, probe_url
 
 from .utils import resilient_get
@@ -30,6 +31,105 @@ def search_linkedin_jobs(
     location: str = "",
     **kwargs: Any,
 ) -> ScraperResult:
+    """Acquire LinkedIn jobs, preferring the consented OpenCLI backend.
+
+    Phase 1 (strategy §6.3): when the user opted in (``linkedin_consent`` in
+    config) and the OpenCLI browser bridge is healthy, search through the
+    user's logged-in Chrome for rich cards (salary, listed date, stable
+    URLs). If OpenCLI is consented but fails at call time, degrade to the
+    guest API instead of returning empty (graceful degradation rule).
+    """
+    backend = kwargs.pop("backend", None)
+    config = kwargs.pop("config", None)
+    # An explicit backend= override is the caller opting in — it intentionally
+    # skips the consent+health gate (the opencli search still falls back to
+    # guest-api when it cannot run). Implicit routing below always gates.
+    if backend is None:
+        backend = "opencli" if _opencli_should_run(config, "linkedin") else "guest-api"
+    if backend == "opencli":
+        result = _search_linkedin_opencli(query, location, **kwargs)
+        if result is not None:
+            return result
+        logger.info("OpenCLI LinkedIn unavailable at search time; falling back to guest API")
+    return _search_linkedin_guest_api(query, location, **kwargs)
+
+
+def _search_linkedin_opencli(
+    query: str,
+    location: str = "",
+    **kwargs: Any,
+) -> ScraperResult | None:
+    """Run ``opencli linkedin search``; None = could not run (caller falls back)."""
+    # F-08 (user-confirmed): blank location searches the home market.
+    loc = location if location else "India"
+    days = max(1, kwargs.get("days") or 7)
+    limit = min(int(kwargs.get("limit") or 25), 100)
+
+    args = [
+        "linkedin",
+        "search",
+        query,
+        "--location",
+        loc,
+        "--limit",
+        str(limit),
+        "--date-posted",
+        _date_posted_flag(days),
+    ]
+    if kwargs.get("details"):
+        args.append("--details")
+
+    result = run_opencli(args, timeout=int(kwargs.get("timeout") or 60))
+    if not result["ok"]:
+        logger.warning("OpenCLI LinkedIn search failed: %s", result["error"])
+        return None
+
+    jobs = _parse_linkedin_rows(result["rows"], loc)
+    data_quality = "full" if kwargs.get("details") else "partial"
+    return ScraperResult(jobs=jobs, source="LinkedIn", backend="opencli", data_quality=data_quality)
+
+
+def _date_posted_flag(days: int) -> str:
+    """Map matcha's ``days`` filter onto LinkedIn's --date-posted set."""
+    if days <= 7:
+        return "week"
+    if days <= 30:
+        return "month"
+    return "any"
+
+
+def _parse_linkedin_rows(rows: list[dict[str, Any]], default_location: str) -> list[dict[str, Any]]:
+    """Map OpenCLI LinkedIn search rows onto matcha job dicts.
+
+    OpenCLI row shape: {rank, title, company, location, listed, salary, url}
+    (+ description/apply_url when run with --details). Extra fields like
+    salary/listed are kept for the Phase 1+ enrichment/data-quality work.
+    """
+    jobs: list[dict[str, Any]] = []
+    for row in rows:
+        title = str(row.get("title") or "").strip()
+        if not title:
+            continue
+        job: dict[str, Any] = {
+            "title": title,
+            "company": str(row.get("company") or "").strip(),
+            "location": str(row.get("location") or "").strip() or default_location,
+            "description": str(row.get("description") or "").strip(),
+            "url": str(row.get("url") or "").strip(),
+            "source": "LinkedIn",
+        }
+        for extra in ("salary", "listed", "apply_url", "workplace_type", "job_type", "applicants"):
+            if row.get(extra):
+                job[extra] = str(row[extra]).strip()
+        jobs.append(job)
+    return jobs
+
+
+def _search_linkedin_guest_api(
+    query: str,
+    location: str = "",
+    **kwargs: Any,
+) -> ScraperResult:
     errors: list[str] = []
     jobs: list[dict[str, str]] = []
     # F-08 (user-confirmed): blank location searches the home market, not the US.
@@ -40,7 +140,11 @@ def search_linkedin_jobs(
     f_tpr = f"r{days * SECONDS_PER_DAY}"
 
     logger.info(
-        "Searching LinkedIn: q=%s location=%s days=%s max_pages=%s", query, loc, days, max_pages
+        "Searching LinkedIn (guest-api): q=%s location=%s days=%s max_pages=%s",
+        query,
+        loc,
+        days,
+        max_pages,
     )
     try:
         for page in range(max_pages):
@@ -120,26 +224,48 @@ def search_linkedin_jobs(
 
 
 class LinkedInSource(Source):
-    """LinkedIn — jobs via the guest API (thin), DDGS fallback planned."""
+    """LinkedIn — OpenCLI (browser, consented) preferred, guest API fallback."""
 
     name = "linkedin"
-    description = "LinkedIn — jobs via guest API"
-    backends = ["guest-api", "ddgs"]
-    tier = 1  # login-gated: full results need authentication
+    description = "LinkedIn — OpenCLI browser backend, guest API fallback"
+    # Honest chain: only backends search actually implements. ddgs was listed
+    # in Phase 0 but never wired into the search path — dropped so doctor
+    # never claims a backend that cannot deliver jobs (strategy §6.3 table
+    # updated to match).
+    backends = ["opencli", "guest-api"]
+    tier = 1  # login-gated: full results need a logged-in browser (or auth)
 
     def check(self, config: dict[str, Any] | None = None) -> tuple[str, str]:
-        status, msg = probe_url(
-            "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
-            "?keywords=engineer&location=India&f_TPR=r604800&start=0"
-        )
-        if status == "ok":
-            self.active_backend = "guest-api"
-            return "ok", "LinkedIn guest API responding (HTTP 200)"
-        if status == "warn":
-            self.active_backend = None
-            return "warn", "LinkedIn is login / anti-bot gated; guest API results may be thin"
+        from matcha.sources.backends.opencli import consent_granted, opencli_status, opencli_summary
+
+        opencli_hint = ""
+        for backend in self.ordered_backends(config):
+            if backend == "opencli":
+                if not consent_granted(config, "linkedin"):
+                    continue  # not opted in — skip without penalty
+                st = opencli_status()
+                if st.ready:
+                    self.active_backend = "opencli"
+                    return "ok", f"OpenCLI browser bridge connected (v{st.version})"
+                opencli_hint = opencli_summary(st)
+            elif backend == "guest-api":
+                status, msg = probe_url(
+                    "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
+                    "?keywords=engineer&location=India&f_TPR=r604800&start=0"
+                )
+                if status == "ok":
+                    self.active_backend = "guest-api"
+                    return "ok", "LinkedIn guest API responding (HTTP 200)"
+                if status == "warn":
+                    self.active_backend = None
+                    return (
+                        "warn",
+                        "LinkedIn is login / anti-bot gated; guest API results may be thin",
+                    )
         self.active_backend = None
-        return "error", f"LinkedIn unreachable: {msg}"
+        if opencli_hint:
+            return "warn", f"OpenCLI not connected ({opencli_hint}); LinkedIn unreachable"
+        return "error", "LinkedIn unreachable via any backend"
 
     def search(self, query: str, location: str = "", **kwargs: Any) -> ScraperResult:
         return search_linkedin_jobs(query, location, **kwargs)

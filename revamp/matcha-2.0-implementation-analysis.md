@@ -50,12 +50,22 @@ location, workplace_type, job_type, applicants, listed, apply_url, description`
 — **NO `salary`** (see F-06). Search-result cards *may* include a salary column,
 but do not depend on it.
 
-**⚠️ `-f json` unverified.** The strategy examples assume `-f json`. The
-adapters define `columns` for table output; the JSON/output-format flag lives in
-the OpenCLI runner (`~/.opencli/node_modules/@jackwener/`), not the adapters.
-**Action (Phase 1):** run `opencli linkedin search --help` once and lock the
-exact output-format flag before writing the backend. Fall back to parsing the
-default table output if no JSON flag exists.
+**✅ `-f json` locked (Phase 1, 2026-08-06).** `opencli linkedin search
+--help` confirms `-f json` is a valid `--format` choice (`table|plain|json|
+yaml|md|csv`). `src/output.ts` renders JSON via `JSON.stringify(data, null,
+2)`; search commands return a bare row array, composite commands may wrap in
+`{rows: [...]}` — `matcha.sources.backends.opencli` tolerates both. Row keys
+locked from the adapter sources:
+
+- linkedin search: `{rank, title, company, location, listed (ISO date), salary, url}`
+- linkedin job-detail: `{title, company, location, workplace_type, job_type,
+  applicants, listed, apply_url, company_url, url, description}`
+- indeed search: `{rank, id (jk), title, company, location, salary, tags, url}`
+- indeed job: `{id, title, company, location, salary, job_type, description, url}`
+
+⚠️ **Indeed adapter is US-site** (`INDEED_ORIGIN = https://www.indeed.com`,
+`clis/indeed/utils.js`) — India users get the richer browser data only when
+query/location matches; `in.indeed.com` HTML/DDGS fallbacks remain the India path.
 
 ## 3. Cross-cutting: the src/ layout migration (Phase 0/1 split)
 
@@ -124,11 +134,11 @@ Channel contract in Agent-Reach match §6.8 exactly; `opencli --version` +
 **Verified facts:** OpenCLI installed; flags verified (§2); LinkedIn search tagged `[cookie]` in `opencli list` → browser login required → consent flow correct. `agent-reach`/`mcporter` absent → fallbacks active (F-14).
 
 **Gaps / bugs found:**
-- F-07 (Low): `-f json` unverified (see §2) — lock the flag before coding the backend; parse default output if needed.
+- F-07 (Low): `-f json` unverified (see §2) — **RESOLVED Phase 1**: flag confirmed via `--help`; JSON emission + all row shapes locked from adapter sources (§2).
 - F-14 (Low): no agent-reach → `doctor_snapshot()` None; **make sure `agent_reach_io` degrades to Matcha's own probes and logs a one-time hint** (`npm install -g @jackwener/opencli` already satisfied; `pip install agent-reach` optional).
 - F-06 (Medium): job-detail has **no salary** — do not claim salary from enrichment (see §5).
-- **Consent flow design gap:** strategy says "use your logged-in Chrome for LinkedIn? (y/n)" remembered in config — needs a config key (e.g. `linkedin_consent: bool`); **opencli_status() ready-check must gate the prompt** (don't ask if the bridge is down).
-- **Indeed backend caution:** `clis/indeed/` exists but its output shape is unverified — treat like F-07 (verify `opencli indeed search --help` first). Naukri job-page extraction: the real posting page must be fetched via OpenCLI `web` adapter or `curl`; verify Naukri blocks headless.
+- **Consent flow design gap:** strategy says "use your logged-in Chrome for LinkedIn? (y/n)" remembered in config — needs a config key (e.g. `linkedin_consent: bool`); **opencli_status() ready-check must gate the prompt** (don't ask if the bridge is down). **RESOLVED Phase 1:** `linkedin_consent` / `indeed_consent` (bool, default false) in config.json via `matcha --configure`, gated on `opencli_status().ready`; sources use OpenCLI only when consented + healthy (`backends/opencli.py`).
+- **Indeed backend caution:** `clis/indeed/` exists but its output shape is unverified — treat like F-07 (verify `opencli indeed search --help` first). **RESOLVED Phase 1:** shapes locked from `clis/indeed/search.js` + `utils.js`; adapter is **US-site** (§2). Naukri job-page extraction: the real posting page must be fetched via OpenCLI `web` adapter or `curl`; verify Naukri blocks headless.
 - **Timeout discipline:** OpenCLI is browser-driven → slow (seconds per call). Keep per-call timeouts (search 30s, detail 30s) and the parallel ≤5 workers.
 - F-15 (Low): RemoteOK has `epoch` + `tags` but drops them from the output dict — keep `listed_epoch` and `tags` so normalization (P2) can use them.
 

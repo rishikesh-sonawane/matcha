@@ -1,26 +1,31 @@
 # Current System State — Matcha
 
-> Last verified: 2026-08-06 (Phase 0 implementation + full validation run).
+> Last verified: 2026-08-06 (Phase 1 part 3 — top-N enrichment — done).
 > If any checkbox below conflicts with the actual code, **the code wins** —
 > update this file.
 
 ## Overview
 
-Matcha **1.x functionality is complete and now runs from the 2.0 `src/matcha/`
-layout** (Phase 0 done: sources registry + probe + doctor + shims, zero behavior
-change). **Phase 1 (Data quality) is the next phase.** All 152 tests pass.
+Matcha **1.x functionality is complete and runs from the 2.0 `src/matcha/`
+layout as an installed package.** **Phase 0 + Phase 1 parts 1–3 (foundation,
+entry-point migration, OpenCLI backends, top-N enrichment) are DONE.** All
+215 tests pass. Remaining Phase 1: Exa backend, Naukri job-page,
+`agent_reach_io`; re-rank on enriched signals is Phase 2.
 
-## Layout (post-Phase 0)
+## Layout
 
 - `src/matcha/` — real modules: `main.py profile.py ai.py matcher.py config.py
-  settings.py models.py actions.py` + new `errors.py probe.py utils.py doctor.py`
+  settings.py models.py actions.py` + `errors.py probe.py utils.py doctor.py`
 - `src/matcha/sources/` — `base.py` (Source ABC) + `__init__.py` (ALL_SOURCES
-  registry) + the 7 source modules (legacy scrapers, each now with a Source
-  subclass) + `constants.py utils.py`
-- Root `main.py profile.py ai.py matcher.py config.py settings.py models.py
-  actions.py` + `scrapers/` — **thin re-export shims** (sys.modules-alias
-  pattern) so tests/Makefile/CI/Docker/pyinstaller keep working; deleted in
-  Phase 1 after the entry-point migration
+  registry) + 7 source modules + `constants.py utils.py`
+- `src/matcha/sources/backends/` — **`opencli.py`** (Phase 1): side-effect-free
+  probe, consent gate, tolerant command runner, detail helpers
+  (`linkedin_job_detail`, `indeed_job_detail`)
+- `src/matcha/sources/enrichment.py` — **top-N enrichment** (Phase 1 part 3):
+  OpenCLI job-detail merge + Jina zero-config fallback, parallel ≤5, per-job
+  isolation
+- No root shims — root modules + `scrapers/` deleted in Phase 1 part 1;
+  `matcha` console script is the entry point
 
 ## Component Status (behavior unchanged from 1.x)
 
@@ -28,6 +33,19 @@ change). **Phase 1 (Data quality) is the next phase.** All 152 tests pass.
 - [x] **Query expansion** — `ai.py: ai_generate_queries` + validation gate in `main.py` (semantic dedup >85%, min-token, cap 5)
 - [x] **Parallel scraping** — `main.py: search_jobs`, ThreadPoolExecutor ≤12, 45s batch timeout, live status table; `ScraperResult` error isolation per source
 - [x] **Scrapers → Sources** — every source is now a `Source` subclass with real `check()` + provenance (`backend`, `data_quality`); dispatch still via `SCRAPER_DEFS` (career_sites excluded, default-off)
+- [x] **OpenCLI backends (Phase 1)** — LinkedIn `opencli ▸ guest-api`, Indeed
+      `opencli ▸ html ▸ ddgs`; used only when consented (`linkedin_consent` /
+      `indeed_consent` in config.json, set via `matcha --configure`) **and**
+      healthy (`opencli_status().ready`: `--version` probe + loopback `/status`,
+      never `opencli doctor`); graceful fallback when the bridge is down
+- [x] **Top-N enrichment (Phase 1 part 3)** — after `rank_jobs`, enrich top N
+      (default 30, ≤5 parallel) via OpenCLI job-detail; LinkedIn merges
+      description/apply_url/workplace/etc. (never salary — F-06), Indeed
+      merges description/job_type/salary/url; per-job isolation
+      (`enrich_error`); **Jina Reader zero-config fallback** when the bridge
+      is down (ungated by consent, capped at 10, `data_quality=partial`);
+      TUI shows Salary/Workplace/Posted/Applicants/Apply URL and `o` opens
+      apply_url; settings `enrichment: {enabled,top_n,timeout,max_workers}`
 - [x] **Deduplication** — `main.py: deduplicate`, rapidfuzz (title 82 / company 88)
 - [x] **Heuristic ranking** — `matcher.py`: weights 35/25/15/15/10, seniority levels, floor = 5
 - [x] **AI re-scoring** — top N (default 30) via `ai_score_job`, parallel ≤8, 60s timeout
@@ -90,18 +108,18 @@ provenance is data · failproof by construction.
 
 ## Known Gaps / Pain Points (1.x → fixed in 2.0)
 
-1. Thin, stale, noisy data (LinkedIn ~10 no desc; Indeed broken on py3.14; Naukri search-page links; snippet-guessed fields) — Phase 1
-2. No OpenCLI/Exa backends, no consent flow yet — Phase 1
+1. Thin, stale, noisy data (LinkedIn ~10 no desc; Indeed broken on py3.14; Naukri search-page links; snippet-guessed fields) — Phase 1 (OpenCLI backends landed; enrichment + Exa + Naukri job-page remain)
+2. Exa backend, Naukri job-page extraction, `agent_reach_io` — Phase 1 remainder; re-rank on enriched signals (step 8 of §7) + saved-jobs enriched columns — Phase 2
 3. Pydantic models defined but only partially used at runtime — Phase 2
 4. AI hardcoded to one provider (legacy `MINIMAX` env var name) — Phase 5
 5. No centralized job-age/must-skills/salary filters, no enrichment — Phases 2–3
-6. Root shims are temporary aliasing; bandit targets still point at shims — Phase 1
+6. OpenCLI extension currently disconnected on this machine (daemon up, ext down) — opencli path untestable live until Chrome + extension are up; falls back correctly
 7. mypy: 24 pre-existing legacy errors (not gating) — Phase 7
 8. Dedup O(n²) (F-10) — Phase 4
 
 ## Key References (revamp/)
 
-- `matcha-2.0-strategy.md` — the plan (Rev 4, source of truth)
+- `matcha-2.0-strategy.md` — the plan (Rev 6, source of truth; §6.2/§6.3 corrected for OpenCLI work, §8 marked implemented)
 - `matcha-2.0-implementation-analysis.md` — pre-implementation analysis: verified env, OpenCLI interfaces, migration plan, findings F-01..F-23
 - `phase-0-handoff-prompt.txt` — Phase 0 spec (implemented 2026-08-06)
 - `opencli-integration-plan.md` — superseded-but-adopted background

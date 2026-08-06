@@ -240,7 +240,20 @@ ai:
 scrapers:
   serpapi:
     key: your_serpapi_key
+enrichment:
+  enabled: true      # top-N detail enrichment after ranking
+  top_n: 30          # how many ranked jobs to enrich
+  timeout: 30        # seconds per job-detail call
+  max_workers: 5     # parallel detail fetches (capped at 5)
 ```
+
+**Enrichment** (Phase 1): after ranking, the top `top_n` jobs get full
+descriptions + apply URLs via OpenCLI job-detail (`opencli linkedin
+job-detail` / `opencli indeed job`), when you've opted in via `matcha
+--configure` and the browser bridge is healthy. When the bridge is down,
+LinkedIn postings fall back to the zero-config Jina Reader
+(`https://r.jina.ai/`, capped at 10 jobs/batch); `data_quality` stays
+`partial` and is tagged `enrich_source: jina`.
 
 ### Example Detail View
 
@@ -248,9 +261,13 @@ scrapers:
 ╭─────────────────────────── Job Details ───────────────────────────╮
 │ Platform Engineer @ Barclays                                      │
 │ Company: Barclays                                                 │
+│ Salary: ₹28–40L                                                   │
+│ Workplace: Hybrid                                                 │
+│ Posted: 3 days ago                                                │
+│ Applicants: 25 applicants                                         │
 │ Location: Pune, India                                             │
 │ Source: Indeed                                                    │
-│ URL: https://in.indeed.com/viewjob?jk=b52083124e35dc8d            │
+│ Apply URL: https://in.indeed.com/viewjob?jk=b52083124e35dc8d      │
 │ Match Score: 82%                                                  │
 │                                                                   │
 │ Why this matches:                                                 │

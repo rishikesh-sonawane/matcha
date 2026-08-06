@@ -27,6 +27,12 @@ _DEFAULTS: dict[str, Any] = {
         "serpapi": False,
         "indeed_domain": "in.indeed.com",
     },
+    "enrichment": {
+        "enabled": True,
+        "top_n": 30,
+        "timeout": 30,
+        "max_workers": 5,
+    },
 }
 
 
