@@ -12,7 +12,7 @@ wins — then fix the memory file.
 
 > ⚠️ Note: there is **no `AGENTS.md`** in this repo. `.ai_memory/` is the sole
 > memory layer. The Matcha 2.0 rebuild plan lives in `revamp/` — see
-> `revamp/matcha-2.0-strategy.md` (**Rev 11**; Phases 0, 1, 2 and 4 marked
+> `revamp/matcha-2.0-strategy.md` (**Rev 12**; Phases 0, 1, 2, 4 and 5 marked
 > complete) and `revamp/matcha-2.0-implementation-analysis.md` (findings
 > register F-01..F-23).
 
@@ -71,12 +71,13 @@ Context limit, daily cap, crash, closed tab — if the final sync never happened
 
 1. Close the current chat. Open a **new** Freebuff session.
 2. Paste the startup prompt (workflow §1).
-3. It should reconstruct: **Matcha 2.0 Phases 0, 1, 2 and 4 complete
-   (401/401 tests) — running from `src/matcha/` as the installed `matcha`
-   console script; current focus = Phases 3/5 boundary** (saved-jobs enriched
-   columns, AI provider-agnostic client), per `revamp/matcha-2.0-strategy.md`
-   Rev 11 and `.ai_memory/active_task.md`. If it says anything materially
-   different, that's a protocol bug — report it and fix the design.
+3. It should reconstruct: **Matcha 2.0 Phases 0, 1, 2, 4 and 5 complete
+   (430/430 tests) — running from `src/matcha/` as the installed `matcha`
+   console script; current focus = Phase 6 boundary** (agent + automation:
+   `--json`, SKILL.md, `matcha watch`, MCP), per
+   `revamp/matcha-2.0-strategy.md` Rev 12 and `.ai_memory/active_task.md`.
+   If it says anything materially different, that's a protocol bug — report
+   it and fix the design.
 
 ## Do's and Don'ts
 

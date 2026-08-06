@@ -366,3 +366,66 @@ workplace / must-skill signals, soft-mode rank cap, provenance tags (strategy §
   saved-jobs enriched columns — do NOT start yet.
 
 ---
+
+## Session 13 — Phase 5: Provider-agnostic AI client (2026-08-06)
+
+**Goal:** Phase 5 — OpenAI-compatible REST client with provider presets
+(Groq/Kilo/OpenRouter/local), model tiers, disk cache, budget guard
+(strategy §10.2).
+
+- **Research:** OpenRouter base `openrouter.ai/api/v1` with `:free` model IDs;
+  Groq base `api.groq.com/openai/v1` — **`llama-3.3-70b-versatile` /
+  `llama-3.1-8b-instant` are EOL 2026-08-16** → presets use the current
+  `openai/gpt-oss-120b` (best) / `openai/gpt-oss-20b` (fast); Kilo's gateway
+  base `api.kilo.ai/api/gateway` + `kilo-auto/small` confirmed OpenAI-
+  compatible (in-repo kilo.md + web).
+- **Built (`src/matcha/ai.py`):** `PROVIDERS` presets (incl. `local` with
+  `requires_key: False`); `_get_provider()` (env `AI_PROVIDER` ▸ config
+  `ai_provider`); `_normalize_chat_url()` — env/config may hold a base URL
+  **or** a full `/chat/completions` endpoint, appended at call time (keeps
+  legacy `_get_api_url` return values byte-identical for tests); model tiers
+  `_get_model(tier)` best/fast with env → config → settings → preset
+  resolution and fast→best fallback; `check_ai_available()` local-aware;
+  **thread-safe budget guard** (`reset_budget`/`budget_used`/
+  `budget_remaining`/`_consume_budget`, once-per-run exhaustion warning,
+  cache hits never consume); 0.25s retry backoff. All 4 tasks rewire through
+  `_run_with_cache`. `configure_provider()` (clears stale url/model on
+  provider switch; unknown provider raises).
+- **Built (`src/matcha/ai_cache.py`):** SQLite disk cache keyed
+  `sha256(task + resolved model + exact messages)` — self-invalidating on
+  provider/model/prompt changes and hashing the *truncated* prompt exactly;
+  per-entry TTL; lazy prune every 32 puts; path `MATCHA_AI_CACHE` (tests) /
+  `~/.matcha/ai_cache.sqlite`; every storage error degrades to a miss.
+  **Opt-in via `settings.ai.cache_ttl` (default 0)** — keeps existing
+  mock-based suites hermetic (they never enable it) and the tool predictable.
+- **Wiring:** models `ConfigSchema.ai_provider` + `AIConfig`
+  `model_best/model_fast/max_calls=60/cache_ttl=0`; settings defaults;
+  `agent_reach_io.GROQ_MODEL` → `openai/gpt-oss-120b` (EOL-aware, test uses
+  the constant so it stays green); `main.py configure_ai()` → provider
+  wizard (label dict lookup, key prompted with `password=True`, optional
+  url/model overrides); `run()` resets the budget per search and prints
+  `AI budget: N/M used (R left)` after enrichment.
+- **Review fixes:** (1) cache key originally `task+inputs` hashed the FULL
+  untruncated job/profile dicts and omitted the model — switched to
+  `task+model+messages` (exact + self-invalidating; added a model-in-key
+  regression test); (2) fast-tier fallback order fixed so a provider's own
+  fast preset wins over the best-model fallback; (3) wizard `next(...)` →
+  label→provider dict lookup (no StopIteration path); (4) budget line now
+  shows remaining; (5) my own test bugs: tuple-returning `_preset_env`
+  helper wasn't a context manager (→ `ExitStack`) and a "ttl 1s" expiry
+  assert expired before any time passed (→ time-mocked expiry test).
+- **Validation (all green):** 430/430 tests (unittest + pytest) — +29 new
+  (`tests/test_ai_client.py`); ruff / format / bandit clean. Live smoke:
+  groq preset URL/models resolve; local provider available without a key;
+  budget 2 → third call None with once-per-run warning, used/remaining 2/0;
+  cache put/get/clear roundtrip; `_normalize_chat_url` appends correctly.
+- **Docs:** strategy → Rev 12 (§10.2 marked IMPLEMENTED + cache-key /
+  budget-guard corrections, Phase 5 ✅, §19 checklist AI item → [x]); README
+  AI Integration section rewritten (preset table, env vars, tiers, budget,
+  cache) + config YAML `ai:` block + project tree `ai_cache.py`. Memory
+  bank synced.
+- **Next:** Phase 6 boundary: `--json`, SKILL.md + installer, `matcha watch`
+  + `track.py`, optional MCP server, optional §9.5 AI verdict pass — do NOT
+  start yet.
+
+---

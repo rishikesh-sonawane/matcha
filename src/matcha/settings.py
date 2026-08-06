@@ -22,6 +22,12 @@ _DEFAULTS: dict[str, Any] = {
         "enabled": True,
         "top_n": 30,
         "timeout": 60,
+        "model_best": "",
+        "model_fast": "",
+        "max_calls": 60,
+        # Disk cache TTL (seconds); 0 = disabled. Opt-in so the tool never
+        # serves stale AI output by default (strategy §10.2).
+        "cache_ttl": 0,
     },
     "scrapers": {
         "serpapi": False,

@@ -145,6 +145,30 @@
   tags work uniformly across all sources; explicit per-row flags still win
   (setdefault).
 
+### ADR 16: AI client = provider presets + model tiers + budget guard + opt-in disk cache
+- **Status:** **Implemented** (Phase 5, 2026-08-06)
+- **Decision:** `ai.py` stays a single module (public surface + prompts kept
+  for test-mock compatibility) implementing a **provider-agnostic
+  OpenAI-compatible REST client** (`POST {base_url}/chat/completions`):
+  `PROVIDERS` presets (Groq / Kilo Gateway / OpenRouter / OpenAI / local),
+  selected via `ai_provider` (env `AI_PROVIDER` ▸ config.json), with model
+  tiers `best` (scoring, profile extraction) vs `fast` (queries, titles)
+  resolving env → config → settings → preset. A **per-run budget guard**
+  (`ai.max_calls`, default 60, thread-safe) caps spend — exhausted calls
+  return None once with a warning, and jobs keep heuristic scores. A **disk
+  cache** (`ai_cache.py`, SQLite) is **opt-in** (`ai.cache_ttl`, default 0)
+  and keyed on `task + resolved model + exact messages` so entries
+  self-invalidate on provider/model/prompt changes; cache hits never consume
+  budget. `matcha --configure` gained a provider wizard; the Groq seed model
+  is `openai/gpt-oss-120b` (`llama-3.3-70b-versatile` EOL 2026-08-16).
+- **Context:** User asked for no lock-in + free-tier friendly + works without
+  AI (ADR 04); legacy `MINIMAX` env name kept as an alias; cache default 0
+  keeps results predictable (no stale AI output) and existing mock-based
+  suites hermetic.
+- **Consequences:** Works with Groq free tier or Ollama-local with zero
+  config; heuristic-only fallback when no key; TUI run summary shows
+  `AI budget: N/M used (R left)`.
+
 ---
 
 ## Implemented (1.x) — historical decisions, already in the code

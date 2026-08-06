@@ -1,6 +1,6 @@
 # Current System State — Matcha
 
-> Last verified: 2026-08-06 (Phase 4 — ranking recalibration — done).
+> Last verified: 2026-08-06 (Phase 5 — provider-agnostic AI client — done).
 > If any checkbox below conflicts with the actual code, **the code wins** —
 > update this file.
 
@@ -10,13 +10,15 @@ Matcha **1.x functionality is complete and runs from the 2.0 `src/matcha/`
 layout as an installed package.** **Phase 0 + Phase 1 (entry-point migration,
 OpenCLI backends, top-N enrichment, Exa Web Search, `agent_reach_io`, Naukrijob-page
 extraction) + Phase 2 (normalize + central filters) + Phase 4 (ranking
-recalibration) are DONE.** All 401 tests pass. Next: Phase 3 boundary
-(enrichment polish) / Phase 5 (AI provider-agnostic) — do NOT start yet.
+recalibration) + Phase 5 (provider-agnostic AI client) are DONE.** All 430
+tests pass. Next: Phase 6 (agent + automation: `--json`, SKILL.md, `matcha
+watch`, MCP) — do NOT start yet.
 
 ## Layout
 
-- `src/matcha/` — real modules: `main.py profile.py ai.py matcher.py config.py
-  settings.py models.py actions.py` + `errors.py probe.py utils.py doctor.py`
+- `src/matcha/` — real modules: `main.py profile.py ai.py ai_cache.py
+  matcher.py config.py settings.py models.py actions.py` + `errors.py
+  probe.py utils.py doctor.py`
 - `src/matcha/sources/` — `base.py` (Source ABC) + `__init__.py` (ALL_SOURCES
   registry) + 7 source modules + `constants.py utils.py`
 - `src/matcha/sources/backends/` — **`opencli.py`** (Phase 1): side-effect-free
@@ -51,6 +53,13 @@ recalibration) are DONE.** All 401 tests pass. Next: Phase 3 boundary
   snapshot-first health signals with own-probe degradation (F-14),
   read-only `gh_profile()` (hosts.yml/env tokens, never `gh auth status`),
   `seed_ai_config()` (borrows groq_api_key)
+- `src/matcha/ai.py` — **provider-agnostic AI client** (Phase 5): `PROVIDERS`
+  presets (Groq/Kilo/OpenRouter/OpenAI/local-no-key), `_get_model(tier)`
+  best/fast (env → config → settings → preset), thread-safe per-run budget
+  guard (`ai.max_calls`), `_run_with_cache` wiring
+- `src/matcha/ai_cache.py` — **AI result disk cache** (Phase 5): SQLite,
+  keyed `sha256(task+model+messages)`, TTL, lazy prune, env-overridable path,
+  opt-in via `settings.ai.cache_ttl` (default 0)
 - No root shims — root modules + `scrapers/` deleted in Phase 1 part 1;
   `matcha` console script is the entry point
 
@@ -101,6 +110,14 @@ recalibration) are DONE.** All 401 tests pass. Next: Phase 3 boundary
       60s timeout; **Phase 4: gated to enriched candidates** (`ai_eligible`);
       flatline guard on final scores (warning + optional
       `ranking.normalize_scores` stretch)
+- [x] **Provider-agnostic AI client (Phase 5, §10.2)** — OpenAI-compatible
+      REST to `{base_url}/chat/completions`; presets Groq/Kilo/OpenRouter/
+      OpenAI/local (local needs no key); model tiers best (scoring/profile) /
+      fast (queries/titles); per-run budget guard `ai.max_calls` (TUI
+      `AI budget: N/M used (R left)` line); opt-in disk cache
+      `ai.cache_ttl` keyed on task+model+messages (self-invalidating on
+      provider/prompt change); `matcha --configure` provider wizard;
+      keys stay in keyring/fernet; zero config ⇒ heuristic-only
 - [x] **TUI** — prompt_toolkit full-screen: list/detail/saved modes, keys ↑↓ Enter s o n p l r q, pagination 10/page
 - [x] **Job lifecycle** — `actions.py`: SQLite `~/.matcha/jobs.db`, statuses saved/applied/dismissed/interview/rejected/offer
 - [x] **Config & security** — keyring + fernet for ai_key/serpapi_key; Pydantic validation
@@ -121,7 +138,8 @@ recalibration) are DONE.** All 401 tests pass. Next: Phase 3 boundary
 
 ## Test Baseline (2026-08-06)
 
-- **401/401 tests pass** (`unittest discover tests` AND `pytest tests/`).
+- **430/430 tests pass** (`unittest discover tests` AND `pytest tests/`).
+  401 at end of Phase 4; +29 from `tests/test_ai_client.py` (Phase 5).
   371 at end of Phase 2; +30 from `tests/test_ranking.py` (Phase 4).
   307 at end of Phase 1 (Naukri job-page); +64 from `tests/test_normalization.py`
   (26) + `tests/test_filters.py` (38). Baseline before Phase 0: 122 tests, 1
@@ -133,20 +151,18 @@ recalibration) are DONE.** All 401 tests pass. Next: Phase 3 boundary
   `tests/test_opencli.py` (46), `tests/test_enrichment.py` (17),
   `tests/test_exa_backend.py` (36), `tests/test_agent_reach_io.py` (31),
   `tests/test_naukri_job_page.py` (24), `tests/test_normalization.py` (26),
-  `tests/test_filters.py` (38).
+  `tests/test_filters.py` (38), `tests/test_ai_client.py` (29).
 - Quality gates all green: `ruff check .`, `ruff format --diff .`, `pre-commit run
   --all-files`, `bandit -r ... -lll` (on the CI targets), mypy baseline documented
   (24 pre-existing legacy errors; mypy not a project dep/CI gate).
 - Makefile targets: `run` / `test` / `lint` / `format` / `static-analysis` / `pre-commit` / `check`.
 
-## Git State (2026-08-06, post-Phase-0 — uncommitted)
+## Git State (2026-08-06, post-Phase-4)
 
-- Branch `main`. Phase 0 changes are **not committed** (user hasn't asked).
-- Tree: renames `RM` (root modules → `src/matcha/`, scrapers → `src/matcha/sources/`),
-  new `??` (shims, src/matcha new modules, 3 new test files), modified `M`
-  (ci.yml, pyproject.toml, tests/test_days_filter.py, tests/test_core.py [isort],
-  scrapers/__init__.py shim). Tracked `__pycache__/*.pyc` show modified (pre-existing
-  cruft — leave alone).
+- Branch `main`, ahead of `origin/main`. Committed: `bf70014` (Phase 1-2-4
+  implementation), `bb87e7c` (docs sync). **Phase 5 is the current uncommitted
+  work** (ai.py / ai_cache.py / models.py / settings.py / agent_reach_io.py /
+  main.py + tests/test_ai_client.py + docs). Nothing is pushed.
 
 ## Matcha 2.0 Roadmap (from revamp/matcha-2.0-strategy.md §18)
 
@@ -157,7 +173,7 @@ recalibration) are DONE.** All 401 tests pass. Next: Phase 3 boundary
 - [x] **Phase 2 — Normalize + filters (DONE 2026-08-06):** `normalization.py` (listed_epoch, salary_int LPA, city/region, remote_ok); `filters.py` (quality → age → must-skills → location → salary with per-stage `FilterReport` counts + isolation); `--days` enforced centrally (age filter = final authority); unknown-age `[age?]` / unknown-salary `[salary?]` tags; TUI filter summary line; `Settings.filters` + `Profile` §14 fields. *Accept met: `--days` enforced centrally; unknown-age tagged; garbage dropped; counts shown.*
 - [ ] **Phase 3 — Enrichment (2–3 days):** `sources/enrichment.py` (OpenCLI job-detail, top 30, parallel); model + DB columns; TUI detail fields. *Accept: top-30 enriched ≤60s; per-job failures graceful.*
 - [x] **Phase 4 — Ranking recalibration (DONE 2026-08-06):** confidence-weighted heuristic (data-richness × dimensions); recency/workplace/must-skill signals; `must_skills_soft` rank cap; AI pass gated to enriched candidates; flatline detection + optional normalization (`ranking.normalize_scores`); `[full]`/`[partial]`/`[snippet]` provenance tags; per-row provenance stamping at ingest. *Accept met: score distribution spreads; full-data jobs outrank snippet-guesses.*
-- [ ] **Phase 5 — AI provider-agnostic (2–3 days):** `ai/client.py` (OpenAI-compatible REST), presets, model tiers, disk cache, budget guard. *Accept: works with Groq free tier and zero config; no key leak.*
+- [x] **Phase 5 — AI provider-agnostic (DONE 2026-08-06):** `ai.py` + `ai_cache.py` (OpenAI-compatible REST), presets (Groq/Kilo/OpenRouter/OpenAI/local-no-key), model tiers best/fast, opt-in disk cache, per-run budget guard, `matcha --configure` provider wizard. *Accept met: works with Groq free tier and zero config (heuristic-only); no key leak; cache hits on re-run.*
 - [ ] **Phase 6 — Agent + automation (2–3 days):** `--json`; SKILL.md + installer; `matcha watch` + `track.py`; optional MCP server. *Accept: an agent drives a full search via the skill; watch surfaces only new jobs.*
 - [ ] **Phase 7 — Hardening (1–2 days):** circuit breakers; config hardening; GitHub profile enrichment; RSS source; coverage ≥80%; **mypy debt cleanup (24 pre-existing errors)**; README/docs.
 
@@ -170,7 +186,7 @@ provenance is data · failproof by construction.
 1. Thin, stale, noisy data — **Phases 1–2 fixed the big levers** (OpenCLI backends, top-N enrichment, Exa web, Naukri job-page, central filters); LinkedIn still thin on this machine until the Chrome extension is connected; Naukri DDGS index is stale (expired links gracefully kept as snippets)
 2. Re-rank on enriched signals (step 8 of §7) + `must_skills_soft` rank cap + `[full]`/`[snippet]` tags — Phase 4
 3. Pydantic models defined but only partially used at runtime (Job/Profile now extended; not yet the runtime boundary) — Phase 4+
-4. AI hardcoded to one provider (legacy `MINIMAX` env var name) — Phase 5
+4. ~~AI hardcoded to one provider (legacy `MINIMAX` env var name)~~ **RESOLVED Phase 5** — provider presets + env/config/settings overrides; `MINIMAX` kept as the legacy env alias
 5. Saved-jobs DB doesn't persist enriched/normalized fields (salary, salary_int, apply_url, listed_epoch) — Phase 3-adjacent polish
 6. OpenCLI extension currently disconnected on this machine (daemon up, ext down) — opencli path untestable live until Chrome + extension are up; falls back correctly
 9. mcporter not installed — Exa backend untestable live; `exa_status()==off` → Web Search stays on DDGS; install + `mcporter config add exa https://mcp.exa.ai/mcp --scope home` to exercise
@@ -181,7 +197,7 @@ provenance is data · failproof by construction.
 
 ## Key References (revamp/)
 
-- `matcha-2.0-strategy.md` — the plan (Rev 10, source of truth; §6.2/§6.3 corrected for OpenCLI + Exa/mcporter work, §6.5 + §8 + §7 marked implemented)
+- `matcha-2.0-strategy.md` — the plan (Rev 12, source of truth; §6.2/§6.3 corrected for OpenCLI + Exa/mcporter work, §6.5 + §8 + §7 + §10.2 marked implemented)
 - `matcha-2.0-implementation-analysis.md` — pre-implementation analysis: verified env, OpenCLI interfaces, migration plan, findings F-01..F-23
 - `phase-0-handoff-prompt.txt` — Phase 0 spec (implemented 2026-08-06)
 - `opencli-integration-plan.md` — superseded-but-adopted background

@@ -241,6 +241,10 @@ search:
   days: 7
 ai:
   enabled: true
+  model_best: ""          # scoring / profile extraction (default per provider)
+  model_fast: ""          # query gen / title suggestion (default per provider)
+  max_calls: 60           # AI budget guard per run
+  cache_ttl: 0            # AI disk cache TTL in seconds (0 = off; 86400 = 24h)
 scrapers:
   serpapi:
     key: your_serpapi_key
@@ -367,13 +371,27 @@ The prompt is tuned to be **critical** — scores of 80+ are reserved for strong
 
 ## Optional: AI Integration
 
-For AI-powered features (profile extraction, title suggestion, query expansion, relevance scoring), set the `$MINIMAX` environment variable or run `--configure`:
+Matcha's AI brain is a **provider-agnostic OpenAI-compatible REST client**
+(`POST {base_url}/chat/completions`) — run `matcha --configure` to pick a
+provider preset, or set env vars directly (`MINIMAX` key · `AI_API_URL` ·
+`AI_MODEL` best-tier · `AI_MODEL_FAST` fast-tier · `AI_PROVIDER`). Keys are
+stored via keyring/fernet, never plaintext.
 
-```bash
-export MINIMAX="your_key_here"
-```
+| Preset | Default base URL | Default model |
+|---|---|---|
+| **Groq** (free tier) | `https://api.groq.com/openai/v1` | `gpt-oss-120b` best / `gpt-oss-20b` fast |
+| **Kilo Gateway** (default) | `https://api.kilo.ai/api/gateway` | `kilo-auto/small` |
+| **OpenRouter** | `https://openrouter.ai/api/v1` | `…:free` models |
+| **OpenAI / compatible** | `https://api.openai.com/v1` | `gpt-4o-mini` |
+| **Local** (Ollama / LM Studio) | `http://localhost:11434/v1` | **no API key needed** |
 
-The AI provider uses the **Kilo Gateway** (`api.kilo.ai`) with model `kilo-auto/small` — a free-tier-compatible endpoint.
+**Model tiers** — `model_fast` runs cheap high-volume tasks (query expansion,
+title suggestion); `model_best` runs scoring and resume extraction. **Budget
+guard** — `ai.max_calls` (default 60) caps AI calls per run; when exhausted,
+remaining jobs keep heuristic scores and the TUI prints
+`AI budget: N/M used (R left)`. **Disk cache** — set `ai.cache_ttl` (e.g.
+`86400`) to cache AI results in `~/.matcha/ai_cache.sqlite`, keyed by
+task + model + prompt, so re-runs and `matcha watch` don't re-pay.
 
 With AI enabled:
 - Resume PDFs are parsed entirely by AI — extracts name, skills (30+), title, experience, and summary in one pass
@@ -400,7 +418,8 @@ matcha/
         ├── normalization.py # Canonical jobs: listed_epoch, salary_int, city, remote_ok
         ├── filters.py       # Central filter pipeline + provenance tags
         ├── agent_reach_io.py  # Thin adapter to `agent-reach` (doctor snapshot, gh)
-        ├── ai.py            # AI provider client (OpenAI-compatible REST)
+        ├── ai.py            # AI provider client (presets, model tiers, budget guard)
+        ├── ai_cache.py      # AI result disk cache (SQLite, opt-in TTL)
         ├── config.py        # Persistent config and profile storage
         ├── models.py        # Pydantic v2 data models + ScraperResult
         ├── settings.py      # YAML config loader

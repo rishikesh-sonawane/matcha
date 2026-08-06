@@ -2,16 +2,20 @@
 
 ## Current Focus
 
-**Phases 1, 2 and 4 are COMPLETE.** The pipeline is now: profile → queries →
-search → dedup → normalize → central filters → **confidence-weighted rank** →
+**Phases 1, 2, 4 and 5 are COMPLETE.** The pipeline is now: profile → queries
+→ search → dedup → normalize → central filters → **confidence-weighted rank** →
 enrich top N → present. Filters are centrally enforced (quality → age →
 must-skills → location → salary) with per-stage counts; ranking is
 confidence-weighted (full 1.0 · partial 0.85 · snippet 0.7) with
 recency/workplace/must-skill signals, a soft-mode rank cap, AI gated to
 enriched candidates, a flatline guard, and `[full]`/`[partial]`/`[snippet]`
-provenance tags beside `[age?]`/`[salary?]`. **401/401 tests pass.** Next:
-Phase 3 boundary (enrichment polish) / Phase 5 (AI provider-agnostic) — do
-NOT start yet.
+provenance tags beside `[age?]`/`[salary?]`. The AI brain is now a
+**provider-agnostic OpenAI-compatible REST client** (ai.py + ai_cache.py):
+provider presets (Groq/Kilo/OpenRouter/OpenAI/local-no-key), model tiers
+(best/fast), per-run budget guard (`ai.max_calls`, TUI summary line), and an
+opt-in disk cache (`ai.cache_ttl`, keyed on task+model+messages). **430/430
+tests pass.** Next: Phase 6 (agent + automation: `--json`, SKILL.md,
+`matcha watch`, MCP) — do NOT start yet.
 
 > 2026-08-06 session 1: full repo audit + `.ai_memory/` rewrite.
 > Session 2: Agent-Reach v1.5.0 study folded into revamp docs (strategy Rev 3).
@@ -31,6 +35,9 @@ NOT start yet.
 > Session 12: **Phase 4 — Ranking recalibration** (`matcher.py`
 >   confidence-weighted + signals, AI-on-enriched gate, flatline guard,
 >   provenance tags, per-row provenance stamping).
+> Session 13: **Phase 5 — Provider-agnostic AI client** (ai.py presets /
+>   tiers / budget guard + ai_cache.py opt-in SQLite disk cache + `matcha
+>   --configure` provider wizard).
 > Decisions locked in: shims-first (F-04); LinkedIn blank location = `"India"`
 > (F-08); console entry `matcha.main:main`; consent keys
 > `linkedin_consent`/`indeed_consent`; `-f json` locked (F-07); LinkedIn drops
@@ -43,7 +50,13 @@ NOT start yet.
 > fixed order quality → age → must-skills → location → salary (strategy §7.6),
 > each overridable via settings `filters:`; age filter days=0 = today only;
 > bare-number salary ranges count only when currency-prefixed so "3-6 Years"
-> never parses as salary**.
+> never parses as salary**; **Phase 5: provider chosen via
+> `ai_provider` (env `AI_PROVIDER` or config.json); model tiers `best`/`fast`
+> resolve env → config → settings → preset; the AI cache is OPT-IN
+> (`settings.ai.cache_ttl`, default 0) and keyed on task+model+messages so it
+> self-invalidates on provider/prompt change; `matcha --configure` now offers
+> the provider wizard; Groq seed model updated to `openai/gpt-oss-120b`
+> (`llama-3.3-70b-versatile` EOL 2026-08-16)**.
 
 ---
 
@@ -90,7 +103,7 @@ NOT start yet.
       (37): every parser variant, experience-not-salary, city/region/remote,
       each stage's drop/tag semantics, fixed order + counts, summary rendering,
       stage-failure isolation, days=0 semantics. Hermetic — pure functions.
-- **Acceptance met:** 401/401 tests (unittest + pytest); ruff/format/bandit
+- **Acceptance met:** 430/430 tests (unittest + pytest); ruff/format/bandit
   clean; live smoke of the full pipeline (normalize → filter) verified exact
   per-stage counts and the surviving-job set.
 
@@ -125,21 +138,62 @@ NOT start yet.
       signals, soft cap, `ai_eligible`, flatline detect/normalize,
       `provenance_tags`, per-row provenance stamping via mocked SCRAPER_DEFS.
       Existing matcher suites unchanged (long-desc no-flag jobs stay 1.0).
-- **Acceptance met:** 401/401 tests (unittest + pytest); ruff/format/bandit
+- **Acceptance met:** 430/430 tests (unittest + pytest); ruff/format/bandit
   clean; live smoke of `rank_jobs` verified ordering (full 86.2 > soft-capped
   45.0 > snippet 40.0) and correct provenance tags.
 
-## Immediate Next Steps (Phase 3/5 boundary — do NOT start yet)
+## Phase 5 — Provider-agnostic AI client (DONE 2026-08-06)
 
-1. **Phase 5 — AI provider-agnostic + cache + budget**: `ai/client.py` REST
-   client, presets (Groq/Kilo/OpenRouter/local), model tiers, disk cache,
-   budget guard; the optional AI verdict pass (§9.5, top-K "would you
-   apply?" line) rides on this.
+- [x] **`src/matcha/ai.py`** (strategy §10.2): `PROVIDERS` presets — groq
+      (gpt-oss-120b/20b), kilo (kilo-auto/small), openrouter (`:free` models),
+      openai, local (no key required, `http://localhost:11434/v1`);
+      `_get_provider()` (env `AI_PROVIDER` ▸ config `ai_provider`);
+      `_normalize_chat_url()` (appends `/chat/completions` — env/config may
+      hold either a base or full endpoint); model tiers `_get_model(tier)`:
+      best = env `AI_MODEL` ▸ config `ai_model` ▸ settings `ai.model_best` ▸
+      preset; fast = env `AI_MODEL_FAST` ▸ settings `ai.model_fast` ▸ preset
+      fast ▸ best fallback. `check_ai_available()` skips the key check for
+      local providers. **Budget guard** (thread-safe, AI scoring runs in a
+      pool): `reset_budget(max_calls=None)` / `budget_used()` /
+      `budget_remaining()`; `_call_ai` consumes one unit before POST, warns
+      once per run when exhausted, and cache hits never consume. Retry
+      backoff 0.25s between the 2 attempts.
+- [x] **`src/matcha/ai_cache.py`** (NEW): SQLite disk cache, key =
+      `sha256(task + model + messages)` (self-invalidating on provider/model/
+      prompt change), per-entry TTL, lazy prune every 32 puts, path from env
+      `MATCHA_AI_CACHE` (tests) else `~/.matcha/ai_cache.sqlite`, tolerant to
+      all storage errors (degrades to miss). `_run_with_cache` in ai.py wires
+      all 4 tasks; **opt-in via `settings.ai.cache_ttl` (default 0)**.
+- [x] **models/settings**: `ConfigSchema.ai_provider`; `AIConfig` gains
+      `model_best`/`model_fast`/`max_calls=60`/`cache_ttl=0`; `settings`
+      `_DEFAULTS["ai"]` updated; `agent_reach_io.GROQ_MODEL` →
+      `openai/gpt-oss-120b` (EOL-aware).
+- [x] **main.py**: `configure_ai()` is now a provider-preset wizard
+      (label→provider lookup, key prompted only for key-requiring providers,
+      optional url/model overrides via `configure_provider()` which clears
+      stale overrides on provider switch); `run()` resets the budget per
+      search and prints `AI budget: N/M used (R left)` after enrichment.
+- [x] **Tests**: `tests/test_ai_client.py` (29): preset resolution, tier
+      overrides + fallbacks, local availability, URL normalization, budget
+      exhaust/reset/unlimited-default, cache key stability + TTL + clear,
+      `_run_with_cache` hit-skip + model-in-key + disabled-by-default, task
+      wiring, `configure_provider` store/clear/raise. Hermetic (no network,
+      `MATCHA_AI_CACHE` → tmp, existing suites keep `cache_ttl=0`).
+- **Acceptance met:** 430/430 tests (unittest + pytest); ruff/format/bandit
+  clean; live smoke: groq preset URL/models resolve, local avail without key,
+  budget 2→`None` with once-per-run warning, cache put/get/clear roundtrip.
+
+## Immediate Next Steps (Phase 6 boundary — do NOT start yet)
+
+1. **Phase 6 — Agent + automation**: `--json` output, SKILL.md + installer,
+   `matcha watch` + `track.py` (new-vs-seen SQLite), optional MCP server;
+   the optional AI verdict pass (§9.5, top-K "would you apply?" line) rides
+   on the now-provider-agnostic client.
 2. **Phase 3-adjacent polish**: saved-jobs persist enriched+normalized fields
    (`actions.py` new columns: salary, salary_int, apply_url, listed_epoch);
    salary filter already works via `profile.min_salary` / `settings`.
-3. **Do NOT build Phase 6+ features** (watch/track, SKILL.md, MCP server,
-   hardening) until the above are specced.
+3. **Do NOT build Phase 7+ features** (hardening: circuit breakers, config
+   hardening, RSS, coverage gate) until the above are specced.
 
 ## Blockers / Notes
 

@@ -81,6 +81,7 @@ class ConfigSchema(BaseModel):
     serpapi_key: str = ""
     ai_url: str = ""
     ai_model: str = ""
+    ai_provider: str = ""  # Phase 5 preset: groq | kilo | openrouter | openai | local
     last_query: str = ""
     last_location: str = ""
     last_days: int = 7
@@ -97,9 +98,15 @@ class SearchConfig(BaseModel):
 
 
 class AIConfig(BaseModel):
+    """AI client settings (strategy §10.2, Phase 5)."""
+
     enabled: bool = True
     top_n: int = 30
     timeout: int = 60
+    model_best: str = ""  # scoring / profile extraction (default per provider)
+    model_fast: str = ""  # query gen / title suggestion (default per provider)
+    max_calls: int = 60  # budget guard per run
+    cache_ttl: int = 0  # disk cache TTL in seconds; 0 = disabled (opt-in)
 
 
 class ScraperConfig(BaseModel):

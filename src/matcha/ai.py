@@ -1,12 +1,39 @@
+"""Provider-agnostic AI client (strategy §10, Phase 5).
+
+OpenAI-compatible REST against ``{base_url}/chat/completions`` with:
+
+- **Provider presets** (``PROVIDERS``): Groq, Kilo Gateway (default),
+  OpenRouter, OpenAI/any compatible endpoint, and local (Ollama/LM Studio —
+  no API key required).
+- **Model tiers**: ``model_fast`` for high-volume low-stakes tasks (query
+  generation, title suggestion); ``model_best`` for scoring/profile
+  extraction. Resolution order per tier:
+  env var → config.json → settings.yaml → provider preset default.
+- **Budget guard**: ``max_calls`` per run caps spend/latency; once
+  exhausted, remaining calls return None and jobs keep heuristic scores.
+  Reported via ``budget_used()``/``budget_remaining()``.
+- **Disk cache** (``ai_cache.py``): opt-in via ``settings.ai.cache_ttl > 0``
+  (default 0 = disabled); keyed by task + sha256(inputs), SQLite, TTL'd.
+- **No API key required to run the tool**: missing key ⇒ heuristic-only mode.
+
+Backwards-compatible surface kept intact for existing callers/tests:
+``_get_api_key/_get_api_url/_get_model/check_ai_available/configure_ai/
+_call_ai/_extract_json`` + the four task functions.
+"""
+
 import json
 import logging
 import os
 import re
+import threading
+import time
 from typing import Any
 
 import requests
 
+from matcha import ai_cache
 from matcha.config import load_config, save_config
+from matcha.settings import load_settings
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +43,118 @@ CONFIG_KEY = "ai_key"
 ENV_VAR = "MINIMAX"
 CONFIG_URL_KEY = "ai_url"
 CONFIG_MODEL_KEY = "ai_model"
+CONFIG_PROVIDER_KEY = "ai_provider"
+
+#: One retry after ConnectionError/Timeout/non-200, with a short backoff so
+#: transient provider hiccups don't hammer the endpoint.
+_RETRY_BACKOFF_SECONDS = 0.25
+
+#: Provider presets (strategy §10.2). ``url`` is the OpenAI-compatible BASE
+#: URL — ``/chat/completions`` is appended at call time. ``model_best`` /
+#: ``model_fast`` are only defaults; every layer above can override them.
+#: ``requires_key=False`` providers (local endpoints) skip the API key check.
+PROVIDERS: dict[str, dict[str, Any]] = {
+    "groq": {
+        "label": "Groq (free tier)",
+        "url": "https://api.groq.com/openai/v1",
+        "model_best": "openai/gpt-oss-120b",
+        "model_fast": "openai/gpt-oss-20b",
+    },
+    "kilo": {
+        "label": "Kilo Gateway (default)",
+        "url": "https://api.kilo.ai/api/gateway",
+        "model_best": "kilo-auto/small",
+        "model_fast": "kilo-auto/small",
+    },
+    "openrouter": {
+        "label": "OpenRouter (free models)",
+        "url": "https://openrouter.ai/api/v1",
+        "model_best": "meta-llama/llama-3.3-70b-instruct:free",
+        "model_fast": "meta-llama/llama-3.1-8b-instruct:free",
+    },
+    "openai": {
+        "label": "OpenAI / any compatible endpoint",
+        "url": "https://api.openai.com/v1",
+        "model_best": "gpt-4o-mini",
+        "model_fast": "gpt-4o-mini",
+    },
+    "local": {
+        "label": "Local (Ollama / LM Studio)",
+        "url": "http://localhost:11434/v1",
+        "model_best": "",  # user must name a model (e.g. llama3)
+        "model_fast": "",
+        "requires_key": False,
+    },
+}
+
+
+# ── budget guard (thread-safe: AI scoring runs in a pool) ──────────────
+
+_budget_lock = threading.Lock()
+_budget_used = 0
+_budget_max = 0  # 0 = unlimited until run() calls reset_budget()
+_budget_warned = False
+
+#: Settings values are re-read on a short TTL so config edits take effect
+#: within a run without re-parsing YAML on every call.
+_SETTINGS_TTL_SECONDS = 5.0
+_settings_ts = 0.0
+_settings_value: dict[str, Any] | None = None
+
+
+def _ai_settings() -> dict[str, Any]:
+    global _settings_ts, _settings_value
+    now = time.monotonic()
+    if now - _settings_ts > _SETTINGS_TTL_SECONDS:
+        _settings_value = load_settings()
+        _settings_ts = now
+    return _settings_value or {}
+
+
+def reset_budget(max_calls: int | None = None) -> None:
+    """Start a fresh AI budget for a run.
+
+    ``max_calls=None`` uses ``settings.ai.max_calls`` (default 60). Calling
+    this also un-warns the exhaustion message so a later run can warn again.
+    """
+    global _budget_used, _budget_max, _budget_warned
+    if max_calls is None:
+        max_calls = int(_ai_settings().get("ai", {}).get("max_calls", 60))
+    with _budget_lock:
+        _budget_used = 0
+        _budget_max = max(0, int(max_calls))
+        _budget_warned = False
+
+
+def budget_used() -> int:
+    with _budget_lock:
+        return _budget_used
+
+
+def budget_remaining() -> int:
+    """Calls left this run; -1 when unlimited (no cap configured)."""
+    with _budget_lock:
+        if _budget_max <= 0:
+            return -1
+        return max(0, _budget_max - _budget_used)
+
+
+def _consume_budget() -> bool:
+    global _budget_used, _budget_warned
+    with _budget_lock:
+        if _budget_max > 0 and _budget_used >= _budget_max:
+            if not _budget_warned:
+                _budget_warned = True
+                logger.warning(
+                    "AI budget exhausted (%d calls) — remaining jobs keep heuristic scores",
+                    _budget_max,
+                )
+            return False
+        _budget_used += 1
+        return True
+
+
+# ── provider + credential resolution ───────────────────────────────────
 
 
 def _env_or_config(env_var: str, config_key: str, default: str = "") -> str:
@@ -30,15 +169,75 @@ def _get_api_key() -> str:
     return _env_or_config(ENV_VAR, CONFIG_KEY)
 
 
+def _get_provider() -> str:
+    val = os.environ.get("AI_PROVIDER", "")
+    if val:
+        return val.strip().lower()
+    config = load_config()
+    return str(config.get(CONFIG_PROVIDER_KEY, "")).strip().lower()
+
+
+def _normalize_chat_url(url: str) -> str:
+    """Ensure a base URL points at the chat completions endpoint."""
+    url = (url or "").strip().rstrip("/")
+    if not url:
+        return ""
+    if url.endswith("/chat/completions"):
+        return url
+    return f"{url}/chat/completions"
+
+
 def _get_api_url() -> str:
-    return _env_or_config("AI_API_URL", CONFIG_URL_KEY)
+    val = os.environ.get("AI_API_URL", "")
+    if val:
+        return val
+    config = load_config()
+    val = config.get(CONFIG_URL_KEY, "")
+    if val:
+        return val
+    return str(PROVIDERS.get(_get_provider(), {}).get("url", ""))
 
 
-def _get_model() -> str:
-    return _env_or_config("AI_MODEL", CONFIG_MODEL_KEY)
+def _get_model(tier: str = "best") -> str:
+    """Resolve the model for a tier: best (scoring/profile) or fast (queries).
+
+    Order per tier: env → config.json → settings.yaml → provider preset.
+    ``fast`` falls back to the ``best`` resolution before its own preset.
+    """
+    provider = _get_provider()
+    preset = PROVIDERS.get(provider, {})
+
+    if tier == "fast":
+        val = os.environ.get("AI_MODEL_FAST", "")
+        if val:
+            return val
+        val = _ai_settings().get("ai", {}).get("model_fast", "")
+        if val:
+            return val
+        preset_fast = str(preset.get("model_fast", ""))
+        if preset_fast:
+            return preset_fast
+        # Providers without a distinct fast default (e.g. local) reuse best.
+        return _get_model("best")
+
+    val = os.environ.get("AI_MODEL", "")
+    if val:
+        return val
+    config = load_config()
+    val = config.get(CONFIG_MODEL_KEY, "")
+    if val:
+        return val
+    val = _ai_settings().get("ai", {}).get("model_best", "")
+    if val:
+        return val
+    return str(preset.get("model_best", ""))
 
 
 def check_ai_available() -> bool:
+    provider = _get_provider()
+    if not PROVIDERS.get(provider, {}).get("requires_key", True):
+        # Local endpoints (Ollama/LM Studio) need no API key.
+        return bool(_get_api_url() and _get_model())
     return bool(_get_api_key() and _get_api_url() and _get_model())
 
 
@@ -52,22 +251,55 @@ def configure_ai(key: str, url: str = "", model: str = "") -> None:
     save_config(config)
 
 
+def configure_provider(provider: str, key: str = "", url: str = "", model: str = "") -> None:
+    """Persist a provider preset choice (+ optional overrides).
+
+    ``provider`` must be a ``PROVIDERS`` key (or "" to clear). When an
+    override is empty, any previously stored url/model is cleared so the
+    preset (or env/settings) owns that slot — switching providers must not
+    keep another provider's endpoint.
+    """
+    if provider and provider not in PROVIDERS:
+        raise ValueError(f"Unknown AI provider: {provider!r}")
+    config = load_config()
+    config[CONFIG_PROVIDER_KEY] = provider
+    if key:
+        config[CONFIG_KEY] = key
+    if url:
+        config[CONFIG_URL_KEY] = url
+    else:
+        config.pop(CONFIG_URL_KEY, None)
+    if model:
+        config[CONFIG_MODEL_KEY] = model
+    else:
+        config.pop(CONFIG_MODEL_KEY, None)
+    save_config(config)
+
+
+# ── transport ──────────────────────────────────────────────────────────
+
+
 def _call_ai(
     messages: list[dict[str, Any]],
     response_format: dict[str, Any] | None = None,
     max_tokens: int = 8192,
     timeout: int = 60,
+    tier: str = "best",
 ) -> str | None:
     key = _get_api_key()
     url = _get_api_url()
-    model = _get_model()
-    if not key or not url or not model:
+    model = _get_model(tier)
+    if not url or not model:
+        return None
+    provider = _get_provider()
+    if PROVIDERS.get(provider, {}).get("requires_key", True) and not key:
+        return None
+    if not _consume_budget():
         return None
 
-    headers = {
-        "Authorization": f"Bearer {key}",
-        "Content-Type": "application/json",
-    }
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
     payload = {
         "model": model,
         "messages": messages,
@@ -77,9 +309,10 @@ def _call_ai(
     if response_format:
         payload["response_format"] = response_format
 
+    endpoint = _normalize_chat_url(url)
     for attempt in range(2):
         try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
+            resp = requests.post(endpoint, headers=headers, json=payload, timeout=timeout)
             if resp.status_code != 200:
                 if attempt < 1:
                     logger.warning(
@@ -87,6 +320,7 @@ def _call_ai(
                         resp.status_code,
                         attempt + 1,
                     )
+                    time.sleep(_RETRY_BACKOFF_SECONDS)
                     continue
                 return None
             data = resp.json()
@@ -116,6 +350,7 @@ def _call_ai(
                     e,
                     attempt + 1,
                 )
+                time.sleep(_RETRY_BACKOFF_SECONDS)
                 continue
             logger.warning("AI request failed after 2 attempts: %s", e)
             return None
@@ -123,6 +358,34 @@ def _call_ai(
             logger.warning("AI request failed: %s", e)
             return None
     return None
+
+
+def _run_with_cache(
+    task: str,
+    messages: list[dict[str, Any]],
+    max_tokens: int,
+    timeout: int,
+    tier: str,
+) -> str | None:
+    """Call ``_call_ai`` with an optional disk-cache round-trip.
+
+    Cache engages only when ``settings.ai.cache_ttl > 0`` (opt-in; default
+    0). The cache key is ``task + resolved model + the exact messages sent``
+    — so switching providers/models or editing a prompt self-invalidates
+    entries, and prompt-side truncation is hashed exactly. Cache hits don't
+    consume AI budget. The raw completion text is cached; parsing happens on
+    every hit (cheap, and keeps the cache generic).
+    """
+    ttl = int(_ai_settings().get("ai", {}).get("cache_ttl", 0) or 0)
+    if ttl > 0:
+        key = ai_cache.cache_key(task, _get_model(tier), messages)
+        hit = ai_cache.get(task, key, ttl)
+        if hit is not None:
+            return hit
+    result = _call_ai(messages, max_tokens=max_tokens, timeout=timeout, tier=tier)
+    if result is not None and ttl > 0:
+        ai_cache.put(task, ai_cache.cache_key(task, _get_model(tier), messages), result)
+    return result
 
 
 def _extract_json(text: str) -> dict[str, Any] | None:
@@ -166,10 +429,12 @@ def ai_extract_profile(text: str) -> dict[str, Any] | None:
     if not check_ai_available():
         return None
     prompt = PROFILE_EXTRACTION_PROMPT.format(text=text[:4000])
-    result = _call_ai(
+    result = _run_with_cache(
+        "extract_profile",
         [{"role": "user", "content": prompt}],
         max_tokens=16384,
         timeout=300,
+        tier="best",
     )
     if not result:
         return None
@@ -208,9 +473,12 @@ def ai_suggest_titles(skills: list[str]) -> list[str] | None:
     if not check_ai_available() or not skills:
         return None
     prompt = SUGGEST_TITLES_PROMPT.format(skills=", ".join(skills))
-    result = _call_ai(
+    result = _run_with_cache(
+        "suggest_titles",
         [{"role": "user", "content": prompt}],
         max_tokens=4096,
+        timeout=60,
+        tier="fast",
     )
     if not result:
         return None
@@ -262,9 +530,12 @@ def ai_generate_queries(profile: dict[str, Any]) -> list[str] | None:
         summary=summary,
         location=location,
     )
-    result = _call_ai(
+    result = _run_with_cache(
+        "generate_queries",
         [{"role": "user", "content": prompt}],
         max_tokens=8192,
+        timeout=60,
+        tier="fast",
     )
     if not result:
         return None
@@ -343,10 +614,12 @@ def ai_score_job(
         job_location=job_location,
         job_description=job_description,
     )
-    result = _call_ai(
+    result = _run_with_cache(
+        "score_job",
         [{"role": "user", "content": prompt}],
         max_tokens=16384,
         timeout=timeout,
+        tier="best",
     )
     if not result:
         return None

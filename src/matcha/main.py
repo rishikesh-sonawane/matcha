@@ -24,7 +24,12 @@ from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
 from matcha.actions import is_job_saved, load_saved_jobs, save_job, unsave_job
-from matcha.ai import ai_generate_queries, check_ai_available
+from matcha.ai import (
+    ai_generate_queries,
+    budget_used,
+    check_ai_available,
+    reset_budget,
+)
 from matcha.config import load_config, save_config
 from matcha.filters import apply_filters, build_filter_summary, provenance_tags
 from matcha.matcher import (
@@ -92,6 +97,13 @@ def configure_serpapi():
 
 
 def configure_ai():
+    """AI setup wizard (Phase 5, strategy §10.2): pick a provider preset.
+
+    Presets (Groq / Kilo Gateway / OpenRouter / OpenAI-compatible / local)
+    fill in the URL + model defaults; the wizard only asks for the API key
+    (not needed for local endpoints) and optional overrides. The key goes to
+    the normal secret store (keyring/fernet), never plaintext.
+    """
     if check_ai_available():
         return
     if not Confirm.ask(
@@ -100,14 +112,20 @@ def configure_ai():
         default=False,
     ):
         return
-    from matcha.ai import configure_ai as set_ai_config
+    from matcha.ai import PROVIDERS, configure_provider
 
-    key = Prompt.ask("Enter your AI API key (or set $AI_API_KEY env var)", password=False)
-    url = Prompt.ask("Enter AI API URL (or set $AI_API_URL)", default="")
-    model = Prompt.ask("Enter AI model name (or set $AI_MODEL)", default="")
-    if key.strip():
-        set_ai_config(key.strip(), url.strip(), model.strip())
-        console.print("[green]AI configuration saved![/green]")
+    label_to_provider = {p["label"]: k for k, p in PROVIDERS.items()}
+    choices = list(label_to_provider)
+    selection = Prompt.ask("Select an AI provider", choices=choices, default=choices[1])
+    provider = label_to_provider[selection]
+
+    key = ""
+    if PROVIDERS[provider].get("requires_key", True):
+        key = Prompt.ask("Enter your API key (or set $AI_API_KEY env var)", password=True)
+    url = Prompt.ask("API URL override (blank = provider default)", default="")
+    model = Prompt.ask("Model override (blank = provider default)", default="")
+    configure_provider(provider, key.strip(), url=url.strip(), model=model.strip())
+    console.print(f"[green]AI configuration saved ({selection})![/green]")
 
 
 def configure_opencli():
@@ -759,7 +777,7 @@ def run() -> None:
     parser.add_argument(
         "--configure",
         action="store_true",
-        help="Configure API keys (SerpAPI, AI) + OpenCLI consent",
+        help="Configure API keys (SerpAPI, AI provider) + OpenCLI consent",
     )
     parser.add_argument(
         "--new-profile", "-n", action="store_true", help="Re-enter profile from scratch"
@@ -810,6 +828,9 @@ def run() -> None:
             sys.exit(1)
 
         use_ai = check_ai_available() and settings["ai"]["enabled"]
+
+        # Phase 5 (§10.2): fresh AI budget per run (queries + scoring share it).
+        reset_budget(max_calls=settings.get("ai", {}).get("max_calls", 60))
 
         config = load_config()
         default_query = (
@@ -928,6 +949,15 @@ def run() -> None:
                 )
             if enriched:
                 console.print(f"[dim]Enriched [cyan]{enriched}[/cyan] top jobs with details[/dim]")
+
+        # Phase 5 (§10.2): surface the budget guard outcome in the run summary.
+        ai_calls = budget_used()
+        if use_ai and ai_calls:
+            max_calls = settings.get("ai", {}).get("max_calls", 60)
+            remaining = max(0, max_calls - ai_calls)
+            console.print(
+                f"[dim]AI budget: {ai_calls}/{max_calls} calls used ({remaining} left)[/dim]"
+            )
         result = prompt_loop(
             ranked,
             source_counts,

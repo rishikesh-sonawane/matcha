@@ -54,6 +54,17 @@
 > `filters.provenance_tags`) beside `[age?]`/`[salary?]`; every job row is
 > stamped with its `ScraperResult` `data_quality`/`backend` at ingest
 > (provenance is data). 401/401 tests; ruff/format/bandit clean.)
+> Rev 12 (adds: **Phase 5 DONE — provider-agnostic AI client** — §10.2
+> implemented in `ai.py` + `ai_cache.py`: OpenAI-compatible REST to
+> `{base_url}/chat/completions`; provider presets (Groq / Kilo Gateway /
+> OpenRouter / OpenAI / local-no-key with `ai_provider`); model tiers
+> `model_best` (scoring/profile) vs `model_fast` (queries/titles) resolved
+> env → config → settings → preset; thread-safe per-run **budget guard**
+> (`ai.max_calls`, surfaced in the TUI summary); opt-in **disk cache**
+> (`ai.cache_ttl`, SQLite keyed by task+model+messages, self-invalidating on
+> provider/prompt change); `matcha --configure` provider wizard;
+> `configure_provider()`; GROQ seed model updated to gpt-oss-120b (EOL
+> 2026-08-16). 430/430 tests; ruff/format/bandit clean.)
 
 ---
 
@@ -659,7 +670,16 @@ def enrich_job(job, timeout=30) -> dict:
 | Semantic web search (Exa) | **MCP** via `mcporter` (`exa.web_search_exa`) | Agent-Reach already installs/configures it; data tool, not the AI brain |
 | Exposing Matcha to other agents | **MCP server** (optional) — `matcha_search`, `matcha_status` | Mirror Agent-Reach `integrations/mcp_server.py` |
 
-### 10.2 The AI brain (`src/matcha/ai/client.py`)
+### 10.2 The AI brain (`src/matcha/ai.py` + `ai_cache.py`) — IMPLEMENTED (Rev 12)
+
+> ✅ **Implemented (Phase 5, 2026-08-06).** ``ai.py`` stays a single module
+> (public surface + all task prompts kept for test-mock compatibility;
+> ``ai_cache.py`` is the SQLite cache). Presets, tiers, budget guard and
+> cache are wired as specified below; ``matcha --configure`` now offers the
+> provider wizard (stores ``ai_provider`` via ``configure_provider()``).
+> Verified: preset resolution, local-no-key availability, budget
+> exhaustion → heuristic-only with a once-per-run warning, cache hits skip
+> the API. 430/430 tests; ruff/format/bandit clean.
 
 - Universal client: `base_url + api_key + model` (OpenAI-compatible).
 - **No API key required to run the tool.** Missing key ⇒ heuristic-only mode,
@@ -693,10 +713,14 @@ ai:
 - **Model tiering:** `model_fast` for high-volume low-stakes tasks (query
   generation, title suggestion); `model_best` for scoring/verdicts. Defaults
   documented per provider; overridable.
-- **AI result cache** (`ai/cache.py`): disk SQLite keyed by `task + hash(input)`
-  with `cache_ttl` (default 24h). Re-runs and `watch` don't re-pay.
+- **AI result cache** (`ai_cache.py`): disk SQLite keyed by
+  `task + resolved model + exact messages` with `cache_ttl` — **opt-in**
+  (default 0; set to e.g. 86400 to enable). Keying on the messages makes
+  entries self-invalidating when a provider/model or prompt changes;
+  re-runs and `watch` don't re-pay. Cache hits don't consume budget.
 - **Budget guard:** `max_calls` per run caps spend/latency; once exhausted,
-  remaining jobs keep heuristic scores. Reported in the run summary.
+  remaining jobs keep heuristic scores. Reported in the run summary
+  (`AI budget: N/M used (R left)`).
 
 ### 10.3 Prompts (`ai/prompts.py`)
 
@@ -981,11 +1005,18 @@ candidates, flatline detection, verdict pass, provenance tags.
 > apply?" line, §9.5) — optional, AI-gated. 401/401 tests;
 > ruff/format/bandit clean.
 
-### Phase 5 — AI provider-agnostic + cache + budget (2–3 days)
-`ai/client.py`, presets (Groq/Kilo/OpenRouter/local), model tiers, disk cache,
+### Phase 5 — AI provider-agnostic + cache + budget (2–3 days) ✅ COMPLETE (2026-08-06)
+`ai.py` + `ai_cache.py`, presets (Groq/Kilo/OpenRouter/local), model tiers, disk cache,
 budget guard, `matcha configure ai` wizard.
 **Accept:** works with Groq free tier and with zero config (heuristic-only);
 no key leak; cache hits on re-run.
+
+> ✅ **Phase 5 COMPLETE (2026-08-06).** Provider presets + model tiers +
+> budget guard + opt-in disk cache + wizard, all hermetic-tested (29 tests
+> in `tests/test_ai_client.py`). Groq preset defaults use current models
+> (`gpt-oss-120b`/`gpt-oss-20b` — legacy names EOL 2026-08-16). Works with
+> zero config (heuristic-only) and with Groq/OpenRouter/Kilo/local. 430/430
+> tests; ruff/format/bandit clean.
 
 ### Phase 6 — Agent + automation (2–3 days)
 `--json`, SKILL.md + installer, `matcha watch` + new-vs-seen, optional MCP.
@@ -1009,7 +1040,7 @@ coverage ≥80%, README + docs.
 - [ ] New-vs-seen tracking for `watch`
 - [ ] Circuit breakers per source
 - [ ] Typed error taxonomy; zero bare `except`
-- [ ] AI: provider-agnostic REST client, free-tier presets, model tiers, disk cache, budget guard, heuristic-only fallback
+- [x] AI: provider-agnostic REST client, free-tier presets, model tiers, disk cache, budget guard, heuristic-only fallback
 - [x] MCP: Exa via mcporter; optional Matcha MCP server; never required
 - [ ] `src/` package layout; mypy strict; ruff; coverage gate
 - [ ] Pydantic models used at runtime (jobs/profile/filters/settings)

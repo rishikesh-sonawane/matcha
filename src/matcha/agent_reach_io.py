@@ -55,8 +55,10 @@ _GH_READ_ONLY_ENV = {
 }
 
 #: Seed defaults for ``seed_ai_config()`` — Groq-compatible, openai-style.
+#: ``llama-3.3-70b-versatile`` reached EOL 2026-08-16; gpt-oss-120b is the
+#: current high-speed production recommendation (overridable in the wizard).
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
-GROQ_MODEL = "llama-3.3-70b-versatile"
+GROQ_MODEL = "openai/gpt-oss-120b"
 
 # Module-level state is mutated without locks — safe today because
 # agent_reach_io is single-threaded by convention (sources call their own
