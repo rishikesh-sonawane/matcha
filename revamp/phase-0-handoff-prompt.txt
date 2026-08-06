@@ -1,0 +1,141 @@
+You are starting Phase 0 of "Matcha 2.0", a rebuild of the job-search tool at
+/Users/rishi/Code/projects/matcha. The full plan is the source of truth:
+read /Users/rishi/Code/projects/matcha/revamp/matcha-2.0-strategy.md FIRST,
+all 23 sections, before writing any code.
+
+CONTEXT
+Matcha is a Python 3.10+ TUI that aggregates job listings (LinkedIn, Indeed,
+Naukri, RemoteOK, Web Search, Career Sites, SerpAPI Jobs) and ranks them
+against a user profile. It currently works but returns thin, unreliable
+data. Matcha 2.0 rebuilds it around a robust multi-backend data layer,
+centralized filters, enrichment, and calibrated ranking. This session builds
+ONLY Phase 0. The repo tree is clean (only revamp/ is untracked, which is
+intentional). The venv is at /Users/rishi/Code/projects/matcha/venv.
+
+ALSO READ FIRST: revamp/matcha-2.0-implementation-analysis.md (2026-08-06) —
+it contains the verified environment snapshot, the layout-migration plan, and
+findings F-01..F-23 that expand Phase 0's scope (F-01..F-05, F-08, F-09,
+F-11, F-17, F-18). The scope items below already include those expansions.
+
+PHASE 0 SCOPE (from section 18 of the plan, expanded)
+1. Create the src/ package layout: move existing flat modules into
+   src/matcha/ (main.py, profile.py, ai.py, matcher.py, config.py,
+   settings.py, models.py, actions.py) and scrapers/ into
+   src/matcha/sources/ (kept as backend modules). Update imports; do NOT
+   change behavior.
+2. Create src/matcha/errors.py — typed exception hierarchy from section
+   15.1: MatchaError > ConfigError / SourceError / BackendError / ParseError
+   / FilterError / EnrichmentError. No bare except anywhere.
+3. Create src/matcha/probe.py — port from
+   /Users/rishi/Code/projects/Agent-Reach/agent_reach/probe.py (verified
+   v1.5.0): ProbeResult(status: ok|missing|broken|timeout|error, output,
+   hint) with an .ok property; probe_command(cmd, args=("--version",),
+   timeout=10, retries=0, package=None, env=None, remove_env=()) that really
+   executes the tool; broken = exit 126/127 or exec FileNotFoundError →
+   reinstall_hint ("uv tool install --force <pkg>" / "pipx reinstall <pkg>");
+   retry ONLY transient failures (timeout/error), never missing/broken; child
+   env forced UTF-8 (PYTHONUTF8=1, PYTHONIOENCODING=utf-8); probes must be
+   side-effect-free (version/status only).
+4. Create src/matcha/doctor.py — port from
+   /Users/rishi/Code/projects/Agent-Reach/agent_reach/doctor.py +
+   channels/base.py (verified v1.5.0): a Source base class (name,
+   description, backends as ordered list richest-first, tier 0/1/2,
+   active_backend, ordered_backends() honoring a <source>_backend
+   config/env override — unknown values ignored — check() that returns
+   (status, message) with statuses ok|warn|off|error, really probes, and
+   sets active_backend; search() dispatch) and a registry of ALL_SOURCES
+   (unique names, one file per source). Refactor each existing scraper into a
+   Source subclass with check() implemented; search() delegates to the
+   existing parser functions (unchanged behavior). doctor.check_all() returns
+   {name: {status, name, message, tier, backends, active_backend}} with
+   per-channel exception isolation (status="error", active_backend=None).
+   NOTE: this isolation catch is the ONE sanctioned broad `except Exception`
+   in the codebase — mark it `# noqa: BLE001 — doctor must survive any
+   source` (mirrors Agent-Reach) so ruff BLE doesn't block Phase 0.
+   Port format_report() tier-grouped styling, scrub_url_credentials()
+   (from agent_reach/utils/text.py — URL userinfo + bare userinfo +
+   sensitive query-param regexes), and the active-backend display line.
+5. `matcha doctor [--json]` works and reports every source with real status
+   (ok/warn/off/error), the active backend, and a fix hint. A single
+   crashing source degrades to status=error and never takes the report down.
+6. ScraperResult (models.py) gains provenance fields: backend, data_quality
+   ("full"|"partial"|"snippet"). Populate data_quality in each source.
+7. Add pytest tests for probe.py, doctor.py, and source contracts (mirror
+   Agent-Reach tests/test_channel_contracts.py + tests/test_doctor.py):
+   registry non-empty + unique names; check() returns a valid status
+   (ok|warn|off|error) + non-empty message; active_backend is None or str
+   after check(); ordered_backends() is a permutation of backends; doctor
+   result dict shape. Use the existing tests/ as reference; run
+   `venv/bin/python -m pytest tests/ -v`.
+8. Wire `matcha doctor` into main.py's CLI as a subcommand alongside
+   existing behavior.
+9. Create **root re-export shims** after moving the code: `main.py ai.py
+   matcher.py config.py settings.py models.py actions.py profile.py` and the
+   `scrapers/` package each become thin `from matcha.* import ...` shims
+   (preserve every exported name the tests use, e.g. `_normalize`,
+   `deduplicate`, `search_jobs`, `ai_score_job`). This keeps `python3
+   main.py`, tests, Makefile, CI, and Docker green with zero downstream
+   change. Shims are deleted in Phase 1 after the entry-point migration.
+10. CI fixes (F-02/F-03): change `python -m unittest tests.test_core -v` to
+    `python -m unittest discover tests -v`; add `"3.14"` to the CI matrix.
+11. Set `target-version = "py310"` in pyproject.toml (was py39); run
+    `ruff check --fix .` once (F-01/F-18).
+12. Fix the time-dependent test `tests/test_days_filter.py::
+    test_date_string_within` (F-09): it asserts "Posted: June 6, 2026" is
+    within 7 days and fails on any run date after mid-June 2026 (fails now).
+    Rewrite with dates relative to `time.time()` (e.g.
+    `datetime.now() - timedelta(days=2)` formatted as "Posted: <Month D,
+    YYYY>") so CI is green.
+13. Register `career_sites` as a Source with its own `check()` but keep it
+    OUT of default dispatch via `scrapers.career_sites: false` (default off)
+    — preserves "no behavior change"; enable in Phase 1 (F-11).
+14. Change the LinkedIn empty-location default (F-08, **user-confirmed**):
+    `loc = location if location else "United States"` → default to
+    `"India"`. This is an intentional, minimal behavior change.
+15. Replace `os._exit(0)` in `main()` with `sys.exit(0)` and ensure SQLite
+    WAL commits are explicit before exit (F-05); keep ddgs daemon-thread
+    cleanup handled so the process still exits.
+16. **Defer the entry-point migration to Phase 1 — do NOT do it in Phase 0.**
+    With the root shims from item 9, `python3 main.py`, tests, Makefile, CI,
+    Docker and pyinstaller keep working unchanged; the move breaks nothing
+    (F-04). Phase 1 start will: add `[project]` + `[project.scripts] matcha =
+    "matcha.cli:main"` to pyproject.toml, `pip install -e .` in Makefile/CI,
+    update bandit/pyinstaller/Dockerfile/README paths (pyinstaller builds
+    from a small entry module or the installed console script — not
+    `-m matcha`), then delete the shims.
+
+HARD CONSTRAINT ADDITION: Phase 0 acceptance now includes "full test suite
+passes (122 tests, 0 failures), CI green, `python3 main.py --help` works
+alongside `python3 main.py doctor --json`".
+
+CURRENT scrapers/ CONTENTS (all of these become Source subclasses):
+__init__.py, constants.py, utils.py, linkedin.py, indeed.py, naukri.py,
+remoteok.py, web_search.py, serpapi_jobs.py, career_sites.py
+NOTE: career_sites.py is untracked in git but present and intended as a
+source; keep it through the refactor (all sources get their own check()).
+
+HARD CONSTRAINTS
+- Read the strategy doc and follow its design exactly. Do not invent new
+  architecture.
+- Do NOT build Phase 1+ features (no OpenCLI backends, no Exa, no filters
+  module yet, no enrichment, no AI changes). Only registry/probe/doctor/
+  errors/layout/refactor.
+- Do NOT change existing scraping/search/ranking behavior — this phase is a
+  behavior-neutral refactor + diagnostics foundation. Run the tests BEFORE
+  your changes to capture the baseline, then confirm you match it after.
+- The venv is at /Users/rishi/Code/projects/matcha/venv. Install via
+  `venv/bin/pip install -r requirements.txt`. There may be pre-existing test
+  failures; your changes must not add new ones.
+- Code quality: type hints everywhere, ruff (line-length 100), mypy clean,
+  no bare except, standard logging per module (match existing style:
+  `logger = logging.getLogger(__name__)`).
+- Do not commit unless asked.
+
+VERIFY BEFORE FINISHING
+- venv/bin/python -m pytest tests/ -v  (baseline-equivalent or better)
+- venv/bin/python -m matcha doctor      (and --json)
+- venv/bin/python -m ruff check src/matcha
+- venv/bin/python -m mypy src/matcha
+
+Report back: files created/changed, doctor output sample, test results, and
+any deviations from the plan.
