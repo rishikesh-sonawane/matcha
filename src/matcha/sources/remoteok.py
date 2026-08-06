@@ -5,8 +5,9 @@ from typing import Any
 
 import requests
 
-from models import ScraperResult
-from scrapers.constants import STOP_WORDS
+from matcha.models import ScraperResult
+from matcha.sources.base import Source, probe_url
+from matcha.sources.constants import STOP_WORDS
 
 from .utils import resilient_get
 
@@ -48,11 +49,15 @@ def search_remoteok_jobs(
             msg = f"RemoteOK returned status {resp.status_code}"
             logger.warning(msg)
             errors.append(msg)
-            return ScraperResult(jobs=jobs, errors=errors, source="RemoteOK")
+            return ScraperResult(
+                jobs=jobs, errors=errors, source="RemoteOK", backend="api", data_quality="full"
+            )
 
         data = resp.json()
         if not isinstance(data, list) or len(data) < 2:
-            return ScraperResult(jobs=jobs, errors=errors, source="RemoteOK")
+            return ScraperResult(
+                jobs=jobs, errors=errors, source="RemoteOK", backend="api", data_quality="full"
+            )
 
         raw_jobs = data[1:]
 
@@ -94,10 +99,34 @@ def search_remoteok_jobs(
                 logger.warning("Failed to parse RemoteOK job: %s", e)
                 continue
 
-        return ScraperResult(jobs=jobs, errors=errors, source="RemoteOK")
+        return ScraperResult(
+            jobs=jobs, errors=errors, source="RemoteOK", backend="api", data_quality="full"
+        )
 
     except requests.RequestException as e:
         msg = f"RemoteOK request failed: {e}"
         logger.warning(msg)
         errors.append(msg)
-        return ScraperResult(jobs=jobs, errors=errors, source="RemoteOK")
+        return ScraperResult(
+            jobs=jobs, errors=errors, source="RemoteOK", backend="api", data_quality="full"
+        )
+
+
+class RemoteOKSource(Source):
+    """RemoteOK — global remote-jobs API."""
+
+    name = "remoteok"
+    description = "RemoteOK — global remote-jobs API"
+    backends = ["api"]
+    tier = 0
+
+    def check(self, config: dict[str, Any] | None = None) -> tuple[str, str]:
+        status, msg = probe_url("https://remoteok.com/api")
+        if status == "ok":
+            self.active_backend = "api"
+            return "ok", "RemoteOK API responding (HTTP 200)"
+        self.active_backend = None
+        return "error", f"RemoteOK unreachable: {msg}"
+
+    def search(self, query: str, location: str = "", **kwargs: Any) -> ScraperResult:
+        return search_remoteok_jobs(query, location, **kwargs)

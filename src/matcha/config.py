@@ -1,9 +1,9 @@
 import json
 import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
-from models import ConfigSchema
+from matcha.models import ConfigSchema
 
 logger = logging.getLogger(__name__)
 
@@ -183,7 +183,7 @@ def save_config(config: dict[str, Any]) -> None:
             _write_secret(key, value)
 
 
-def load_profile() -> Optional[dict[str, Any]]:
+def load_profile() -> dict[str, Any] | None:
     ensure_config_dir()
     if PROFILE_FILE.exists():
         try:

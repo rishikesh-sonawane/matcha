@@ -793,7 +793,7 @@ into `sources/*` with **no behavior change**.
   (F-05).
 
 **Deferred to Phase 1 (start):** the entry-point migration — `pyproject.toml`
-`[project]` + console script `matcha = matcha.cli:main`, `pip install -e .` in
+`[project]` + console script `matcha = matcha.main:main` (implemented; no cli.py needed), `pip install -e .` in
 Makefile/CI, bandit/pyinstaller/Dockerfile/README path updates for
 `src/matcha` (pyinstaller builds from a small entry module or the installed
 console script — not `-m matcha`), then **delete the root shims**.

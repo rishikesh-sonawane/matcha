@@ -7,8 +7,9 @@ try:
 except ImportError:
     DDGS = None
 
-from models import ScraperResult
-from scrapers.constants import NAUKRI_NON_JOB_PATHS, NON_JOB_TITLE_PATTERNS, STOP_WORDS
+from matcha.models import ScraperResult
+from matcha.sources.base import Source
+from matcha.sources.constants import NAUKRI_NON_JOB_PATHS, NON_JOB_TITLE_PATTERNS, STOP_WORDS
 
 from .utils import limiter
 
@@ -30,7 +31,7 @@ def search_naukri_jobs(
 ) -> ScraperResult:
     errors: list[str] = []
     if DDGS is None:
-        return ScraperResult(errors=["ddgs library not available"], source="Naukri")
+        return ScraperResult(errors=["ddgs library not available"], source="Naukri", backend="ddgs")
 
     days = kwargs.get("days")
     timelimit = ""
@@ -60,7 +61,7 @@ def search_naukri_jobs(
         msg = f"Naukri DDGS search failed: {e}"
         logger.warning(msg)
         errors.append(msg)
-        return ScraperResult(errors=errors, source="Naukri")
+        return ScraperResult(errors=errors, source="Naukri", backend="ddgs")
 
     for item in raw:
         try:
@@ -85,7 +86,26 @@ def search_naukri_jobs(
             logger.warning("Failed to parse Naukri result: %s", e)
             continue
 
-    return ScraperResult(jobs=jobs, errors=errors, source="Naukri")
+    return ScraperResult(
+        jobs=jobs, errors=errors, source="Naukri", backend="ddgs", data_quality="snippet"
+    )
+
+
+class NaukriSource(Source):
+    """Naukri — jobs via DDGS site search."""
+
+    name = "naukri"
+    description = "Naukri — jobs via DDGS site search"
+    backends = ["ddgs"]
+    tier = 0
+
+    def check(self, config: dict[str, Any] | None = None) -> tuple[str, str]:
+        status, msg = self._ddgs_status(DDGS is not None)
+        self.active_backend = "ddgs" if status == "ok" else None
+        return status, msg
+
+    def search(self, query: str, location: str = "", **kwargs: Any) -> ScraperResult:
+        return search_naukri_jobs(query, location, **kwargs)
 
 
 def _build_job(
@@ -144,7 +164,7 @@ def _title_from_url(url: str) -> str:
 
 
 def _extract_company(url: str, snippet: str, title: str, title_clean: str = "") -> str:
-    from scrapers.constants import COMPANY_EXTRACTION_PATTERNS
+    from matcha.sources.constants import COMPANY_EXTRACTION_PATTERNS
 
     for p in COMPANY_EXTRACTION_PATTERNS:
         m = re.search(p, snippet or "")

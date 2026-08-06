@@ -1,8 +1,8 @@
 import logging
 import re
-from typing import Any, Optional
+from typing import Any
 
-from ai import ai_score_job, check_ai_available
+from matcha.ai import ai_score_job, check_ai_available
 
 logger = logging.getLogger(__name__)
 
@@ -11,7 +11,7 @@ def compute_relevance_ai(
     job: dict[str, Any],
     profile: dict[str, Any],
     ai_timeout: int = 60,
-) -> Optional[dict[str, Any]]:
+) -> dict[str, Any] | None:
     if not check_ai_available():
         return None
     return ai_score_job(profile, job, timeout=ai_timeout)
@@ -43,7 +43,7 @@ def _infer_level_from_experience(years: float) -> str:
         return "staff"
 
 
-def _infer_level_from_title(title: str) -> Optional[str]:
+def _infer_level_from_title(title: str) -> str | None:
     title_lower = title.lower()
     title_tokens = set(re.findall(r"[a-z0-9+#.]+", title_lower))
     for level, keywords in _SENIORITY_KEYWORDS.items():

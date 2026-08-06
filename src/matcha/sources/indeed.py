@@ -12,7 +12,8 @@ try:
 except ImportError:
     DDGS = None
 
-from models import ScraperResult
+from matcha.models import ScraperResult
+from matcha.sources.base import Source, probe_url
 
 from .utils import limiter, resilient_get
 
@@ -126,7 +127,7 @@ def _search_indeed_via_ddgs(query: str, location: str) -> list[dict[str, str]]:
         logger.warning("DDGS Indeed fallback failed: %s", e)
         return []
 
-    from scrapers.constants import STOP_WORDS
+    from matcha.sources.constants import STOP_WORDS
 
     jobs: list[dict[str, str]] = []
     seen: set[str] = set()
@@ -191,6 +192,7 @@ def search_indeed_jobs(
     errors: list[str] = []
     jobs: list[dict[str, str]] = []
     seen: set[tuple[str, str]] = set()
+    backend = "html"  # may flip to "ddgs" after the fallback below
 
     base_url = f"https://{domain}/jobs"
     days = kwargs.get("days")
@@ -248,6 +250,33 @@ def search_indeed_jobs(
 
     if not jobs:
         logger.info("Indeed HTML returned 0 jobs, falling back to DDGS")
+        backend = "ddgs"
         jobs = _search_indeed_via_ddgs(query, location)
 
-    return ScraperResult(jobs=jobs, errors=errors, source="Indeed")
+    data_quality = "snippet" if backend == "ddgs" else "partial"
+    return ScraperResult(
+        jobs=jobs, errors=errors, source="Indeed", backend=backend, data_quality=data_quality
+    )
+
+
+class IndeedSource(Source):
+    """Indeed India — direct HTML scraping, DDGS fallback."""
+
+    name = "indeed"
+    description = "Indeed India — HTML + DDGS fallback"
+    backends = ["html", "ddgs"]
+    tier = 0
+
+    def check(self, config: dict[str, Any] | None = None) -> tuple[str, str]:
+        status, msg = probe_url("https://in.indeed.com/jobs?q=engineer&l=India")
+        if status == "ok":
+            self.active_backend = "html"
+            return "ok", "Indeed India responding (HTTP 200)"
+        if status == "warn":
+            self.active_backend = None
+            return "warn", "Indeed is anti-bot gated; DDGS fallback available"
+        self.active_backend = None
+        return "error", f"Indeed unreachable: {msg}"
+
+    def search(self, query: str, location: str = "", **kwargs: Any) -> ScraperResult:
+        return search_indeed_jobs(query, location, **kwargs)

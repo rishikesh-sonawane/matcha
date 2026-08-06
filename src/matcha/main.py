@@ -2,15 +2,13 @@
 import argparse
 import logging
 import logging.handlers
-import os
 import re
 import sys
 import time
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 from pathlib import Path
-from profile import build_or_load_profile
-from typing import Any, Optional
+from typing import Any
 
 from prompt_toolkit import Application
 from prompt_toolkit.formatted_text import ANSI
@@ -25,18 +23,19 @@ from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
 from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
-from actions import is_job_saved, load_saved_jobs, save_job, unsave_job
-from ai import ai_generate_queries, check_ai_available
-from config import load_config, save_config
-from matcher import compute_relevance, compute_relevance_ai
-from models import ScraperResult
-from scrapers.indeed import search_indeed_jobs
-from scrapers.linkedin import search_linkedin_jobs
-from scrapers.naukri import search_naukri_jobs
-from scrapers.remoteok import search_remoteok_jobs
-from scrapers.serpapi_jobs import check_serpapi_available, search_serpapi_jobs
-from scrapers.web_search import search_web_for_jobs
-from settings import load_settings
+from matcha.actions import is_job_saved, load_saved_jobs, save_job, unsave_job
+from matcha.ai import ai_generate_queries, check_ai_available
+from matcha.config import load_config, save_config
+from matcha.matcher import compute_relevance, compute_relevance_ai
+from matcha.models import ScraperResult
+from matcha.profile import build_or_load_profile
+from matcha.settings import load_settings
+from matcha.sources.indeed import search_indeed_jobs
+from matcha.sources.linkedin import search_linkedin_jobs
+from matcha.sources.naukri import search_naukri_jobs
+from matcha.sources.remoteok import search_remoteok_jobs
+from matcha.sources.serpapi_jobs import check_serpapi_available, search_serpapi_jobs
+from matcha.sources.web_search import search_web_for_jobs
 
 console = Console()
 
@@ -93,7 +92,7 @@ def configure_ai():
         default=False,
     ):
         return
-    from ai import configure_ai as set_ai_config
+    from matcha.ai import configure_ai as set_ai_config
 
     key = Prompt.ask("Enter your AI API key (or set $AI_API_KEY env var)", password=False)
     url = Prompt.ask("Enter AI API URL (or set $AI_API_URL)", default="")
@@ -108,7 +107,7 @@ def run_scraper(
     scraper_func: Any,
     query: str,
     location: str,
-    days: Optional[int] = None,
+    days: int | None = None,
     max_pages: int = 1,
     **kwargs: Any,
 ) -> tuple[str, ScraperResult]:
@@ -162,7 +161,7 @@ def deduplicate(
 def search_jobs(
     queries: list[str],
     location: str,
-    days: Optional[int] = None,
+    days: int | None = None,
     max_pages: int = 1,
     indeed_domain: str = "in.indeed.com",
 ) -> tuple[list[dict[str, Any]], dict[str, int], dict[str, list[str]]]:
@@ -241,7 +240,7 @@ def search_jobs(
                     )
                     futures[f] = name
 
-            _last_state: Optional[tuple[bytes, ...]] = None
+            _last_state: tuple[bytes, ...] | None = None
             try:
                 for future in as_completed(futures, timeout=45):
                     source_name = futures[future]
@@ -322,7 +321,7 @@ def build_results_table(
     total_pages: int,
     ai_enabled: bool,
     saved_ids: dict[str, Any],
-    highlight: Optional[int] = None,
+    highlight: int | None = None,
 ) -> Table:
     start = page * page_size
     end = min(start + page_size, len(ranked))
@@ -409,7 +408,7 @@ def _dedup_queries(queries: list[str]) -> list[str]:
 
 
 def _validate_queries(queries: list[str]) -> list[str]:
-    from scrapers.constants import STOP_WORDS
+    from matcha.sources.constants import STOP_WORDS
 
     valid: list[str] = []
     for q in queries:
@@ -424,7 +423,7 @@ def prompt_loop(
     source_counts: dict[str, int],
     source_errors: dict[str, list[str]],
     ai_enabled: bool,
-) -> Optional[str]:
+) -> str | None:
     if not ranked:
         console.print("[yellow]No jobs found. Try different search terms.[/yellow]")
         return
@@ -659,6 +658,9 @@ def run() -> None:
     parser = argparse.ArgumentParser(
         description="Matcha \u2014 multi-source job search with relevance ranking"
     )
+    subparsers = parser.add_subparsers(dest="command")
+    doctor_parser = subparsers.add_parser("doctor", help="Check job-source health")
+    doctor_parser.add_argument("--json", action="store_true", help="Emit the report as JSON")
     parser.add_argument("--configure", action="store_true", help="Configure API keys (SerpAPI, AI)")
     parser.add_argument(
         "--new-profile", "-n", action="store_true", help="Re-enter profile from scratch"
@@ -669,12 +671,20 @@ def run() -> None:
     parser.add_argument("--config", type=str, default=None, help="Path to YAML config file")
     args = parser.parse_args()
 
+    if args.command == "doctor":
+        from matcha.doctor import check_all, format_report, report_to_json
+
+        results = check_all(config=load_settings(config_path=args.config))
+        if args.json:
+            print(report_to_json(results))
+        else:
+            console.print(format_report(results))
+        return
+
     if args.configure:
         configure_serpapi()
         configure_ai()
-        console.print(
-            "[green]Configuration complete![/green] Run [bold]python3 main.py[/bold] to search."
-        )
+        console.print("[green]Configuration complete![/green] Run [bold]matcha[/bold] to search.")
         return
 
     settings = load_settings(config_path=args.config)
@@ -777,7 +787,9 @@ def main() -> None:
         logger.exception("Unhandled exception in main")
         console.print("[red]An unexpected error occurred. Check logs for details.[/red]")
         sys.exit(1)
-    os._exit(0)
+    # F-05: sys.exit (was os._exit) so SQLite WAL commits flush and atexit
+    # hooks run. ddgs worker threads are daemons and never block exit.
+    sys.exit(0)
 
 
 if __name__ == "__main__":

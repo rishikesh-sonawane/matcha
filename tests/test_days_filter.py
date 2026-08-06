@@ -2,19 +2,20 @@ import os
 import sys
 import time
 import unittest
+from datetime import datetime, timedelta
 from unittest import mock
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from scrapers.indeed import search_indeed_jobs
-from scrapers.naukri import search_naukri_jobs
-from scrapers.remoteok import search_remoteok_jobs
-from scrapers.serpapi_jobs import search_serpapi_jobs
-from scrapers.web_search import _is_older_than_days, search_web_for_jobs
+from matcha.sources.indeed import search_indeed_jobs
+from matcha.sources.naukri import search_naukri_jobs
+from matcha.sources.remoteok import search_remoteok_jobs
+from matcha.sources.serpapi_jobs import search_serpapi_jobs
+from matcha.sources.web_search import _is_older_than_days, search_web_for_jobs
 
 
 class TestIndeedDaysFilter(unittest.TestCase):
-    @mock.patch("scrapers.indeed._fetch_indeed_page")
+    @mock.patch("matcha.sources.indeed._fetch_indeed_page")
     def test_fromage_passed_when_days_given(self, mock_fetch):
         mock_fetch.return_value.status_code = 200
         mock_fetch.return_value.text = "<html></html>"
@@ -22,7 +23,7 @@ class TestIndeedDaysFilter(unittest.TestCase):
         args, kwargs = mock_fetch.call_args
         self.assertEqual(args[1].get("fromage"), "3")
 
-    @mock.patch("scrapers.indeed._fetch_indeed_page")
+    @mock.patch("matcha.sources.indeed._fetch_indeed_page")
     def test_fromage_omitted_when_no_days(self, mock_fetch):
         mock_fetch.return_value.status_code = 200
         mock_fetch.return_value.text = "<html></html>"
@@ -32,8 +33,8 @@ class TestIndeedDaysFilter(unittest.TestCase):
 
 
 class TestSerpapiDaysFilter(unittest.TestCase):
-    @mock.patch("scrapers.serpapi_jobs.resilient_get")
-    @mock.patch("scrapers.serpapi_jobs.get_serpapi_config")
+    @mock.patch("matcha.sources.serpapi_jobs.resilient_get")
+    @mock.patch("matcha.sources.serpapi_jobs.get_serpapi_config")
     def test_date_posted_today(self, mock_config, mock_get):
         mock_config.return_value = {"serpapi_key": "test-key"}
         mock_get.return_value.status_code = 200
@@ -41,8 +42,8 @@ class TestSerpapiDaysFilter(unittest.TestCase):
         search_serpapi_jobs("platform engineer", days=1)
         self.assertEqual(mock_get.call_args[1]["params"]["date_posted"], "today")
 
-    @mock.patch("scrapers.serpapi_jobs.resilient_get")
-    @mock.patch("scrapers.serpapi_jobs.get_serpapi_config")
+    @mock.patch("matcha.sources.serpapi_jobs.resilient_get")
+    @mock.patch("matcha.sources.serpapi_jobs.get_serpapi_config")
     def test_date_posted_3days(self, mock_config, mock_get):
         mock_config.return_value = {"serpapi_key": "test-key"}
         mock_get.return_value.status_code = 200
@@ -50,8 +51,8 @@ class TestSerpapiDaysFilter(unittest.TestCase):
         search_serpapi_jobs("platform engineer", days=3)
         self.assertEqual(mock_get.call_args[1]["params"]["date_posted"], "3days")
 
-    @mock.patch("scrapers.serpapi_jobs.resilient_get")
-    @mock.patch("scrapers.serpapi_jobs.get_serpapi_config")
+    @mock.patch("matcha.sources.serpapi_jobs.resilient_get")
+    @mock.patch("matcha.sources.serpapi_jobs.get_serpapi_config")
     def test_date_posted_week(self, mock_config, mock_get):
         mock_config.return_value = {"serpapi_key": "test-key"}
         mock_get.return_value.status_code = 200
@@ -59,8 +60,8 @@ class TestSerpapiDaysFilter(unittest.TestCase):
         search_serpapi_jobs("platform engineer", days=7)
         self.assertEqual(mock_get.call_args[1]["params"]["date_posted"], "week")
 
-    @mock.patch("scrapers.serpapi_jobs.resilient_get")
-    @mock.patch("scrapers.serpapi_jobs.get_serpapi_config")
+    @mock.patch("matcha.sources.serpapi_jobs.resilient_get")
+    @mock.patch("matcha.sources.serpapi_jobs.get_serpapi_config")
     def test_date_posted_month_default(self, mock_config, mock_get):
         mock_config.return_value = {"serpapi_key": "test-key"}
         mock_get.return_value.status_code = 200
@@ -68,8 +69,8 @@ class TestSerpapiDaysFilter(unittest.TestCase):
         search_serpapi_jobs("platform engineer")
         self.assertEqual(mock_get.call_args[1]["params"]["date_posted"], "week")
 
-    @mock.patch("scrapers.serpapi_jobs.resilient_get")
-    @mock.patch("scrapers.serpapi_jobs.get_serpapi_config")
+    @mock.patch("matcha.sources.serpapi_jobs.resilient_get")
+    @mock.patch("matcha.sources.serpapi_jobs.get_serpapi_config")
     def test_date_posted_month_for_large_days(self, mock_config, mock_get):
         mock_config.return_value = {"serpapi_key": "test-key"}
         mock_get.return_value.status_code = 200
@@ -79,7 +80,7 @@ class TestSerpapiDaysFilter(unittest.TestCase):
 
 
 class TestRemoteokDaysFilter(unittest.TestCase):
-    @mock.patch("scrapers.remoteok.resilient_get")
+    @mock.patch("matcha.sources.remoteok.resilient_get")
     def test_filters_old_jobs(self, mock_get):
         mock_get.return_value.status_code = 200
         mock_get.return_value.json.return_value = [
@@ -90,7 +91,7 @@ class TestRemoteokDaysFilter(unittest.TestCase):
         result = search_remoteok_jobs("platform", days=7)
         self.assertEqual(len(result.jobs), 1)
 
-    @mock.patch("scrapers.remoteok.resilient_get")
+    @mock.patch("matcha.sources.remoteok.resilient_get")
     def test_no_cutoff_when_no_days(self, mock_get):
         mock_get.return_value.status_code = 200
         mock_get.return_value.json.return_value = [
@@ -102,8 +103,8 @@ class TestRemoteokDaysFilter(unittest.TestCase):
 
 
 class TestWebSearchDaysFilter(unittest.TestCase):
-    @mock.patch("scrapers.web_search.limiter.acquire")
-    @mock.patch("scrapers.web_search.DDGS")
+    @mock.patch("matcha.sources.web_search.limiter.acquire")
+    @mock.patch("matcha.sources.web_search.DDGS")
     def test_timelimit_passed(self, mock_ddgs, mock_acquire):
         mock_instance = mock.MagicMock()
         mock_ddgs.return_value.__enter__.return_value = mock_instance
@@ -112,8 +113,8 @@ class TestWebSearchDaysFilter(unittest.TestCase):
         for call in mock_instance.text.call_args_list:
             self.assertIn("timelimit", call[1])
 
-    @mock.patch("scrapers.web_search.limiter.acquire")
-    @mock.patch("scrapers.web_search.DDGS")
+    @mock.patch("matcha.sources.web_search.limiter.acquire")
+    @mock.patch("matcha.sources.web_search.DDGS")
     def test_no_linkedin_queries(self, mock_ddgs, mock_acquire):
         mock_instance = mock.MagicMock()
         mock_ddgs.return_value.__enter__.return_value = mock_instance
@@ -123,8 +124,8 @@ class TestWebSearchDaysFilter(unittest.TestCase):
             q = call[0][0]
             self.assertNotIn("linkedin.com", q, f"Web Search should not query LinkedIn: {q}")
 
-    @mock.patch("scrapers.web_search.limiter.acquire")
-    @mock.patch("scrapers.web_search.DDGS")
+    @mock.patch("matcha.sources.web_search.limiter.acquire")
+    @mock.patch("matcha.sources.web_search.DDGS")
     def test_no_timelimit_without_days(self, mock_ddgs, mock_acquire):
         mock_instance = mock.MagicMock()
         mock_ddgs.return_value.__enter__.return_value = mock_instance
@@ -135,8 +136,8 @@ class TestWebSearchDaysFilter(unittest.TestCase):
 
 
 class TestNaukriDaysFilter(unittest.TestCase):
-    @mock.patch("scrapers.naukri.limiter.acquire")
-    @mock.patch("scrapers.naukri.DDGS")
+    @mock.patch("matcha.sources.naukri.limiter.acquire")
+    @mock.patch("matcha.sources.naukri.DDGS")
     def test_timelimit_passed(self, mock_ddgs, mock_acquire):
         mock_instance = mock.MagicMock()
         mock_ddgs.return_value.__enter__.return_value = mock_instance
@@ -145,8 +146,8 @@ class TestNaukriDaysFilter(unittest.TestCase):
         for call in mock_instance.text.call_args_list:
             self.assertIn("timelimit", call[1])
 
-    @mock.patch("scrapers.naukri.limiter.acquire")
-    @mock.patch("scrapers.naukri.DDGS")
+    @mock.patch("matcha.sources.naukri.limiter.acquire")
+    @mock.patch("matcha.sources.naukri.DDGS")
     def test_no_timelimit_without_days(self, mock_ddgs, mock_acquire):
         mock_instance = mock.MagicMock()
         mock_ddgs.return_value.__enter__.return_value = mock_instance
@@ -182,7 +183,16 @@ class TestWebSearchSnippetAgeFilter(unittest.TestCase):
         self.assertTrue(_is_older_than_days("Posted: January 1, 2024", 7))
 
     def test_date_string_within(self):
-        self.assertFalse(_is_older_than_days("Posted: June 6, 2026", 7))
+        # F-09: dates must be relative to now — the old fixed "June 6, 2026"
+        # fixture failed on any run after mid-June 2026 (it fails now).
+        past = datetime.now() - timedelta(days=2)
+        posted = f"Posted: {past.strftime('%B')} {past.day}, {past.year}"
+        self.assertFalse(_is_older_than_days(posted, 7))
+
+    def test_date_string_relative_exceeds(self):
+        past = datetime.now() - timedelta(days=30)
+        posted = f"Posted: {past.strftime('%B')} {past.day}, {past.year}"
+        self.assertTrue(_is_older_than_days(posted, 7))
 
     def test_no_date_info_returns_false(self):
         self.assertFalse(_is_older_than_days("No date information in this snippet", 7))

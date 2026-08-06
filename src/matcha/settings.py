@@ -1,10 +1,10 @@
 import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import yaml
 
-from models import Settings
+from matcha.models import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> None:
             base[key] = value
 
 
-def load_settings(config_path: Optional[str] = None) -> dict[str, Any]:
+def load_settings(config_path: str | None = None) -> dict[str, Any]:
     paths: list[Path] = []
     if config_path:
         paths.append(Path(config_path))

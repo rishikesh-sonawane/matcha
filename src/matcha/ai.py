@@ -2,11 +2,11 @@ import json
 import logging
 import os
 import re
-from typing import Any, Optional
+from typing import Any
 
 import requests
 
-from config import load_config, save_config
+from matcha.config import load_config, save_config
 
 logger = logging.getLogger(__name__)
 
@@ -54,10 +54,10 @@ def configure_ai(key: str, url: str = "", model: str = "") -> None:
 
 def _call_ai(
     messages: list[dict[str, Any]],
-    response_format: Optional[dict[str, Any]] = None,
+    response_format: dict[str, Any] | None = None,
     max_tokens: int = 8192,
     timeout: int = 60,
-) -> Optional[str]:
+) -> str | None:
     key = _get_api_key()
     url = _get_api_url()
     model = _get_model()
@@ -125,7 +125,7 @@ def _call_ai(
     return None
 
 
-def _extract_json(text: str) -> Optional[dict[str, Any]]:
+def _extract_json(text: str) -> dict[str, Any] | None:
     text = text.strip()
     if text.startswith("```"):
         text = re.sub(r"^```(?:json)?\s*", "", text)
@@ -162,7 +162,7 @@ Rules:
 - If experience is ambiguous, use null rather than guessing"""
 
 
-def ai_extract_profile(text: str) -> Optional[dict[str, Any]]:
+def ai_extract_profile(text: str) -> dict[str, Any] | None:
     if not check_ai_available():
         return None
     prompt = PROFILE_EXTRACTION_PROMPT.format(text=text[:4000])
@@ -204,7 +204,7 @@ Rules:
 - Return exactly 3-5 titles, ordered by best match first"""
 
 
-def ai_suggest_titles(skills: list[str]) -> Optional[list[str]]:
+def ai_suggest_titles(skills: list[str]) -> list[str] | None:
     if not check_ai_available() or not skills:
         return None
     prompt = SUGGEST_TITLES_PROMPT.format(skills=", ".join(skills))
@@ -246,7 +246,7 @@ Rules:
 - Return 3-5 queries"""
 
 
-def ai_generate_queries(profile: dict[str, Any]) -> Optional[list[str]]:
+def ai_generate_queries(profile: dict[str, Any]) -> list[str] | None:
     if not check_ai_available():
         return None
     title = profile.get("title", "") or profile.get("headline", "")
@@ -316,7 +316,7 @@ Guidelines:
 
 def ai_score_job(
     profile: dict[str, Any], job: dict[str, Any], timeout: int = 60
-) -> Optional[dict[str, Any]]:
+) -> dict[str, Any] | None:
     if not check_ai_available():
         return None
     title = profile.get("title", "") or profile.get("headline", "")

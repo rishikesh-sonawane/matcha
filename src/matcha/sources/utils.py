@@ -4,7 +4,7 @@ import time
 from collections import defaultdict
 from pathlib import Path
 from threading import Lock
-from typing import Any, Optional
+from typing import Any
 from urllib.parse import urlparse
 
 import requests_cache
@@ -84,13 +84,13 @@ def _get_domain(url: str) -> str:
 
 def resilient_get(
     url: str,
-    session: Optional[requests_cache.CachedSession] = None,
+    session: requests_cache.CachedSession | None = None,
     **kwargs: Any,
 ) -> Response:
     limiter.acquire(_get_domain(url))
     http = session if session is not None else _session
     timeout = kwargs.pop("timeout", 15)
-    last_exc: Optional[Exception] = None
+    last_exc: Exception | None = None
     for attempt in range(3):
         try:
             resp: Response = http.get(url, timeout=timeout, **kwargs)

@@ -5,7 +5,8 @@ from urllib.parse import quote
 import requests
 from bs4 import BeautifulSoup
 
-from models import ScraperResult
+from matcha.models import ScraperResult
+from matcha.sources.base import Source, probe_url
 
 from .utils import resilient_get
 
@@ -31,7 +32,8 @@ def search_linkedin_jobs(
 ) -> ScraperResult:
     errors: list[str] = []
     jobs: list[dict[str, str]] = []
-    loc = location if location else "United States"
+    # F-08 (user-confirmed): blank location searches the home market, not the US.
+    loc = location if location else "India"
 
     days = max(1, kwargs.get("days") or 7)
     max_pages = kwargs.get("max_pages", 1)
@@ -104,10 +106,40 @@ def search_linkedin_jobs(
                 "LinkedIn page %d: %d jobs parsed (total %d)", page + 1, len(job_cards), len(jobs)
             )
 
-        return ScraperResult(jobs=jobs, errors=errors, source="LinkedIn")
+        return ScraperResult(
+            jobs=jobs, errors=errors, source="LinkedIn", backend="guest-api", data_quality="snippet"
+        )
 
     except requests.RequestException as e:
         msg = f"LinkedIn request failed: {e}"
         logger.warning(msg)
         errors.append(msg)
-        return ScraperResult(jobs=jobs, errors=errors, source="LinkedIn")
+        return ScraperResult(
+            jobs=jobs, errors=errors, source="LinkedIn", backend="guest-api", data_quality="snippet"
+        )
+
+
+class LinkedInSource(Source):
+    """LinkedIn — jobs via the guest API (thin), DDGS fallback planned."""
+
+    name = "linkedin"
+    description = "LinkedIn — jobs via guest API"
+    backends = ["guest-api", "ddgs"]
+    tier = 1  # login-gated: full results need authentication
+
+    def check(self, config: dict[str, Any] | None = None) -> tuple[str, str]:
+        status, msg = probe_url(
+            "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
+            "?keywords=engineer&location=India&f_TPR=r604800&start=0"
+        )
+        if status == "ok":
+            self.active_backend = "guest-api"
+            return "ok", "LinkedIn guest API responding (HTTP 200)"
+        if status == "warn":
+            self.active_backend = None
+            return "warn", "LinkedIn is login / anti-bot gated; guest API results may be thin"
+        self.active_backend = None
+        return "error", f"LinkedIn unreachable: {msg}"
+
+    def search(self, query: str, location: str = "", **kwargs: Any) -> ScraperResult:
+        return search_linkedin_jobs(query, location, **kwargs)

@@ -13,6 +13,10 @@ class ScraperResult:
     jobs: list[dict[str, Any]] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     source: str = ""
+    # Provenance (Phase 0, strategy §6.7): which backend produced the jobs
+    # and how rich the data is. data_quality: "full" | "partial" | "snippet".
+    backend: str = ""
+    data_quality: str = "snippet"
 
 
 #

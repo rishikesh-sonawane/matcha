@@ -1,7 +1,7 @@
 import logging
 import re
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 from urllib.parse import quote, urlparse
 
 import requests
@@ -11,16 +11,16 @@ from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
-from ai import ai_extract_profile, ai_suggest_titles, check_ai_available
-from config import load_profile, save_profile
-from scrapers.utils import limiter, resilient_get
+from matcha.ai import ai_extract_profile, ai_suggest_titles, check_ai_available
+from matcha.config import load_profile, save_profile
+from matcha.sources.utils import limiter, resilient_get
 
 logger = logging.getLogger(__name__)
 
 console = Console()
 
 
-def extract_experience(text_lower: str) -> Optional[int]:
+def extract_experience(text_lower: str) -> int | None:
     years = re.findall(
         r"(\d+)\+?\s*(?:years?|yrs?|yr)\s*(?:of)?\s*(?:experience|exp|work)?", text_lower
     )
@@ -32,7 +32,7 @@ def extract_experience(text_lower: str) -> Optional[int]:
     return None
 
 
-def parse_resume_pdf(path: str) -> Optional[dict[str, Any]]:
+def parse_resume_pdf(path: str) -> dict[str, Any] | None:
     path = Path(path)
     if not path.exists():
         console.print(f"[red]File not found: {path}[/red]")
@@ -131,12 +131,12 @@ HEADERS: dict[str, str] = {
 }
 
 
-def extract_linkedin_username(url: str) -> Optional[str]:
+def extract_linkedin_username(url: str) -> str | None:
     match = re.search(r"linkedin\.com/in/([^/]+)", url)
     return match.group(1) if match else None
 
 
-def search_linkedin_profile_via_web(username: str) -> Optional[dict[str, Any]]:
+def search_linkedin_profile_via_web(username: str) -> dict[str, Any] | None:
     queries = [
         f"linkedin.com/in/{username}",
         f"{username.replace('-', ' ')} linkedin",
@@ -239,7 +239,7 @@ def extract_url(raw_href: str) -> str:
     return raw_href
 
 
-def scrape_linkedin_profile(url: str) -> Optional[dict[str, Any]]:
+def scrape_linkedin_profile(url: str) -> dict[str, Any] | None:
     username = extract_linkedin_username(url)
     if not username:
         console.print("[red]Invalid LinkedIn profile URL[/red]")
@@ -314,7 +314,7 @@ def manual_profile_entry() -> dict[str, Any]:
     }
 
 
-def build_or_load_profile(force_new: bool = False) -> Optional[dict[str, Any]]:
+def build_or_load_profile(force_new: bool = False) -> dict[str, Any] | None:
     if not force_new:
         existing = load_profile()
         if existing:

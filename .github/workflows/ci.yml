@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]  # F-03: dev venv is 3.14
 
     steps:
       - uses: actions/checkout@v4
@@ -39,6 +39,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install ruff bandit pre-commit
           pip install -r requirements.txt
+          pip install -e .
 
       - name: Lint
         run: ruff check .
@@ -47,13 +48,14 @@ jobs:
         run: ruff format --diff .
 
       - name: Static analysis
-        run: bandit -r ai.py config.py main.py matcher.py profile.py scrapers -lll
+        run: bandit -c pyproject.toml -r src/matcha -lll
 
       - name: Pre-commit check
         run: pre-commit run --all-files --show-diff-on-failure
 
       - name: Unit tests
-        run: python -m unittest tests.test_core -v
+        # F-02: the full suite — previously only tests.test_core ever ran in CI
+        run: python -m unittest discover tests -v
 
   build:
     needs: [validate]
@@ -71,9 +73,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyinstaller
           pip install -r requirements.txt
+          pip install -e .
 
       - name: Build executable
-        run: pyinstaller --onefile --name matcha main.py
+        run: pyinstaller --onefile --name matcha "$(command -v matcha)"
 
       - name: Upload executable
         uses: actions/upload-artifact@v4

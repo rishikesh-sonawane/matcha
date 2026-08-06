@@ -99,7 +99,7 @@ PHASE 0 SCOPE (from section 18 of the plan, expanded)
     With the root shims from item 9, `python3 main.py`, tests, Makefile, CI,
     Docker and pyinstaller keep working unchanged; the move breaks nothing
     (F-04). Phase 1 start will: add `[project]` + `[project.scripts] matcha =
-    "matcha.cli:main"` to pyproject.toml, `pip install -e .` in Makefile/CI,
+    "matcha.main:main"` to pyproject.toml (implemented), `pip install -e .` in Makefile/CI,
     update bandit/pyinstaller/Dockerfile/README paths (pyinstaller builds
     from a small entry module or the installed console script — not
     `-m matcha`), then delete the shims.

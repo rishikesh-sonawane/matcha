@@ -1,6 +1,46 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "matcha"
+description = "Multi-source job search with relevance ranking"
+readme = "README.md"
+requires-python = ">=3.10"
+dynamic = ["version"]
+dependencies = [
+    "urllib3<2",
+    "requests>=2.28.0",
+    "requests-cache>=1.0.0",
+    "pyyaml>=6.0",
+    "pydantic>=2.0",
+    "beautifulsoup4>=4.11.0",
+    "rich>=13.0.0",
+    "python-dotenv>=1.0.0",
+    "pdfplumber>=0.10.0",
+    "cloudscraper>=1.2.71",
+    "ddgs>=9.14.0",
+    "rapidfuzz>=3.0.0",
+    "prompt_toolkit>=3.0.0",
+    "keyring>=24.0.0",
+    "cryptography>=42.0.0",
+]
+
+[project.scripts]
+matcha = "matcha.main:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.dynamic]
+version = {attr = "matcha.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [tool.ruff]
 line-length = 100
-target-version = "py39"
+target-version = "py310"  # F-01: code already uses 3.10+ syntax (PEP 604 unions)
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP"]
@@ -11,8 +51,11 @@ quote-style = "double"
 
 [tool.bandit]
 exclude_dirs = ["tests", "venv", ".git", ".github"]
-skips = ["B101", "B404", "B603", "B607"]
-targets = ["ai.py", "config.py", "main.py", "matcher.py", "profile.py", "scrapers"]
+# B101/B404/B603/B607: probe.py port from Agent-Reach (asserts, subprocess list-form).
+# B110: config.py optional keyring/fernet availability checks (`except ...: pass`).
+# B311: scrapers/utils.py rate-limiter jitter (random.uniform — not security-critical).
+skips = ["B101", "B110", "B311", "B404", "B603", "B607"]
+targets = ["src/matcha"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

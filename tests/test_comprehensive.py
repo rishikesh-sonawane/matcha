@@ -5,72 +5,72 @@ from unittest import mock
 
 import requests
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 
 class TestAICallRetry(unittest.TestCase):
     """Test the _call_ai retry logic for ConnectionError, Timeout, and non-200."""
 
-    @mock.patch("ai._get_api_key", return_value="key")
-    @mock.patch("ai._get_api_url", return_value="https://test.ai/v1")
-    @mock.patch("ai._get_model", return_value="model")
-    @mock.patch("ai.requests.post")
+    @mock.patch("matcha.ai._get_api_key", return_value="key")
+    @mock.patch("matcha.ai._get_api_url", return_value="https://test.ai/v1")
+    @mock.patch("matcha.ai._get_model", return_value="model")
+    @mock.patch("matcha.ai.requests.post")
     def test_connection_error_retries_then_none(self, mock_post, *_):
         mock_post.side_effect = [
             requests.ConnectionError("DNS failure"),
             requests.ConnectionError("DNS failure again"),
         ]
-        from ai import _call_ai
+        from matcha.ai import _call_ai
 
         result = _call_ai([{"role": "user", "content": "hi"}])
         self.assertIsNone(result)
         self.assertEqual(mock_post.call_count, 2)
 
-    @mock.patch("ai._get_api_key", return_value="key")
-    @mock.patch("ai._get_api_url", return_value="https://test.ai/v1")
-    @mock.patch("ai._get_model", return_value="model")
-    @mock.patch("ai.requests.post")
+    @mock.patch("matcha.ai._get_api_key", return_value="key")
+    @mock.patch("matcha.ai._get_api_url", return_value="https://test.ai/v1")
+    @mock.patch("matcha.ai._get_model", return_value="model")
+    @mock.patch("matcha.ai.requests.post")
     def test_timeout_retries_then_none(self, mock_post, *_):
         mock_post.side_effect = [requests.Timeout, requests.Timeout]
-        from ai import _call_ai
+        from matcha.ai import _call_ai
 
         result = _call_ai([{"role": "user", "content": "hi"}])
         self.assertIsNone(result)
 
-    @mock.patch("ai._get_api_key", return_value="key")
-    @mock.patch("ai._get_api_url", return_value="https://test.ai/v1")
-    @mock.patch("ai._get_model", return_value="model")
-    @mock.patch("ai.requests.post")
+    @mock.patch("matcha.ai._get_api_key", return_value="key")
+    @mock.patch("matcha.ai._get_api_url", return_value="https://test.ai/v1")
+    @mock.patch("matcha.ai._get_model", return_value="model")
+    @mock.patch("matcha.ai.requests.post")
     def test_connection_error_recovers(self, mock_post, *_):
         mock_response = mock.MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {"choices": [{"message": {"content": "hello"}}]}
         mock_post.side_effect = [requests.ConnectionError("DNS failure"), mock_response]
-        from ai import _call_ai
+        from matcha.ai import _call_ai
 
         result = _call_ai([{"role": "user", "content": "hi"}])
         self.assertEqual(result, "hello")
 
-    @mock.patch("ai._get_api_key", return_value="key")
-    @mock.patch("ai._get_api_url", return_value="https://test.ai/v1")
-    @mock.patch("ai._get_model", return_value="model")
-    @mock.patch("ai.requests.post")
+    @mock.patch("matcha.ai._get_api_key", return_value="key")
+    @mock.patch("matcha.ai._get_api_url", return_value="https://test.ai/v1")
+    @mock.patch("matcha.ai._get_model", return_value="model")
+    @mock.patch("matcha.ai.requests.post")
     def test_non_200_retries_then_none(self, mock_post, *_):
         resp_429 = mock.MagicMock()
         resp_429.status_code = 429
         resp_502 = mock.MagicMock()
         resp_502.status_code = 502
         mock_post.side_effect = [resp_429, resp_502]
-        from ai import _call_ai
+        from matcha.ai import _call_ai
 
         result = _call_ai([{"role": "user", "content": "hi"}])
         self.assertIsNone(result)
         self.assertEqual(mock_post.call_count, 2)
 
-    @mock.patch("ai._get_api_key", return_value="key")
-    @mock.patch("ai._get_api_url", return_value="https://test.ai/v1")
-    @mock.patch("ai._get_model", return_value="model")
-    @mock.patch("ai.requests.post")
+    @mock.patch("matcha.ai._get_api_key", return_value="key")
+    @mock.patch("matcha.ai._get_api_url", return_value="https://test.ai/v1")
+    @mock.patch("matcha.ai._get_model", return_value="model")
+    @mock.patch("matcha.ai.requests.post")
     def test_non_200_then_recovers(self, mock_post, *_):
         resp_429 = mock.MagicMock()
         resp_429.status_code = 429
@@ -78,31 +78,31 @@ class TestAICallRetry(unittest.TestCase):
         resp_ok.status_code = 200
         resp_ok.json.return_value = {"choices": [{"message": {"content": "recovered"}}]}
         mock_post.side_effect = [resp_429, resp_ok]
-        from ai import _call_ai
+        from matcha.ai import _call_ai
 
         result = _call_ai([{"role": "user", "content": "hi"}])
         self.assertEqual(result, "recovered")
 
-    @mock.patch("ai._get_api_key", return_value="key")
-    @mock.patch("ai._get_api_url", return_value="https://test.ai/v1")
-    @mock.patch("ai._get_model", return_value="model")
-    @mock.patch("ai.requests.post")
+    @mock.patch("matcha.ai._get_api_key", return_value="key")
+    @mock.patch("matcha.ai._get_api_url", return_value="https://test.ai/v1")
+    @mock.patch("matcha.ai._get_model", return_value="model")
+    @mock.patch("matcha.ai.requests.post")
     def test_requests_exception_no_retry(self, mock_post, *_):
         mock_post.side_effect = requests.RequestException("API error")
-        from ai import _call_ai
+        from matcha.ai import _call_ai
 
         result = _call_ai([{"role": "user", "content": "hi"}])
         self.assertIsNone(result)
         self.assertEqual(mock_post.call_count, 1)
 
-    @mock.patch("ai._get_api_key", return_value="key")
-    @mock.patch("ai._get_api_url", return_value="https://test.ai/v1")
-    @mock.patch("ai._get_model", return_value="model")
-    @mock.patch("ai.requests.post")
+    @mock.patch("matcha.ai._get_api_key", return_value="key")
+    @mock.patch("matcha.ai._get_api_url", return_value="https://test.ai/v1")
+    @mock.patch("matcha.ai._get_model", return_value="model")
+    @mock.patch("matcha.ai.requests.post")
     def test_missing_key_returns_none(self, mock_post, *_):
-        from ai import _call_ai
+        from matcha.ai import _call_ai
 
-        with mock.patch("ai._get_api_key", return_value=""):
+        with mock.patch("matcha.ai._get_api_key", return_value=""):
             result = _call_ai([{"role": "user", "content": "hi"}])
         self.assertIsNone(result)
         mock_post.assert_not_called()
@@ -130,7 +130,7 @@ class TestComputeRelevanceEdgeCases(unittest.TestCase):
             "description": "some work",
             "location": "Pune",
         }
-        from matcher import compute_relevance
+        from matcha.matcher import compute_relevance
 
         result = compute_relevance(job, profile)
         self.assertIsInstance(result["score"], (int, float))
@@ -143,14 +143,14 @@ class TestComputeRelevanceEdgeCases(unittest.TestCase):
             "description": "aws docker kubernetes terraform",
             "location": "Pune",
         }
-        from matcher import compute_relevance
+        from matcha.matcher import compute_relevance
 
         result = compute_relevance(job, self.profile)
         self.assertIsInstance(result["score"], (int, float))
 
     def test_missing_job_fields(self):
         """Minimal job dict should not crash."""
-        from matcher import compute_relevance
+        from matcha.matcher import compute_relevance
 
         result = compute_relevance({}, self.profile)
         self.assertIsInstance(result["score"], (int, float))
@@ -160,7 +160,7 @@ class TestComputeRelevanceEdgeCases(unittest.TestCase):
         profile = dict(self.profile)
         profile["experience"] = "-5"
         job = {"title": "Intern", "description": "", "location": ""}
-        from matcher import compute_relevance
+        from matcha.matcher import compute_relevance
 
         result = compute_relevance(job, profile)
         self.assertIsInstance(result["score"], (int, float))
@@ -174,7 +174,7 @@ class TestComputeRelevanceEdgeCases(unittest.TestCase):
             "description": "",
             "location": "Remote",
         }
-        from matcher import compute_relevance
+        from matcha.matcher import compute_relevance
 
         result = compute_relevance(job, profile)
         self.assertIsInstance(result["score"], (int, float))
@@ -188,7 +188,7 @@ class TestComputeRelevanceEdgeCases(unittest.TestCase):
             "description": "sharpening claws for animals",
             "location": "",
         }
-        from matcher import compute_relevance
+        from matcha.matcher import compute_relevance
 
         result = compute_relevance(job, profile)
         self.assertNotIn("Skills:", "; ".join(result["reasons"]))
@@ -202,7 +202,7 @@ class TestComputeRelevanceEdgeCases(unittest.TestCase):
             "description": "work with aws services",
             "location": "Remote",
         }
-        from matcher import compute_relevance
+        from matcha.matcher import compute_relevance
 
         result = compute_relevance(job, profile)
         combined = "; ".join(result["reasons"])
@@ -230,7 +230,7 @@ class TestComputeRelevanceEdgeCases(unittest.TestCase):
             ),
             "location": "Pune, India",
         }
-        from matcher import compute_relevance
+        from matcha.matcher import compute_relevance
 
         result = compute_relevance(job, self.profile)
         self.assertLessEqual(len(result["reasons"]), 8)
@@ -246,7 +246,7 @@ class TestComputeRelevanceEdgeCases(unittest.TestCase):
             "location": "",
         }
         job = {"title": "B", "description": "", "location": ""}
-        from matcher import compute_relevance
+        from matcha.matcher import compute_relevance
 
         result = compute_relevance(job, profile)
         self.assertGreaterEqual(result["score"], 5.0)
@@ -266,7 +266,7 @@ class TestComputeRelevanceEdgeCases(unittest.TestCase):
             "description": "aws docker",
             "location": "Pune",
         }
-        from matcher import compute_relevance
+        from matcha.matcher import compute_relevance
 
         result = compute_relevance(job, profile)
         self.assertLessEqual(result["score"], 100.0)
@@ -276,7 +276,7 @@ class TestScraperResult(unittest.TestCase):
     """Test ScraperResult dataclass behavior."""
 
     def test_default_construction(self):
-        from models import ScraperResult
+        from matcha.models import ScraperResult
 
         r = ScraperResult()
         self.assertEqual(r.jobs, [])
@@ -284,14 +284,14 @@ class TestScraperResult(unittest.TestCase):
         self.assertEqual(r.source, "")
 
     def test_with_jobs(self):
-        from models import ScraperResult
+        from matcha.models import ScraperResult
 
         r = ScraperResult(jobs=[{"title": "Engineer"}], source="Indeed")
         self.assertEqual(len(r.jobs), 1)
         self.assertEqual(r.source, "Indeed")
 
     def test_with_errors(self):
-        from models import ScraperResult
+        from matcha.models import ScraperResult
 
         r = ScraperResult(errors=["timeout"], source="LinkedIn")
         self.assertEqual(len(r.errors), 1)
@@ -301,14 +301,14 @@ class TestConfigValidation(unittest.TestCase):
     """Test ConfigSchema and Settings models."""
 
     def test_config_schema_defaults(self):
-        from models import ConfigSchema
+        from matcha.models import ConfigSchema
 
         c = ConfigSchema()
         self.assertEqual(c.ai_key, "")
         self.assertEqual(c.last_days, 7)
 
     def test_settings_defaults(self):
-        from models import Settings
+        from matcha.models import Settings
 
         s = Settings()
         self.assertEqual(s.search.max_pages, 2)
@@ -317,7 +317,7 @@ class TestConfigValidation(unittest.TestCase):
         self.assertEqual(s.scrapers.indeed_domain, "in.indeed.com")
 
     def test_settings_override(self):
-        from models import Settings
+        from matcha.models import Settings
 
         s = Settings(
             **{
@@ -336,18 +336,18 @@ class TestDeduplicateEdgeCases(unittest.TestCase):
     """Test main.deduplicate with edge case inputs."""
 
     def test_empty_list(self):
-        from main import deduplicate
+        from matcha.main import deduplicate
 
         self.assertEqual(deduplicate([]), [])
 
     def test_single_job(self):
-        from main import deduplicate
+        from matcha.main import deduplicate
 
         result = deduplicate([{"title": "Engineer", "company": "Co"}])
         self.assertEqual(len(result), 1)
 
     def test_no_title_or_company(self):
-        from main import deduplicate
+        from matcha.main import deduplicate
 
         jobs = [
             {"title": "", "company": ""},
@@ -356,7 +356,7 @@ class TestDeduplicateEdgeCases(unittest.TestCase):
         self.assertEqual(len(deduplicate(jobs)), 1)
 
     def test_special_characters(self):
-        from main import deduplicate
+        from matcha.main import deduplicate
 
         jobs = [
             {"title": "C++ Engineer", "company": "Meta✶"},
@@ -365,7 +365,7 @@ class TestDeduplicateEdgeCases(unittest.TestCase):
         self.assertEqual(len(deduplicate(jobs)), 1)
 
     def test_unicode_normalization(self):
-        from main import deduplicate
+        from matcha.main import deduplicate
 
         jobs = [
             {"title": "DevOps Engineer", "company": "Caf\u00e9 Corp"},
@@ -378,14 +378,14 @@ class TestTokenBucket(unittest.TestCase):
     """Test RateLimiter/TokenBucket behavior."""
 
     def test_initial_state(self):
-        from scrapers.utils import TokenBucket
+        from matcha.sources.utils import TokenBucket
 
         tb = TokenBucket(60)
         self.assertEqual(tb.tokens, 60.0)
         self.assertEqual(tb.max_tokens, 60)
 
     def test_acquire_no_wait_with_tokens(self):
-        from scrapers.utils import RateLimiter
+        from matcha.sources.utils import RateLimiter
 
         rl = RateLimiter()
         rl.set_rate("test.example.com", 100)
@@ -398,7 +398,7 @@ class TestTokenBucket(unittest.TestCase):
 
     def test_domain_isolation(self):
         """Acquiring from one domain should not affect another."""
-        from scrapers.utils import RateLimiter
+        from matcha.sources.utils import RateLimiter
 
         rl = RateLimiter()
         rl.set_rate("slow.example.com", 2)
@@ -416,7 +416,7 @@ class TestTokenBucket(unittest.TestCase):
         """Domains without a rate set should not block."""
         import time
 
-        from scrapers.utils import RateLimiter
+        from matcha.sources.utils import RateLimiter
 
         rl = RateLimiter()
         start = time.monotonic()
@@ -430,7 +430,7 @@ class TestSearchJobsScraperKwargs(unittest.TestCase):
 
     def test_indeed_domain_present_in_kwargs(self):
         """Verify Indeed domain kwarg is set correctly."""
-        from main import search_jobs
+        from matcha.main import search_jobs
 
         scrapers = {"Indeed": mock.MagicMock()}
 
@@ -445,12 +445,12 @@ class TestSearchJobsScraperKwargs(unittest.TestCase):
         fake_executor.__enter__.return_value = fake_executor
 
         with (
-            mock.patch("main.SCRAPER_DEFS", scrapers),
-            mock.patch("main.check_serpapi_available", return_value=False),
-            mock.patch("main.deduplicate", side_effect=lambda x: x),
-            mock.patch("main.ThreadPoolExecutor", return_value=fake_executor),
-            mock.patch("main.Live"),
-            mock.patch("main.as_completed", return_value=[fake_future]),
+            mock.patch("matcha.main.SCRAPER_DEFS", scrapers),
+            mock.patch("matcha.main.check_serpapi_available", return_value=False),
+            mock.patch("matcha.main.deduplicate", side_effect=lambda x: x),
+            mock.patch("matcha.main.ThreadPoolExecutor", return_value=fake_executor),
+            mock.patch("matcha.main.Live"),
+            mock.patch("matcha.main.as_completed", return_value=[fake_future]),
         ):
             search_jobs(
                 queries=["Engineer"],

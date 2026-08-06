@@ -1,16 +1,16 @@
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import unittest
 from unittest import mock
 from unittest.mock import patch
 
-from ai import _extract_json, ai_suggest_titles
-from main import _normalize, deduplicate, search_jobs
-from matcher import compute_relevance, tokenize
-from scrapers.indeed import resolve_indeed_url
+from matcha.ai import _extract_json, ai_suggest_titles
+from matcha.main import _normalize, deduplicate, search_jobs
+from matcha.matcher import compute_relevance, tokenize
+from matcha.sources.indeed import resolve_indeed_url
 
 
 class TestNormalize(unittest.TestCase):
@@ -220,9 +220,9 @@ class TestResolveIndeedURL(unittest.TestCase):
 
 
 class TestSuggestTitle(unittest.TestCase):
-    @mock.patch("ai.check_ai_available", return_value=True)
+    @mock.patch("matcha.ai.check_ai_available", return_value=True)
     @mock.patch(
-        "ai._call_ai",
+        "matcha.ai._call_ai",
         return_value='{"titles": ["DevOps Engineer", "Platform Engineer", "Cloud Engineer"]}',
     )
     def test_devops_skills(self, mock_call, mock_check):
@@ -231,9 +231,9 @@ class TestSuggestTitle(unittest.TestCase):
         self.assertIsNotNone(titles)
         self.assertEqual(titles[0], "DevOps Engineer")
 
-    @mock.patch("ai.check_ai_available", return_value=True)
+    @mock.patch("matcha.ai.check_ai_available", return_value=True)
     @mock.patch(
-        "ai._call_ai",
+        "matcha.ai._call_ai",
         return_value='{"titles": ["Backend Developer", "Python Developer", "Full Stack Developer"]}',
     )
     def test_backend_skills(self, mock_call, mock_check):
@@ -242,9 +242,9 @@ class TestSuggestTitle(unittest.TestCase):
         self.assertIsNotNone(titles)
         self.assertEqual(titles[0], "Backend Developer")
 
-    @mock.patch("ai.check_ai_available", return_value=True)
+    @mock.patch("matcha.ai.check_ai_available", return_value=True)
     @mock.patch(
-        "ai._call_ai",
+        "matcha.ai._call_ai",
         return_value='{"titles": ["Frontend Developer", "UI Developer", "React Developer"]}',
     )
     def test_frontend_skills(self, mock_call, mock_check):
@@ -256,8 +256,10 @@ class TestSuggestTitle(unittest.TestCase):
     def test_empty_skills(self):
         self.assertIsNone(ai_suggest_titles([]))
 
-    @mock.patch("ai.check_ai_available", return_value=True)
-    @mock.patch("ai._call_ai", return_value='{"titles": ["COBOL Developer", "Mainframe Engineer"]}')
+    @mock.patch("matcha.ai.check_ai_available", return_value=True)
+    @mock.patch(
+        "matcha.ai._call_ai", return_value='{"titles": ["COBOL Developer", "Mainframe Engineer"]}'
+    )
     def test_unrecognized_skills(self, mock_call, mock_check):
         skills = ["cobol", "fortran", "punchcard"]
         titles = ai_suggest_titles(skills)
@@ -295,21 +297,21 @@ class TestExtractJSON(unittest.TestCase):
 
 
 class TestSearchJobs(unittest.TestCase):
-    @patch("main.SCRAPER_DEFS", {})
+    @patch("matcha.main.SCRAPER_DEFS", {})
     def test_empty_queries(self):
         jobs, counts, errors = search_jobs([], location="", days=7, max_pages=1)
         self.assertEqual(jobs, [])
         self.assertEqual(counts, {})
         self.assertEqual(errors, {})
 
-    @patch("main.SCRAPER_DEFS", {})
+    @patch("matcha.main.SCRAPER_DEFS", {})
     def test_none_queries(self):
         jobs, counts, errors = search_jobs(None, location="", days=7, max_pages=1)
         self.assertEqual(jobs, [])
         self.assertEqual(counts, {})
         self.assertEqual(errors, {})
 
-    @patch("main.SCRAPER_DEFS", {})
+    @patch("matcha.main.SCRAPER_DEFS", {})
     def test_empty_string_query(self):
         jobs, counts, errors = search_jobs([""], location="", days=7, max_pages=1)
         self.assertEqual(jobs, [])

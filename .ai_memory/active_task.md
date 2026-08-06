@@ -2,72 +2,71 @@
 
 ## Current Focus
 
-**Matcha 2.0 — planning + pre-implementation analysis complete, Phase 0 ready to start.**
+**Phase 0 (Foundation) is COMPLETE and Phase 1's entry-point migration is
+DONE.** Matcha now runs as a proper installed package: `pip install -e .`,
+console script `matcha`, root shims deleted, `src/matcha/` is the only code
+home, 152/152 tests pass. **Remaining Phase 1 work is the data-quality work:
+OpenCLI backends for LinkedIn/Indeed**, per `revamp/matcha-2.0-strategy.md` §18.
 
-The strategy (`revamp/matcha-2.0-strategy.md`, rev 4), the pre-implementation
-analysis (`revamp/matcha-2.0-implementation-analysis.md`), and the Phase 0
-handoff prompt (`revamp/phase-0-handoff-prompt.txt`, scope expanded) are
-written. The codebase is still 1.x. **No code has been changed yet for 2.0.**
-The user has not yet given the go-ahead to start Phase 0.
-
-> 2026-08-06 session 1: full repo audit + `.ai_memory/` rewrite for Matcha.
-> Session 2: studied Agent-Reach v1.5.0 in depth and folded verified patterns
-> into the revamp docs (strategy §6.8, Rev 3). Session 3: pre-implementation
-> analysis — verified live environment (opencli 1.8.4 + gh installed;
-> agent-reach/mcporter absent), verified OpenCLI flag sets + job-detail keys
-> (no salary!), wrote `revamp/matcha-2.0-implementation-analysis.md`
-> (findings F-01..F-23), bumped strategy to Rev 4, expanded the Phase-0
-> handoff scope. **No source code modified in any session.**
+> 2026-08-06 session 1: full repo audit + `.ai_memory/` rewrite.
+> Session 2: Agent-Reach v1.5.0 study folded into revamp docs (strategy Rev 3).
+> Session 3: pre-implementation analysis (F-01..F-23), strategy Rev 4.
+> Session 4: **Phase 0 implemented** (src/ layout, shims, registry, doctor).
+> Session 5: **Phase 1 part 1 — entry-point migration** (console script,
+> `pip install -e .`, shims deleted, bandit/CI/Docker/README updated).
+> Decisions locked in: shims-first (F-04); LinkedIn blank location = `"India"`
+> (F-08); console entry is `matcha.main:main` (deviation from plan's
+> `matcha.cli:main` — recorded in strategy §18 + handoff).
 
 ---
 
+## Phase 1 Part 1 — Entry-point migration (DONE 2026-08-06)
+
+- [x] pyproject `[build-system]` (setuptools) + `[project]` (dynamic version via
+      `matcha.__version__`, `requires-python >=3.10`, deps mirror requirements.txt)
+      + `[project.scripts] matcha = "matcha.main:main"` + `[tool.setuptools]` src layout
+- [x] `venv/bin/pip install -e .` — `matcha` console script live
+- [x] Tests rewritten to `matcha.*` / `matcha.sources.*` (imports + mock targets),
+      `../src` sys.path bootstrap in all 8 test files
+- [x] **Root shims deleted** (`main/profile/ai/matcher/config/settings/models/actions.py`
+      + `scrapers/` package) — zero stale references repo-wide (grep-verified)
+- [x] Makefile: run* targets → `$(VENV)/bin/matcha`; bandit `-c pyproject.toml -r src/matcha
+      -lll`; pyinstaller entry = console-script path; venv bootstrap += `pip install -e .`
+- [x] CI: `pip install -e .` (validate + build jobs); bandit `-c pyproject.toml`;
+      pyinstaller via `$(command -v matcha)`
+- [x] Dockerfile: builder `pip install --user .`; `ENTRYPOINT ["python3", "-m",
+      "matcha.main"]`
+- [x] README quickstart/fresh-setup/diagram/file-tree updated; in-code `python3 main.py`
+      strings → `matcha`
+- [x] `.gitignore` += `*.egg-info/`, `.pytest_cache/`, `.mypy_cache/`, `build/`, `dist/`,
+      `*.spec`; requirements.txt notes pyproject is the authoritative dep list
+- [x] Bandit config is now REAL: `-c pyproject.toml` applies skips (B101/B110/B311/B404/
+      B603/B607, documented) → **0 issues, exit 0**; bandit-coverage gap from Phase 0 CLOSED
+- **Acceptance met:** 152/152 tests (unittest + pytest); ruff / format / pre-commit /
+  bandit clean; `matcha --help`, `matcha doctor`, `matcha doctor --json`,
+  `python3 -m matcha.main --help` all work; **pyinstaller onefile build succeeds and the
+  binary runs `--help` + `doctor --json`**.
+
 ## Immediate Next Steps
 
-1. **Get user's decision:** "start Phase 0" vs "review the docs first".
-   Decisions already confirmed (2026-08-06): shims-first layout (F-04);
-   LinkedIn empty-location default = `"India"` (F-08).
-2. **If approved, run Phase 0** using `revamp/phase-0-handoff-prompt.txt` (it is the
-   ready-made session prompt; scope now includes migration, shims, CI fixes,
-   the F-09 test fix, and career_sites default-off). Scope:
-   - [ ] Create `src/matcha/` package layout; move flat modules + `scrapers/*`
-         (→ `src/matcha/sources/`); update imports, **no behavior change**
-   - [ ] `src/matcha/errors.py` — typed hierarchy: `MatchaError > ConfigError /
-         SourceError > BackendError / ParseError / FilterError / EnrichmentError`
-   - [ ] `src/matcha/probe.py` — port `ProbeResult` + `probe_command` pattern from
-         `~/Code/projects/Agent-Reach/agent_reach/probe.py` (real execution,
-         stale-venv detection via exit 126/127; retry only transient failures;
-         side-effect-free probes; UTF-8 child env)
-   - [ ] `src/matcha/doctor.py` + `src/matcha/sources/base.py` + `registry.py` —
-         Source base class (ordered backends, tier, check() returns
-         (status, message) ok|warn|off|error, active_backend) + ALL_SOURCES
-         registry; refactor each scraper into a Source subclass
-   - [ ] `matcha doctor [--json]` subcommand wired into the CLI; per-source error
-         isolation + `scrub_url_credentials`
-   - [ ] `ScraperResult` gains provenance: `backend`, `data_quality`
-         (full|partial|snippet)
-   - [ ] pytest tests for `probe.py` + `doctor.py` + source contracts
-   - [ ] Root re-export shims + pyproject `[project]`/console script +
-         Makefile/CI/Docker/bandit path updates + `pip install -e .`
-   - [ ] CI fixes: full test suite (`unittest discover`), matrix +3.14
-   - [ ] Fix time-dependent test `test_date_string_within` (F-09)
-   - [ ] `career_sites` registered but default-off (F-11)
-   - **Acceptance:** `matcha doctor --json` lists all sources with real status;
-         FULL test suite passes (122/122 after F-09 fix); `python3 main.py
-         --help` still works; CI green
-3. **Do NOT build Phase 1+ features** (no OpenCLI backends, no Exa, no filters
-   module, no enrichment, no AI changes) during Phase 0.
+1. **Phase 1 part 2 — Data quality (the core Phase-1 work).** Per strategy §18:
+   - **OpenCLI backends for LinkedIn/Indeed (+ consent flow)** — the biggest
+     data-quality win; probe `opencli --version` + loopback `127.0.0.1:19825/status`
+     (never `opencli doctor`); login-gated platforms report `warn`, never `ok`.
+   - Exa Web Search backend; Naukri job-page extraction; `agent_reach_io.py`.
+   - **Before `agent_reach_io.py`:** verify exact `agent-reach doctor --json` shape and
+     `agent-reach install --channels=opencli` flags in
+     `~/Code/projects/Agent-Reach/agent_reach/cli.py`.
+2. **Do NOT build Phase 2+ features** (no filters module, no enrichment, no AI changes)
+   during Phase 1.
 
 ## Blockers / Notes
 
-- No blockers. Waiting on the user's start decision.
-- Before implementing `agent_reach_io.py` (Phase 1): verify the exact
-  `agent-reach doctor --json` output shape and `agent-reach install
-  --channels=opencli` flags in `~/Code/projects/Agent-Reach/agent_reach/cli.py`.
-- `scrapers/career_sites.py` is untracked but intended as a source — keep it
-  through the Phase 0 refactor (it gets its own `check()`).
-- Known pre-existing test failure to fix in Phase 0: `test_days_filter.py::
-  test_date_string_within` is a time-bomb (F-09) — "Posted: June 6, 2026" is
-  >7 days old now; rewrite the fixture time-relative. The function itself is
-  correct.
-- Full findings register: `revamp/matcha-2.0-implementation-analysis.md`
-  (F-01..F-23 with severities and resolutions).
+- No blockers.
+- **mypy baseline:** `mypy src/matcha` reports **24 errors, all pre-existing 1.x typing
+  debt** in legacy files (DDGS `= None` fallbacks, `prompt_loop`/`app` annotations, dict
+  reassignments). New modules are mypy-clean. mypy is NOT a project dependency or CI gate
+  — defer cleanup to Phase 7. (mypy was pip-installed into the venv for verification only.)
+- **Entry point:** `matcha` (venv console script) or `python3 -m matcha.main` (Docker).
+  System `python3` (3.14.6) lacks the project deps — use the venv.
+- Full findings register: `revamp/matcha-2.0-implementation-analysis.md` (F-01..F-23).

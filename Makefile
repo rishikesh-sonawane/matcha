@@ -12,16 +12,16 @@ PYINSTALLER = $(VENV)/bin/pyinstaller
 # ── Run ──────────────────────────────────────────────────────────────────────
 
 run: $(VENV)
-	$(PYTHON) main.py
+	$(VENV)/bin/matcha
 
 run-configure: $(VENV)
-	$(PYTHON) main.py --configure
+	$(VENV)/bin/matcha --configure
 
 run-new-profile: $(VENV)
-	$(PYTHON) main.py --new-profile
+	$(VENV)/bin/matcha --new-profile
 
 run-noninteractive: $(VENV)
-	$(PYTHON) main.py --non-interactive
+	$(VENV)/bin/matcha --non-interactive
 
 # ── Test & Quality ────────────────────────────────────────────────────────────
 
@@ -42,7 +42,7 @@ format-fix: $(VENV)
 	$(RUFF) format .
 
 static-analysis: $(VENV)
-	$(BANDIT) -r ai.py config.py main.py matcher.py profile.py scrapers -lll
+	$(BANDIT) -c pyproject.toml -r src/matcha -lll
 
 pre-commit: $(VENV)
 	$(PRECOMMIT) run --all-files --show-diff-on-failure
@@ -53,7 +53,7 @@ check: lint format static-analysis pre-commit test
 # ── Build ─────────────────────────────────────────────────────────────────────
 
 build-executable: $(VENV)
-	$(PYINSTALLER) --onefile --name matcha main.py
+	$(PYINSTALLER) --onefile --name matcha $(VENV)/bin/matcha
 
 build-container:
 	docker build -t matcha:latest .
@@ -72,5 +72,6 @@ venv:
 	python3 -m venv $(VENV)
 	$(VENV)/bin/pip install --upgrade pip
 	$(VENV)/bin/pip install -r requirements.txt
+	$(VENV)/bin/pip install -e .
 	$(VENV)/bin/pip install ruff bandit pre-commit pyinstaller
 	$(PRECOMMIT) install

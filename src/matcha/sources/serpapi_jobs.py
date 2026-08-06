@@ -3,7 +3,8 @@ from typing import Any
 
 import requests
 
-from models import ScraperResult
+from matcha.models import ScraperResult
+from matcha.sources.base import Source
 
 from .utils import resilient_get
 
@@ -21,7 +22,9 @@ def search_serpapi_jobs(
     config = get_serpapi_config()
     api_key = config.get("serpapi_key")
     if not api_key:
-        return ScraperResult(errors=["SerpAPI key not configured"], source="Google Jobs")
+        return ScraperResult(
+            errors=["SerpAPI key not configured"], source="Google Jobs", backend="serpapi"
+        )
 
     search_query = f"{query} job"
     if location:
@@ -117,13 +120,38 @@ def search_serpapi_jobs(
                 len(jobs),
             )
 
-        return ScraperResult(jobs=jobs, errors=errors, source="Google Jobs")
+        return ScraperResult(
+            jobs=jobs,
+            errors=errors,
+            source="Google Jobs",
+            backend="serpapi",
+            data_quality="partial",
+        )
 
     except requests.RequestException as e:
         msg = f"SerpAPI request failed: {e}"
         logger.warning(msg)
         errors.append(msg)
-        return ScraperResult(errors=errors, source="Google Jobs")
+        return ScraperResult(errors=errors, source="Google Jobs", backend="serpapi")
+
+
+class SerpapiSource(Source):
+    """Google Jobs — via SerpAPI (needs a key, tier 1)."""
+
+    name = "serpapi"
+    description = "Google Jobs — via SerpAPI"
+    backends = ["serpapi"]
+    tier = 1
+
+    def check(self, config: dict[str, Any] | None = None) -> tuple[str, str]:
+        if check_serpapi_available():
+            self.active_backend = "serpapi"
+            return "ok", "SerpAPI key configured"
+        self.active_backend = None
+        return "off", "No SerpAPI key — run `matcha --configure` (free tier: 100/mo)"
+
+    def search(self, query: str, location: str = "", **kwargs: Any) -> ScraperResult:
+        return search_serpapi_jobs(query, location, **kwargs)
 
 
 def check_serpapi_available() -> bool:
@@ -133,7 +161,7 @@ def check_serpapi_available() -> bool:
 
 def get_serpapi_config() -> dict[str, Any]:
     try:
-        from config import load_config
+        from matcha.config import load_config
 
         return load_config()
     except ImportError:

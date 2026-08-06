@@ -2,9 +2,10 @@ FROM python:3.11-slim AS builder
 
 WORKDIR /build
 
-COPY requirements.txt .
+COPY pyproject.toml README.md ./
+COPY src ./src
 RUN pip install --no-cache-dir --user --upgrade pip && \
-    pip install --no-cache-dir --user -r requirements.txt
+    pip install --no-cache-dir --user .
 
 
 FROM python:3.11-slim
@@ -26,4 +27,4 @@ COPY --chown=app:app . .
 
 USER app
 
-ENTRYPOINT ["python3", "main.py"]
+ENTRYPOINT ["python3", "-m", "matcha.main"]

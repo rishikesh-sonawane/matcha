@@ -2,7 +2,7 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 CONFIG_DIR = Path.home() / ".matcha"
 DB_PATH = CONFIG_DIR / "jobs.db"
@@ -49,7 +49,7 @@ def load_saved_jobs() -> dict[str, dict[str, str]]:
     return {r["url"]: dict(r) for r in rows}
 
 
-def is_job_saved(job_url: str, saved_ids: Optional[dict[str, Any]] = None) -> bool:
+def is_job_saved(job_url: str, saved_ids: dict[str, Any] | None = None) -> bool:
     if saved_ids is not None:
         return job_url in saved_ids
     with _db() as conn:
@@ -62,7 +62,7 @@ def is_job_saved(job_url: str, saved_ids: Optional[dict[str, Any]] = None) -> bo
 
 def save_job(
     job: dict[str, Any],
-    saved_ids: Optional[dict[str, Any]] = None,
+    saved_ids: dict[str, Any] | None = None,
 ) -> None:
     if saved_ids is not None:
         saved_ids[job.get("url", "")] = {
@@ -88,7 +88,7 @@ def save_job(
 
 def unsave_job(
     job_url: str,
-    saved_ids: Optional[dict[str, Any]] = None,
+    saved_ids: dict[str, Any] | None = None,
 ) -> None:
     if saved_ids is not None:
         saved_ids.pop(job_url, None)
@@ -111,7 +111,7 @@ def set_job_status(url: str, status: str) -> None:
             conn.execute("UPDATE jobs SET status = ? WHERE url = ?", (status, url))
 
 
-def get_job_status(url: str) -> Optional[dict[str, Any]]:
+def get_job_status(url: str) -> dict[str, Any] | None:
     with _db() as conn:
         row = conn.execute(
             "SELECT status, saved_at, applied_at, notes FROM jobs WHERE url = ?",

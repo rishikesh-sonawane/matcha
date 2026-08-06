@@ -9,8 +9,9 @@ try:
 except ImportError:
     DDGS = None
 
-from models import ScraperResult
-from scrapers.constants import (
+from matcha.models import ScraperResult
+from matcha.sources.base import Source
+from matcha.sources.constants import (
     COMPANY_EXTRACTION_PATTERNS,
     JOB_SOURCE_DOMAINS,
     MONTH_NAMES,
@@ -77,7 +78,9 @@ def search_web_for_jobs(
 ) -> ScraperResult:
     errors: list[str] = []
     if DDGS is None:
-        return ScraperResult(errors=["ddgs library not available"], source="Web Search")
+        return ScraperResult(
+            errors=["ddgs library not available"], source="Web Search", backend="ddgs"
+        )
 
     jobs: list[dict[str, str]] = []
     days = kwargs.get("days")
@@ -148,7 +151,30 @@ def search_web_for_jobs(
         if len(jobs) >= 10:
             break
 
-    return ScraperResult(jobs=_dedup_jobs(jobs), errors=errors, source="Web Search")
+    return ScraperResult(
+        jobs=_dedup_jobs(jobs),
+        errors=errors,
+        source="Web Search",
+        backend="ddgs",
+        data_quality="snippet",
+    )
+
+
+class WebSearchSource(Source):
+    """Web Search — DDGS across career-site domains."""
+
+    name = "web_search"
+    description = "Web Search — DDGS across career-site domains"
+    backends = ["ddgs"]
+    tier = 0
+
+    def check(self, config: dict[str, Any] | None = None) -> tuple[str, str]:
+        status, msg = self._ddgs_status(DDGS is not None)
+        self.active_backend = "ddgs" if status == "ok" else None
+        return status, msg
+
+    def search(self, query: str, location: str = "", **kwargs: Any) -> ScraperResult:
+        return search_web_for_jobs(query, location, **kwargs)
 
 
 def _is_search_page(title: str, url: str) -> bool:

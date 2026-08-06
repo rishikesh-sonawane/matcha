@@ -1,11 +1,11 @@
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import unittest
 
-from matcher import compute_relevance
+from matcha.matcher import compute_relevance
 
 
 class TestSkillFocusedMatcher(unittest.TestCase):
@@ -85,9 +85,9 @@ class TestSkillFocusedMatcher(unittest.TestCase):
 
     def test_no_hardcoded_role_words(self):
         """Verify no hardcoded role word lists exist in matcher module."""
-        import matcher
+        import matcha.matcher
 
-        with open(matcher.__file__) as f:
+        with open(matcha.matcher.__file__) as f:
             source = f.read()
         forbidden = [
             "GENERIC_TITLE_WORDS",
@@ -138,7 +138,7 @@ class TestNaukriTitleFilter(unittest.TestCase):
     def test_page_n_titles_filtered(self):
         import re
 
-        from scrapers.naukri import NON_JOB_TITLE_PATTERNS
+        from matcha.sources.naukri import NON_JOB_TITLE_PATTERNS
 
         bad_titles = ["Page 8", "page 9", "Page 12", "Search", "Sign In", "Log In"]
         for t in bad_titles:
@@ -150,7 +150,7 @@ class TestNaukriTitleFilter(unittest.TestCase):
     def test_job_titles_not_filtered(self):
         import re
 
-        from scrapers.naukri import NON_JOB_TITLE_PATTERNS
+        from matcha.sources.naukri import NON_JOB_TITLE_PATTERNS
 
         good_titles = ["Platform Engineer", "DevOps Engineer", "Cloud Engineer at Google"]
         for t in good_titles:

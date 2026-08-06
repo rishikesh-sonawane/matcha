@@ -48,7 +48,7 @@ Job boards show you **every** posting matching a keyword. This tool shows you on
 
 ```
                          ┌──────────────────────────────────────┐
-                         │           main.py (CLI)              │
+                         │           matcha (CLI)               │
                          │  Profile → Query Expansion → Search  │
                          │  → Two-Pass Ranking → Display        │
                          └───────┬──────────┬──────────┬────────┘
@@ -57,7 +57,7 @@ Job boards show you **every** posting matching a keyword. This tool shows you on
                     ▼                       ▼                      ▼
            ┌────────────────┐    ┌──────────────────┐    ┌──────────────────┐
            │  Profile Layer │    │  Relevance Layer  │    │  Scraper Layer   │
-           │  profile.py    │    │  matcher.py       │    │  scrapers/       │
+           │  profile.py    │    │  matcher.py       │    │  sources/        │
            │  ai.py         │    │  ai.py            │    │                  │
            │                │    │                  │    │  • LinkedIn      │
            │  • PDF (AI)    │    │  • Heuristic (5  │    │  • Indeed        │
@@ -93,10 +93,14 @@ Job boards show you **every** posting matching a keyword. This tool shows you on
 ```bash
 python3 -m venv venv
 venv/bin/pip install -r requirements.txt
-venv/bin/python3 main.py
+venv/bin/pip install -e .
+venv/bin/matcha
 ```
 
-This creates a virtual environment, installs dependencies, and runs the app — without needing to manually activate the venv.
+This creates a virtual environment, installs dependencies, installs the
+`matcha` console script, and runs the app — without needing to manually
+activate the venv. `venv/bin/matcha doctor --json` prints a per-source
+health report.
 
 ### Fresh Setup
 
@@ -105,7 +109,8 @@ git clone https://github.com/yourusername/matcha.git
 cd matcha
 python3 -m venv venv
 venv/bin/pip install -r requirements.txt
-venv/bin/python3 main.py
+venv/bin/pip install -e .
+venv/bin/matcha
 ```
 
 > **Note:** A virtual environment is required — it avoids urllib3 v2 + macOS LibreSSL segfaults on Homebrew Python, and ensures dependencies install into the correct location. If you see `Defaulting to user installation because normal site-packages is not writeable`, the venv is not activated or the symlinks are broken — recreate it with `rm -rf venv && python3 -m venv venv`.
@@ -321,25 +326,37 @@ With AI enabled:
 
 ```
 matcha/
-├── main.py                  # CLI entry point, orchestration, UI
-├── profile.py               # AI-only profile ingestion (PDF, LinkedIn, manual)
-├── matcher.py               # Two-pass relevance scoring engine
-├── ai.py                    # AI provider client (Kilo Gateway)
-├── config.py                # Persistent config and profile storage
-├── models.py                # Pydantic v2 data models
-├── settings.py              # YAML config loader
-├── actions.py               # Saved-job actions
+├── pyproject.toml           # Packaging (console script `matcha`) + ruff/bandit config
 ├── requirements.txt         # Python dependencies
+├── Makefile                 # Dev tasks (venv, test, lint, build)
 ├── kilo.md                  # Dev session log / architecture notes
-└── scrapers/
-    ├── __init__.py
-    ├── utils.py             # Resilient HTTP client, rate limiter, cache
-    ├── indeed.py            # Indeed: cloudscraper (3.9) → ddgs fallback (3.14)
-    ├── linkedin.py          # LinkedIn guest API
-    ├── naukri.py            # Naukri via ddgs API search
-    ├── remoteok.py          # RemoteOK public JSON API
-    ├── serpapi_jobs.py      # Google Jobs via SerpAPI (optional)
-    └── web_search.py        # ddgs API with targeted site: queries on job boards
+└── src/
+    └── matcha/
+        ├── __init__.py
+        ├── main.py          # CLI entry point, orchestration, UI, `doctor`
+        ├── profile.py       # Profile ingestion (PDF, LinkedIn, manual)
+        ├── matcher.py       # Two-pass relevance scoring engine
+        ├── ai.py            # AI provider client (OpenAI-compatible REST)
+        ├── config.py        # Persistent config and profile storage
+        ├── models.py        # Pydantic v2 data models + ScraperResult
+        ├── settings.py      # YAML config loader
+        ├── actions.py       # Saved-job actions
+        ├── errors.py        # Typed exception hierarchy
+        ├── probe.py         # Upstream CLI probing (used by doctor)
+        ├── doctor.py        # `matcha doctor` health reports
+        ├── utils.py         # Credential scrubbing, UTF-8 helpers
+        └── sources/         # Job sources (one module + Source subclass each)
+            ├── __init__.py  # ALL_SOURCES registry
+            ├── base.py      # Source base class (backends, check(), search())
+            ├── constants.py
+            ├── utils.py     # Resilient HTTP client, rate limiter, cache
+            ├── indeed.py    # Indeed: cloudscraper → ddgs fallback
+            ├── linkedin.py  # LinkedIn guest API
+            ├── naukri.py    # Naukri via ddgs API search
+            ├── remoteok.py  # RemoteOK public JSON API
+            ├── serpapi_jobs.py  # Google Jobs via SerpAPI (optional)
+            ├── web_search.py    # ddgs API with targeted site: queries
+            └── career_sites.py  # 200+ employer boards via ddgs (default off)
 ```
 
 ---

@@ -9,8 +9,9 @@ try:
 except ImportError:
     DDGS = None
 
-from models import ScraperResult
-from scrapers.constants import (
+from matcha.models import ScraperResult
+from matcha.sources.base import Source
+from matcha.sources.constants import (
     MONTH_NAMES,
     NON_JOB_TITLE_PATTERNS,
     NON_JOB_URL_PATTERNS,
@@ -374,7 +375,9 @@ def search_career_sites_jobs(
 ) -> ScraperResult:
     errors: list[str] = []
     if DDGS is None:
-        return ScraperResult(errors=["ddgs library not available"], source="Career Sites")
+        return ScraperResult(
+            errors=["ddgs library not available"], source="Career Sites", backend="ddgs"
+        )
 
     days = kwargs.get("days")
     timelimit = ""
@@ -446,4 +449,38 @@ def search_career_sites_jobs(
         if len(jobs) >= 20:
             break
 
-    return ScraperResult(jobs=_dedup_jobs(jobs), errors=errors, source="Career Sites")
+    return ScraperResult(
+        jobs=_dedup_jobs(jobs),
+        errors=errors,
+        source="Career Sites",
+        backend="ddgs",
+        data_quality="snippet",
+    )
+
+
+class CareerSitesSource(Source):
+    """Career Sites — 200+ employer boards via DDGS.
+
+    Registered but OFF by default (F-11): dispatch stays untouched until
+    Phase 1 enables it via ``scrapers.career_sites: true``.
+    """
+
+    name = "career_sites"
+    description = "Career Sites — 200+ employer boards via DDGS"
+    backends = ["ddgs"]
+    tier = 0
+    enabled_by_default = False
+
+    def check(self, config: dict[str, Any] | None = None) -> tuple[str, str]:
+        if not self._scrapers_config(config).get("career_sites", False):
+            self.active_backend = None
+            return (
+                "off",
+                "Disabled by default — enable via `scrapers.career_sites: true` (Phase 1)",
+            )
+        status, msg = self._ddgs_status(DDGS is not None)
+        self.active_backend = "ddgs" if status == "ok" else None
+        return status, msg
+
+    def search(self, query: str, location: str = "", **kwargs: Any) -> ScraperResult:
+        return search_career_sites_jobs(query, location, **kwargs)
