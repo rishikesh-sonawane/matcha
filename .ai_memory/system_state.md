@@ -1,6 +1,6 @@
 # Current System State — Matcha
 
-> Last verified: 2026-08-06 (Phase 6 — agent + automation — done).
+> Last verified: 2026-08-06 (Phase 7 — hardening — done).
 > If any checkbox below conflicts with the actual code, **the code wins** —
 > update this file.
 
@@ -11,9 +11,9 @@ layout as an installed package.** **Phase 0 + Phase 1 (entry-point migration,
 OpenCLI backends, top-N enrichment, Exa Web Search, `agent_reach_io`, Naukrijob-page
 extraction) + Phase 2 (normalize + central filters) + Phase 4 (ranking
 recalibration) + Phase 5 (provider-agnostic AI client) + Phase 6 (agent +
-automation) are DONE.** All 455 tests pass. Next: Phase 7 (hardening:
-circuit breakers, config hardening, mypy debt, RSS, coverage gate) — do NOT
-start yet.
+automation) + Phase 7 (hardening) are DONE.** All 623 tests pass;
+mypy clean; coverage gate ≥80% (81%+). Next: Phase 3-adjacent polish
+(saved-jobs enriched columns) or a fresh spec — do NOT start beyond that.
 
 ## Layout
 
@@ -21,7 +21,9 @@ start yet.
   matcher.py config.py settings.py models.py actions.py` + `errors.py
   probe.py utils.py doctor.py`
 - `src/matcha/sources/` — `base.py` (Source ABC) + `__init__.py` (ALL_SOURCES
-  registry) + 7 source modules + `constants.py utils.py`
+  registry) + 8 source modules + `constants.py utils.py` +
+  **`breaker.py`** (Phase 7 circuit breakers, persisted source_state.json) +
+  **`rss.py`** (Phase 7 RSS source)
 - `src/matcha/sources/backends/` — **`opencli.py`** (Phase 1): side-effect-free
   probe, consent gate, tolerant command runner, detail helpers
   (`linkedin_job_detail`, `indeed_job_detail`) · **`mcporter.py`** (Phase 1):
@@ -70,6 +72,13 @@ start yet.
 - `src/matcha/skill/` — **bundled agent SKILL.md** (Phase 6): bilingual
   zh+en, YAML frontmatter, package-data shipped; `matcha.skill` package also
   hosts `install_skill`/`uninstall_skill`/`default_destinations`
+- **Phase 7 hardening** — `utils.py` (ensure_no_symlink_path /
+  atomic_write_text / read_small_text_no_follow / make_private_dir),
+  `errors.py` (ConfigSecurityError), `config.py` (atomic 0600 writes,
+  symlink rejection, reads-never-create, 1MB caps), `sources/breaker.py`
+  (persisted circuit breakers), `sources/rss.py` (feedparser RSS),
+  `profile.enrich_github_profile` + `agent_reach_io.gh_repos` + `matcha
+  github`
 - No root shims — root modules + `scrapers/` deleted in Phase 1 part 1;
   `matcha` console script is the entry point
 
@@ -135,6 +144,19 @@ start yet.
       (new-vs-seen, writes `~/.matcha/latest.json`); bilingual SKILL.md +
       `matcha skill --install/--uninstall`; optional guarded MCP server
       (`matcha mcp`, `pip install -e '.[agent]'`)
+- [x] **Circuit breakers (Phase 7, §6.7)** — per-source state persisted in
+      `~/.matcha/source_state.json`; 3 consecutive failures → 30-min
+      cooldown (search skips the source); any success resets; atomic 0600 /
+      symlink-rejected IO, thread-safe (`_lock`), doctor reports `circuit`
+- [x] **Config hardening (Phase 7, §17)** — atomic owner-only writes
+      (0600/0700), component-wise symlink rejection, reads never create
+      files, 1MB size caps; fernet-key write TOCTOU guarded
+- [x] **GitHub profile enrichment (Phase 7, §11)** — `matcha github enrich`
+      merges `gh api user/repos` language+topic skills into profile.json;
+      read-only discipline (never `gh auth status`); graceful when gh absent
+- [x] **RSS source (Phase 7, §6.2)** — `sources/rss.py` (feedparser):
+      company/job-board feeds from `sources.rss.feeds` in settings; tier 0
+      default-on; `data_quality=partial`
 - [x] **TUI** — prompt_toolkit full-screen: list/detail/saved modes, keys ↑↓ Enter s o n p l r q, pagination 10/page
 - [x] **Job lifecycle** — `actions.py`: SQLite `~/.matcha/jobs.db`, statuses saved/applied/dismissed/interview/rejected/offer
 - [x] **Config & security** — keyring + fernet for ai_key/serpapi_key; Pydantic validation
@@ -155,15 +177,12 @@ start yet.
 
 ## Test Baseline (2026-08-06)
 
-- **455/455 tests pass** (`unittest discover tests` AND `pytest tests/`).
-  430 at end of Phase 5; +24 from `tests/test_track.py` (6) +
-  `tests/test_skill.py` (5) + `tests/test_agent_surface.py` (13) (Phase 6).
-  401 at end of Phase 4; +29 from `tests/test_ai_client.py` (Phase 5).
-  371 at end of Phase 2; +30 from `tests/test_ranking.py` (Phase 4).
-  307 at end of Phase 1 (Naukri job-page); +64 from `tests/test_normalization.py`
-  (26) + `tests/test_filters.py` (38). Baseline before Phase 0: 122 tests, 1
-  pre-existing failure (`test_date_string_within` — F-09 time-bomb, now
-  rewritten time-relative).
+- **623/623 tests pass** (`unittest discover tests` AND `pytest tests/`).
+  455 at end of Phase 6; +168 from Phase 7 suites: `test_breaker.py` (9),
+  `test_config_hardening.py` (27), `test_rss.py`, `test_github_enrich.py`,
+  `test_main_surface.py` (31), `test_profile_extra.py`, `test_actions.py`,
+  `test_sources_utils.py`, `test_base.py`, `test_settings_extra.py`,
+  `test_coverage_sources.py` (49).
 - New: `tests/test_probe.py`, `tests/test_doctor.py`, `tests/test_source_contracts.py`
   (registry unique names, check() status contract, ordered_backends permutation +
   override, doctor result shape, crash isolation, credential scrubbing),
@@ -174,16 +193,20 @@ start yet.
   `tests/test_track.py` (6), `tests/test_skill.py` (5),
   `tests/test_agent_surface.py` (13).
 - Quality gates all green: `ruff check .`, `ruff format --diff .`, `pre-commit run
-  --all-files`, `bandit -r ... -lll` (on the CI targets), mypy baseline documented
-  (24 pre-existing legacy errors; mypy not a project dep/CI gate).
-- Makefile targets: `run` / `test` / `lint` / `format` / `static-analysis` / `pre-commit` / `check`.
+  --all-files`, `bandit -r ... -lll`, **mypy clean (0 errors, 38 files)**,
+  **coverage ≥80% (`make test-coverage`, `fail_under=80` in
+  [tool.coverage.report])**.
+- Makefile targets: `run` / `test` / `test-coverage` / `lint` / `format` /
+  `static-analysis` / `pre-commit` / `check`.
 
-## Git State (2026-08-06, post-Phase-5)
+## Git State (2026-08-06, post-Phase-7)
 
 - Branch `main`, ahead of `origin/main`. Committed: `bf70014` (Phase 1-2-4),
-  `bb87e7c` (docs sync), `430c323` (Phase 5). **Phase 6 is the current
-  uncommitted work** (track.py / skill/ / mcp_server.py / main.py /
-  pyproject.toml / requirements.txt + 3 test files + docs). Nothing is pushed.
+  `bb87e7c` (docs sync), `430c323` (Phase 5), `9c062bb` (Phase 6).
+  **Phase 7 is the current uncommitted work** (breaker.py / rss.py /
+  utils.py / config.py / errors.py / profile.py / agent_reach_io.py /
+  actions.py / settings.py / base.py / main.py / doctor.py + 11 test files
+  + pyproject/CI/Makefile + docs). Nothing is pushed.
 
 ## Matcha 2.0 Roadmap (from revamp/matcha-2.0-strategy.md §18)
 
@@ -196,7 +219,7 @@ start yet.
 - [x] **Phase 4 — Ranking recalibration (DONE 2026-08-06):** confidence-weighted heuristic (data-richness × dimensions); recency/workplace/must-skill signals; `must_skills_soft` rank cap; AI pass gated to enriched candidates; flatline detection + optional normalization (`ranking.normalize_scores`); `[full]`/`[partial]`/`[snippet]` provenance tags; per-row provenance stamping at ingest. *Accept met: score distribution spreads; full-data jobs outrank snippet-guesses.*
 - [x] **Phase 5 — AI provider-agnostic (DONE 2026-08-06):** `ai.py` + `ai_cache.py` (OpenAI-compatible REST), presets (Groq/Kilo/OpenRouter/OpenAI/local-no-key), model tiers best/fast, opt-in disk cache, per-run budget guard, `matcha --configure` provider wizard. *Accept met: works with Groq free tier and zero config (heuristic-only); no key leak; cache hits on re-run.*
 - [x] **Phase 6 — Agent + automation (DONE 2026-08-06):** `run_search` shared pipeline; `search --json` document; `track.py` seen_urls + `matcha watch` new-vs-seen (writes latest.json); SKILL.md + installer (`matcha skill --install/--uninstall`); optional guarded MCP server (`matcha mcp`, `agent` extra). *Accept met: agent drives a full search via the skill; watch surfaces only new jobs.*
-- [ ] **Phase 7 — Hardening (1–2 days):** circuit breakers; config hardening; GitHub profile enrichment; RSS source; coverage ≥80%; **mypy debt cleanup (24 pre-existing errors)**; README/docs.
+- [x] **Phase 7 — Hardening (DONE 2026-08-06):** circuit breakers (persisted `source_state.json`, thread-safe); config hardening (atomic 0600/0700, symlink rejection, reads-never-create, size caps); GitHub profile enrichment (`matcha github enrich`); RSS source (feedparser); coverage ≥80% gate (81%+, CI + Makefile); **mypy debt cleanup (36 → 0 errors)**. Plus real-bug fixes surfaced by the new suites (actions commit, settings deepcopy, extract_experience case). *Accept met: doctor shows circuit state; config writes atomic + symlink-rejected; mypy clean; coverage gate green.*
 
 **Design pillars:** multi-backend richest-first routing · doctor-first observability ·
 filters as a central pipeline stage · enrichment over volume · graceful degradation ·
@@ -213,12 +236,13 @@ provenance is data · failproof by construction.
 9. mcporter not installed — Exa backend untestable live; `exa_status()==off` → Web Search stays on DDGS; install + `mcporter config add exa https://mcp.exa.ai/mcp --scope home` to exercise
 10. agent-reach not installed — `doctor_snapshot()` returns None + one-time warning; all `agent_reach_io` health signals degrade to own probes. gh IS installed + authenticated — `gh_profile()` works live (read-only hosts.yml, never `gh auth status`)
 11. Naukri client-rendered + anti-bot — plain requests get an empty SPA shell; jobapi requires CSRF session; the Jina-render path works (verified live) and expired postings redirect to search pages (skipped)
-7. mypy: 24 pre-existing legacy errors (not gating) — Phase 7
-8. Dedup O(n²) (F-10) — Phase 4
+7. ~~mypy: 24 pre-existing legacy errors~~ **RESOLVED Phase 7** — 0 errors across 38 files
+8. Dedup O(n²) (F-10) — Phase 4 (deferred)
+9. OpenCLI extension disconnected on this machine — opencli path untestable live; falls back correctly
 
 ## Key References (revamp/)
 
-- `matcha-2.0-strategy.md` — the plan (Rev 13, source of truth; §6.2/§6.3 corrected for OpenCLI + Exa/mcporter work, §6.5 + §8 + §7 + §10.2 + §13 marked implemented)
+- `matcha-2.0-strategy.md` — the plan (Rev 14, source of truth; §6.2/§6.3 corrected for OpenCLI + Exa/mcporter work, §6.5 + §6.7 + §7 + §8 + §10.2 + §11 + §13 + §17 marked implemented)
 - `matcha-2.0-implementation-analysis.md` — pre-implementation analysis: verified env, OpenCLI interfaces, migration plan, findings F-01..F-23
 - `phase-0-handoff-prompt.txt` — Phase 0 spec (implemented 2026-08-06)
 - `opencli-integration-plan.md` — superseded-but-adopted background

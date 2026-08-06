@@ -75,6 +75,21 @@
 > --install/--uninstall`; optional MCP server (`matcha mcp`, guarded
 > `mcp>=1.0` extra) exposing `matcha_status` + `matcha_search`. 455/455
 > tests; ruff/format/bandit clean.)
+> Rev 14 (adds: **Phase 7 DONE — hardening** — §6.7 circuit breakers
+> implemented in `sources/breaker.py` (persisted `source_state.json`,
+> atomic 0600 + symlink-rejected IO, thread-safe `_lock`, 3 strikes →
+> 30-min cooldown, doctor `circuit` key); §17 config hardening implemented
+> (`utils.py` `ensure_no_symlink_path`/`atomic_write_text`/
+> `read_small_text_no_follow`/`make_private_dir`, `errors.py`
+> `ConfigSecurityError`, config.py atomic 0600 writes + symlink rejection +
+> reads-never-create + 1MB caps); §11 GitHub enrichment implemented
+> (`matcha github enrich` via `gh_profile`/`gh_repos`, read-only); RSS
+> source added (`sources/rss.py`, feedparser, `sources.rss.feeds`);
+> **mypy clean (36→0 errors)**; **coverage gate ≥80% (81%+)** in CI +
+> `make test-coverage`. Real bugs fixed: `actions._db()` never committed
+> (saved jobs silently lost), `settings` shallow-copy default leak,
+> `extract_experience` case-sensitivity, `probe_url` bare-exception
+> hardening. 623/623 tests; ruff/format/mypy/bandit clean.)
 
 ---
 
@@ -485,7 +500,18 @@ platform login — so a healthy-but-not-logged-in LinkedIn reports `warn`, never
 healthy, even if the platform login is unverified. Per-channel errors must not
 leak a stale `active_backend` (reset to `None` on exception).
 
-### 6.7 `registry.py` — circuit breakers
+### 6.7 `registry.py` — circuit breakers — IMPLEMENTED (Rev 14)
+
+> ✅ **Implemented (Phase 7, 2026-08-06)** in `src/matcha/sources/breaker.py`:
+> per-source state persisted to `~/.matcha/source_state.json`; **3 consecutive
+> failures open a 30-min cooldown** during which `search_jobs` skips the
+> source with a visible note; any success resets both streaks. Reads are
+> symlink-rejected + size-capped (1MB), writes atomic 0600, every IO failure
+> degrades to an empty/untouched state (failproof). A `threading.Lock`
+> serializes the read-modify-write across the ≤12 search workers (atomic
+> os.replace already prevents torn cross-process reads). Doctor reports a
+> `circuit` key per source (with a fresh `open` flag) via `circuit_status`.
+> 9 hermetic tests incl. a 20-concurrent-record race regression.
 
 Per-source state persisted to `~/.matcha/source_state.json`:
 
@@ -754,7 +780,13 @@ pass. Prompt changes are diff-reviewable.
 ## 11. Profile & Query Layer
 
 - Keep PDF/LinkedIn/manual entry + supplement flow.
-- **Optional GitHub enrichment** via `gh` (repos/languages → suggested skills).
+- **Optional GitHub enrichment** via `gh` (repos/languages → suggested
+  skills). **IMPLEMENTED (Phase 7, 2026-08-06):** `matcha github enrich`
+  merges `gh api user/repos` language + topic skills into profile.json —
+  `agent_reach_io.gh_repos()` (read-only, telemetry-off env) +
+  `profile.enrich_github_profile()` (cap 8 suggestions, dedup against
+  existing skills); no-profile → exit 1, gh absent → hint. Never runs
+  `gh auth status`.
 - `Profile` gains `must_have_skills`, `min_salary`, `remote_preference`,
   `github_username` (see §14).
 - Query expansion stays AI + validation gate; add **location-aware** and
@@ -1061,9 +1093,15 @@ new jobs.
 > tests (`tests/test_track.py`, `tests/test_skill.py`,
 > `tests/test_agent_surface.py`). 455/455 tests; ruff/format/bandit clean.
 
-### Phase 7 — Hardening (1–2 days)
-Circuit breakers, config hardening, GitHub profile enrichment, RSS source,
-coverage ≥80%, README + docs.
+### Phase 7 — Hardening (DONE 2026-08-06)
+Circuit breakers (persisted `source_state.json`, thread-safe), config
+hardening (atomic 0600/0700, symlink rejection, reads-never-create, 1MB
+caps), GitHub profile enrichment (`matcha github enrich`), RSS source
+(`sources/rss.py`, feedparser), coverage ≥80% gate (81%+, CI + `make
+test-coverage`), mypy debt cleanup (36 → 0 errors), README + docs.
+**Accept met:** doctor shows `circuit` state per source; config writes are
+atomic + symlink-rejected; `matcha github enrich` degrades gracefully; RSS
+registered + default-on; mypy clean; coverage gate green; 623/623 tests.
 
 ---
 
@@ -1080,9 +1118,12 @@ coverage ≥80%, README + docs.
 - [ ] Typed error taxonomy; zero bare `except`
 - [x] AI: provider-agnostic REST client, free-tier presets, model tiers, disk cache, budget guard, heuristic-only fallback
 - [x] MCP: Exa via mcporter; optional Matcha MCP server; never required
-- [ ] `src/` package layout; mypy strict; ruff; coverage gate
-- [ ] Pydantic models used at runtime (jobs/profile/filters/settings)
-- [ ] Config hardening: atomic writes, 0600, symlink rejection, masking
+- [x] `src/` package layout; mypy clean (0 errors); ruff; coverage gate ≥80% — Phase 7
+- [ ] Pydantic models used at runtime (jobs/profile/filters/settings) — partial (settings/config validated; Job/Profile runtime boundary deferred)
+- [x] Config hardening: atomic writes, 0600, symlink rejection, masking — Phase 7
+- [x] Circuit breakers per source (persisted source_state.json) — Phase 7
+- [x] GitHub profile enrichment (matcha github enrich) — Phase 7
+- [x] RSS source (sources/rss.py, feedparser) — Phase 7
 - [x] Filter/pipeline stage counts surfaced in TUI + JSON
 - [x] Confidence-weighted scoring + provenance tags ([full]/[snippet]) — Phase 4
 - [ ] AI verdict pass (top-K "would you apply?" line) — optional, AI-gated

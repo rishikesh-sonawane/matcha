@@ -1,3 +1,4 @@
+import copy
 import logging
 from pathlib import Path
 from typing import Any
@@ -51,6 +52,9 @@ _DEFAULTS: dict[str, Any] = {
     "ranking": {
         "normalize_scores": False,
     },
+    "sources": {
+        "rss": {"feeds": []},
+    },
 }
 
 
@@ -69,7 +73,7 @@ def load_settings(config_path: str | None = None) -> dict[str, Any]:
     paths.append(LOCAL_CONFIG)
     paths.append(USER_CONFIG)
 
-    settings: dict[str, Any] = dict(_DEFAULTS)
+    settings: dict[str, Any] = copy.deepcopy(_DEFAULTS)
 
     for p in paths:
         if p.exists():

@@ -32,7 +32,7 @@ from matcha.ai import (
     check_ai_available,
     reset_budget,
 )
-from matcha.config import load_config, load_profile, save_config
+from matcha.config import load_config, load_profile, save_config, save_profile
 from matcha.filters import apply_filters, build_filter_summary, provenance_tags
 from matcha.matcher import (
     ai_eligible,
@@ -45,6 +45,9 @@ from matcha.models import ScraperResult
 from matcha.normalization import normalize_jobs
 from matcha.profile import build_or_load_profile
 from matcha.settings import load_settings
+from matcha.sources.breaker import is_open as breaker_is_open
+from matcha.sources.breaker import record_failure as breaker_record_failure
+from matcha.sources.breaker import record_success as breaker_record_success
 from matcha.sources.indeed import search_indeed_jobs
 from matcha.sources.linkedin import search_linkedin_jobs
 from matcha.sources.naukri import search_naukri_jobs
@@ -115,6 +118,17 @@ SCRAPER_DEFS = {
     "Naukri": search_naukri_jobs,
     "RemoteOK": search_remoteok_jobs,
     "Web Search": search_web_for_jobs,
+}
+
+#: Display name -> circuit-breaker state key (strategy §6.7).
+_BREAKER_KEYS = {
+    "LinkedIn": "linkedin",
+    "Indeed": "indeed",
+    "Naukri": "naukri",
+    "RemoteOK": "remoteok",
+    "Web Search": "web_search",
+    "Google Jobs": "serpapi",
+    "RSS": "rss",
 }
 
 
@@ -276,6 +290,8 @@ def search_jobs(
     max_pages: int = 1,
     indeed_domain: str = "in.indeed.com",
     quiet: bool = False,
+    extra_scrapers: dict[str, Any] | None = None,
+    extra_scraper_kwargs: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, int], dict[str, list[str]]]:
     if isinstance(queries, str):
         queries = [queries]
@@ -285,6 +301,8 @@ def search_jobs(
         return [], {}, {}
 
     scrapers = dict(SCRAPER_DEFS)
+    if extra_scrapers:
+        scrapers.update(extra_scrapers)
     if check_serpapi_available():
         scrapers["Google Jobs"] = search_serpapi_jobs
 
@@ -293,9 +311,21 @@ def search_jobs(
     source_errors: dict[str, list[str]] = {}
     pending = {name: True for name in scrapers}
 
+    # Phase 7 (strategy §6.7): skip sources whose circuit is open (>=3
+    # consecutive failures) with a visible note; the doctor reports the state.
+    breaker_keys = {name: _BREAKER_KEYS.get(name) for name in scrapers}
+    for name, key in breaker_keys.items():
+        if key and breaker_is_open(key):
+            logger.warning("Skipping %s: circuit open (cooldown)", name)
+            pending[name] = False
+            source_errors.setdefault(name, []).append(
+                "circuit open (≥3 consecutive failures) — skipped until cooldown ends"
+            )
+    scrapers = {n: f for n, f in scrapers.items() if pending[n]}
+
     total_tasks = len(scrapers) * len(queries)
 
-    scraper_kwargs: dict[str, dict[str, Any]] = {}
+    scraper_kwargs: dict[str, dict[str, Any]] = dict(extra_scraper_kwargs or {})
     if "Indeed" in scrapers:
         scraper_kwargs["Indeed"] = {"domain": indeed_domain}
 
@@ -361,6 +391,12 @@ def search_jobs(
                     source_name = futures[future]
                     _, result = future.result()
                     pending[source_name] = False
+                    key = breaker_keys.get(source_name)
+                    if key:
+                        if result.errors:
+                            breaker_record_failure(key)
+                        else:
+                            breaker_record_success(key)
                     if result.errors:
                         source_errors.setdefault(source_name, []).extend(result.errors)
                     # Provenance is data (strategy §6.2): stamp the result-level
@@ -437,9 +473,13 @@ def rank_jobs(
                     }
                     for f in as_completed(ai_futures):
                         i = ai_futures[f]
-                        relevance = f.result()
-                        if relevance:
-                            ranked[i] = (relevance["score"], ranked[i][1], relevance["reasons"])
+                        ai_relevance = f.result()
+                        if ai_relevance:
+                            ranked[i] = (
+                                ai_relevance["score"],
+                                ranked[i][1],
+                                ai_relevance["reasons"],
+                            )
                         progress.update(task, advance=1)
             ranked.sort(key=lambda x: x[0], reverse=True)
 
@@ -501,6 +541,25 @@ def run_search(
 
     max_pages = int(settings.get("search", {}).get("max_pages", 2))
     indeed_domain = settings.get("scrapers", {}).get("indeed_domain", "in.indeed.com")
+
+    # Phase 7 (strategy §6.2): the RSS source runs only when feeds are
+    # configured (settings sources.rss.feeds) — zero config means it stays
+    # off and doctor reports so.
+    extra_scrapers: dict[str, Any] = {}
+    extra_scraper_kwargs: dict[str, dict[str, Any]] = {}
+    sources_cfg = settings.get("sources")
+    if isinstance(sources_cfg, dict):
+        rss_cfg = sources_cfg.get("rss")
+        if isinstance(rss_cfg, dict):
+            rss_feeds = [
+                str(f) for f in rss_cfg.get("feeds", []) if isinstance(f, str) and f.strip()
+            ]
+            if rss_feeds:
+                from matcha.sources.rss import search_rss_jobs
+
+                extra_scrapers["RSS"] = search_rss_jobs
+                extra_scraper_kwargs["RSS"] = {"feeds": rss_feeds}
+
     jobs, source_counts, source_errors = search_jobs(
         queries,
         location,
@@ -508,6 +567,8 @@ def run_search(
         max_pages=max_pages,
         indeed_domain=indeed_domain,
         quiet=quiet,
+        extra_scrapers=extra_scrapers or None,
+        extra_scraper_kwargs=extra_scraper_kwargs or None,
     )
     found_count = len(jobs)
 
@@ -541,17 +602,26 @@ def run_search(
     if enrich and enrich_cfg.get("enabled", True) and ranked:
         from matcha.sources.enrichment import enrich_top_n
 
-        enrich_kwargs = {
-            "top_n": int(enrich_cfg.get("top_n", 30)),
-            "max_workers": int(enrich_cfg.get("max_workers", 5)),
-            "timeout": int(enrich_cfg.get("timeout", 30)),
-            "config": config,
-        }
+        enrich_top = int(enrich_cfg.get("top_n", 30))
+        enrich_workers = int(enrich_cfg.get("max_workers", 5))
+        enrich_timeout = int(enrich_cfg.get("timeout", 30))
         if not quiet:
             with console.status("[yellow]Enriching top jobs with full details...[/yellow]"):
-                enriched_count, ranked = enrich_top_n(ranked, **enrich_kwargs)
+                enriched_count, ranked = enrich_top_n(
+                    ranked,
+                    top_n=enrich_top,
+                    max_workers=enrich_workers,
+                    timeout=enrich_timeout,
+                    config=config,
+                )
         else:
-            enriched_count, ranked = enrich_top_n(ranked, **enrich_kwargs)
+            enriched_count, ranked = enrich_top_n(
+                ranked,
+                top_n=enrich_top,
+                max_workers=enrich_workers,
+                timeout=enrich_timeout,
+                config=config,
+            )
         if enriched_count and not quiet:
             console.print(
                 f"[dim]Enriched [cyan]{enriched_count}[/cyan] top jobs with details[/dim]"
@@ -761,6 +831,37 @@ def cmd_watch(args: argparse.Namespace, settings: dict[str, Any]) -> None:
     _emit_json(args, doc, run_result, extra=new_ranked, header=header)
 
 
+def cmd_github(args: argparse.Namespace) -> None:
+    """`matcha github enrich` — merge GitHub profile signals into profile.json.
+
+    Optional (strategy §11, Phase 7): reads ``gh api user`` + ``user/repos``
+    read-only and appends ``github_username`` + language/topic-derived skill
+    suggestions. Requires gh installed + authenticated (env token or
+    hosts.yml) — never runs ``gh auth status``.
+    """
+    from matcha.profile import enrich_github_profile
+
+    profile = load_profile()
+    if not profile:
+        console.print(
+            "[red]No saved profile found. Run `matcha` once interactively "
+            "(or `matcha --new-profile`) to create one.[/red]"
+        )
+        sys.exit(1)
+    enriched = enrich_github_profile(profile)
+    if not enriched:
+        console.print(
+            "[yellow]GitHub enrichment unavailable — install `gh` and authenticate "
+            "(`gh auth login`), then try again.[/yellow]"
+        )
+        return
+    save_profile(enriched)
+    added = len(enriched.get("skills", [])) - len(profile.get("skills", []))
+    username = enriched.get("github_username", "")
+    suffix = f", +{added} suggested skill(s)" if added else ""
+    console.print(f"[green]GitHub enrichment saved:[/green] username={username or '?'}{suffix}")
+
+
 def cmd_skill(args: argparse.Namespace) -> None:
     """`matcha skill` — install/uninstall the agent skill (SKILL.md)."""
     from matcha.skill import default_destinations, install_skill, uninstall_skill
@@ -911,7 +1012,7 @@ def prompt_loop(
 ) -> str | None:
     if not ranked:
         console.print("[yellow]No jobs found. Try different search terms.[/yellow]")
-        return
+        return None
 
     summary_parts = [
         f"[cyan]{count}[/] from [bold]{name}[/]"
@@ -1117,7 +1218,7 @@ def prompt_loop(
         st.re_run = True
         event.app.exit()
 
-    app = Application(
+    app: Any = Application(
         layout=Layout(
             HSplit(
                 [
@@ -1141,6 +1242,7 @@ def prompt_loop(
 
     if st.re_run:
         return "re_run"
+    return None
 
 
 def run() -> None:
@@ -1203,6 +1305,17 @@ def run() -> None:
 
     subparsers.add_parser("mcp", help="Run the optional MCP server (stdio transport)")
 
+    github_parser = subparsers.add_parser(
+        "github", help="Optional GitHub profile enrichment (strategy §11)"
+    )
+    github_parser.add_argument(
+        "action",
+        choices=["enrich"],
+        nargs="?",
+        default="enrich",
+        help="enrich: merge gh signals into profile.json",
+    )
+
     parser.add_argument(
         "--configure",
         action="store_true",
@@ -1245,6 +1358,9 @@ def run() -> None:
         return
     if args.command == "mcp":
         cmd_mcp()
+        return
+    if args.command == "github":
+        cmd_github(args)
         return
 
     if args.configure:
@@ -1359,7 +1475,7 @@ def run() -> None:
                 f"[dim]AI budget: {ai_calls}/{max_calls} calls used ({remaining} left)[/dim]"
             )
 
-        result = prompt_loop(
+        loop_result = prompt_loop(
             ranked,
             source_counts,
             source_errors,
@@ -1367,7 +1483,7 @@ def run() -> None:
             filter_summary=filter_summary,
         )
 
-        if result != "re_run":
+        if loop_result != "re_run":
             break
 
         args.new_profile = False

@@ -50,6 +50,8 @@ def probe_url(url: str, timeout: int = 6) -> tuple[str, str]:
         return "error", f"connection failed: {e}"
     except requests.RequestException as e:
         return "error", f"request failed: {e}"
+    except Exception as e:  # pragma: no cover - defensive: a probe must never crash doctor
+        return "error", f"probe failed: {e}"
     if status == 200:
         return "ok", "HTTP 200"
     if status in (401, 403):

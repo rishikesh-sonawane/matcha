@@ -12,6 +12,7 @@ from matcha.sources.indeed import IndeedSource
 from matcha.sources.linkedin import LinkedInSource
 from matcha.sources.naukri import NaukriSource
 from matcha.sources.remoteok import RemoteOKSource
+from matcha.sources.rss import RSSSource
 from matcha.sources.serpapi_jobs import SerpapiSource
 from matcha.sources.web_search import WebSearchSource
 
@@ -23,6 +24,7 @@ ALL_SOURCES: list[Source] = [
     WebSearchSource(),
     SerpapiSource(),
     CareerSitesSource(),
+    RSSSource(),
 ]
 
 _SOURCES_BY_NAME: dict[str, Source] = {s.name: s for s in ALL_SOURCES}

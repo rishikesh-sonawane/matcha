@@ -2,7 +2,7 @@
 
 ## Current Focus
 
-**Phases 1, 2, 4, 5 and 6 are COMPLETE.** The pipeline is now: profile →
+**Phases 1, 2, 4, 5, 6 and 7 are COMPLETE.** The pipeline is now: profile →
 queries → search → dedup → normalize → central filters → **confidence-
 weighted rank** → enrich top N → present — shared via the `run_search`
 headless pipeline across the TUI and the agent surface (`matcha search
@@ -13,9 +13,18 @@ recency/workplace/must-skill signals, a soft-mode rank cap, AI gated to
 enriched candidates, and provenance tags. AI is provider-agnostic (presets,
 model tiers, budget guard, opt-in cache). New-vs-seen tracking
 (`track.py` seen_urls) powers `watch`; a bilingual SKILL.md installer and an
-optional guarded MCP server round out the agent surface. **455/455 tests
-pass.** Next: Phase 7 (hardening: circuit breakers, config hardening,
-mypy debt, RSS, coverage gate) — do NOT start yet.
+optional guarded MCP server round out the agent surface. **Phase 7
+(hardening) is DONE**: per-source circuit breakers persisted in
+`source_state.json` (atomic 0600 + symlink-rejected, thread-safe), config
+hardening (atomic writes, 0700/0600, symlink rejection, size caps,
+reads-never-create), GitHub profile enrichment (`matcha github enrich`),
+RSS source (`sources/rss.py` + `sources.rss.feeds`), **mypy clean on all 38
+files (0 errors)**, **coverage gate ≥80% (81%+)** enforced in CI + Makefile,
+plus real bug fixes surfaced by the new suites (actions.py `_db()` never
+committed → saved jobs were silently lost; settings.py shallow-copy default
+leak; `extract_experience` case-sensitivity; `probe_url` bare-exception
+hardening). **623/623 tests pass.** Next: Phase 3-adjacent polish
+(saved-jobs enriched columns) or fresh spec — do NOT start beyond that.
 
 > 2026-08-06 session 1: full repo audit + `.ai_memory/` rewrite.
 > Session 2: Agent-Reach v1.5.0 study folded into revamp docs (strategy Rev 3).
@@ -41,6 +50,14 @@ mypy debt, RSS, coverage gate) — do NOT start yet.
 > Session 14: **Phase 6 — Agent + automation** (run_search shared pipeline,
 >   `search`/`watch`/`skill`/`mcp` subcommands, track.py seen_urls,
 >   SKILL.md installer, guarded MCP server).
+> Session 15: **Phase 7 — Hardening** (circuit breakers persisted in
+>   `source_state.json`, config atomic-0600/symlink-rejection/reads-never-
+>   create, GitHub profile enrichment + `matcha github`, RSS source +
+>   feedparser, mypy 36→0 errors, coverage gate 64%→81% with 11 new hermetic
+>   suites (623 tests), CI + Makefile gates). Real bugs fixed: actions `_db`
+>   commit (saved jobs were silently lost), settings deepcopy default leak,
+>   extract_experience case, probe_url hardening, breaker thread-lock,
+>   fernet write TOCTOU.
 > Decisions locked in: shims-first (F-04); LinkedIn blank location = `"India"`
 > (F-08); console entry `matcha.main:main`; consent keys
 > `linkedin_consent`/`indeed_consent`; `-f json` locked (F-07); LinkedIn drops
@@ -239,16 +256,64 @@ mypy debt, RSS, coverage gate) — do NOT start yet.
   `watch` (70 new/0 seen, wrote latest.json), `skill --install` (SKILL.md
   with frontmatter), `mcp` guard hint + exit 1.
 
-## Immediate Next Steps (Phase 7 boundary — do NOT start yet)
+## Phase 7 — Hardening (DONE 2026-08-06)
 
-1. **Phase 7 — Hardening**: circuit breakers (`sources/registry.py`,
-   persisted `source_state.json`), config hardening (atomic writes,
-   symlink rejection), GitHub profile enrichment, RSS source, coverage
-   ≥80%, **mypy debt cleanup (24 pre-existing legacy errors)**.
-2. **Phase 3-adjacent polish**: saved-jobs persist enriched+normalized fields
+- [x] **Circuit breakers** — `src/matcha/sources/breaker.py` (strategy §6.7):
+      per-source state persisted to `~/.matcha/source_state.json`
+      (`ok_streak`/`fail_streak`/`last_ok`/`cooldown_until`); 3 consecutive
+      failures open a 30-min cooldown during which `search_jobs` skips the
+      source with a visible note; any success resets. Reads are
+      symlink-rejected + size-capped, writes atomic 0600; every IO failure
+      degrades to empty state (failproof). **Thread-safe**: `_lock`
+      serializes the read-modify-write across the ≤12 search workers.
+      Wired into `main.search_jobs` (record per source after each run) and
+      `doctor.py` (`circuit` key with fresh `open` flag).
+- [x] **Config hardening** (strategy §17) — `utils.py`: `ensure_no_symlink_path`
+      (trust deepest existing non-symlink ancestor, reject links below it),
+      `atomic_write_text` (temp + fsync + os.replace + 0600),
+      `read_small_text_no_follow` (size-capped, symlink-rejected),
+      `make_private_dir` (0700). `config.py`: all writes atomic 0600, all
+      reads refuse symlinks and never create files, `_MAX_CONFIG_BYTES`
+      1MB cap, fernet-key write TOCTOU guarded. New `ConfigSecurityError`/
+      `ConfigReadOnlyError` in `errors.py`.
+- [x] **GitHub profile enrichment** (strategy §11) — `agent_reach_io.gh_repos()`
+      (read-only `gh api user/repos`, telemetry-off env) +
+      `profile.enrich_github_profile()` (languages + topics → skill
+      suggestions, capped 8) + `matcha github enrich` subcommand (no-profile
+      guard → exit 1; unavailable → hint).
+- [x] **RSS source** (strategy §6.2) — `sources/rss.py` (feedparser,
+      feed-list from `sources.rss.feeds`, `resilient_get` rate-limited
+      fetches, per-entry job mapping, data_quality partial), registered in
+      `ALL_SOURCES` (tier 0, default on), conditional `SCRAPER_DEFS` entry,
+      `RSSConfig` + `Settings.sources` wiring; feedparser added to deps.
+- [x] **mypy debt cleanup** — `[tool.mypy]` in pyproject + fixed **36 → 0
+      errors** across 12 legacy files (typed locals for dict read-back,
+      `str|None` path handling, requests payload typing, DDGS Optional
+      aliasing). mypy now clean on all 38 source files.
+- [x] **Coverage gate ≥80%** — baseline 64% → **81%+** via 11 new hermetic
+      suites (breaker, config-hardening, rss, github-enrich, main-surface,
+      profile-extra, actions, sources-utils, base, settings-extra,
+      coverage-sources = career_sites/serpapi/web_search/linkedin).
+      `[tool.coverage] fail_under = 80`; `make test-coverage`;
+      CI coverage step.
+- [x] **Real bugs fixed by the new suites**: `actions._db()` never committed
+      (saved jobs were silently lost — added `conn.commit()`); `settings`
+      shallow `dict(_DEFAULTS)` let `_deep_merge` mutate shared defaults
+      (→ `copy.deepcopy`); `extract_experience` was case-sensitive;
+      `probe_url` now catches bare exceptions so a probe never crashes
+      doctor; `datetime.utcnow()` → timezone-aware (py3.14 deprecation).
+- [x] **Tests**: 11 new files, **623/623 tests** (unittest + pytest);
+      ruff/format/mypy/bandit clean; pre-commit green; coverage gate green.
+- **Acceptance met:** `matcha doctor --json` shows 8 sources + `circuit`
+  key; `source_state.json` persists streaks; `matcha github enrich`
+  degrades gracefully without gh; `make test-coverage` exits 0 at 81%.
+
+## Immediate Next Steps (Phase 7 boundary — do NOT start beyond)
+
+1. **Phase 3-adjacent polish**: saved-jobs persist enriched+normalized fields
    (`actions.py` new columns: salary, salary_int, apply_url, listed_epoch);
    optional AI verdict pass (§9.5).
-3. **Do NOT build beyond Phase 7 scope** without a fresh spec.
+2. **Do NOT build beyond Phase 7 scope** without a fresh spec.
 
 ## Blockers / Notes
 
@@ -262,9 +327,11 @@ mypy debt, RSS, coverage gate) — do NOT start yet.
 - **Naukri is client-rendered + anti-bot** — Jina-render path is the workable
   zero-config fetch; DDGS-indexed URLs are often expired (→ search-page
   redirect, skipped gracefully).
-- **mypy baseline:** 24 errors, all pre-existing 1.x typing debt in legacy
-  files; new modules (backends/, agent_reach_io, enrichment, naukri,
-  normalization, filters) are clean. mypy is NOT a project dep or CI gate —
-  defer to Phase 7.
+- **mypy is CLEAN** — 0 errors across all 38 source files (Phase 7). Not a
+  CI gate, but the debt is gone.
+- **Coverage gate** — `fail_under = 80` in `[tool.coverage.report]`, enforced
+  via `make test-coverage` and a CI step; current 81%+.
+- **OpenCLI extension still disconnected** on this machine (daemon up, ext
+  down) — live opencli search + job-detail untestable; falls back correctly.
 - Full findings register: `revamp/matcha-2.0-implementation-analysis.md`
   (F-01..F-23; F-06/F-07/F-14/F-130 updated with Phase-1 resolutions).

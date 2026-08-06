@@ -14,6 +14,15 @@ class ConfigError(MatchaError):
     """Configuration loading or validation failed."""
 
 
+class ConfigReadOnlyError(ConfigError):
+    """Raised when code tries to mutate an explicitly read-only config."""
+
+
+class ConfigSecurityError(ConfigError):
+    """Raised when a config path could redirect credential reads or writes
+    (e.g. a symlink component under ``~/.matcha``) or exceeds a size cap."""
+
+
 class SourceError(MatchaError):
     """A job source failed to acquire data."""
 

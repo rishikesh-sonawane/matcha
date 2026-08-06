@@ -37,7 +37,7 @@ from bs4 import BeautifulSoup
 try:
     from ddgs import DDGS
 except ImportError:
-    DDGS = None
+    DDGS = None  # type: ignore[assignment, misc]
 
 from matcha.models import ScraperResult
 from matcha.sources.base import Source
@@ -489,10 +489,10 @@ def _parse_embedded(text: str, url: str) -> dict[str, Any] | None:
                 if fields:
                     return fields
 
-    script = soup.find("script", id="__NEXT_DATA__")
-    if script:
+    next_data_script = soup.find("script", id="__NEXT_DATA__")
+    if next_data_script:
         try:
-            data = json.loads(script.string or script.get_text() or "")
+            data = json.loads(next_data_script.string or next_data_script.get_text() or "")
         except (json.JSONDecodeError, TypeError):
             data = None
         if isinstance(data, dict):

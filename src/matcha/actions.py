@@ -1,8 +1,14 @@
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+
+def _now_iso() -> str:
+    """Timezone-aware UTC timestamp for saved-job columns (py3.14-safe)."""
+    return datetime.now(timezone.utc).isoformat()
+
 
 CONFIG_DIR = Path.home() / ".matcha"
 DB_PATH = CONFIG_DIR / "jobs.db"
@@ -37,6 +43,7 @@ def _db():
     conn.execute("PRAGMA journal_mode=WAL")
     try:
         yield conn
+        conn.commit()
     finally:
         conn.close()
 
@@ -81,7 +88,7 @@ def save_job(
                 job.get("title", ""),
                 job.get("company", ""),
                 job.get("source", ""),
-                datetime.utcnow().isoformat(),
+                _now_iso(),
             ),
         )
 
@@ -101,7 +108,7 @@ def set_job_status(url: str, status: str) -> None:
     if status not in VALID_STATUSES:
         return
     with _db() as conn:
-        now = datetime.utcnow().isoformat()
+        now = _now_iso()
         if status == "applied":
             conn.execute(
                 "UPDATE jobs SET status = ?, applied_at = ? WHERE url = ?",

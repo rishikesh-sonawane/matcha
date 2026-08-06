@@ -139,6 +139,18 @@ class RankingConfig(BaseModel):
     normalize_scores: bool = False  # stretch a flat score distribution onto [5,100]
 
 
+class RSSConfig(BaseModel):
+    """Phase 7 RSS feed list (strategy §6.2) — company/job-board feeds."""
+
+    feeds: list[str] = Field(default_factory=list)
+
+
+class SourcesConfig(BaseModel):
+    """Per-source extras not covered by :class:`ScraperConfig`."""
+
+    rss: RSSConfig = Field(default_factory=RSSConfig)
+
+
 class Settings(BaseModel):
     search: SearchConfig = Field(default_factory=SearchConfig)
     ai: AIConfig = Field(default_factory=AIConfig)
@@ -146,3 +158,4 @@ class Settings(BaseModel):
     enrichment: EnrichmentConfig = Field(default_factory=EnrichmentConfig)
     filters: FilterConfig = Field(default_factory=FilterConfig)
     ranking: RankingConfig = Field(default_factory=RankingConfig)
+    sources: SourcesConfig = Field(default_factory=SourcesConfig)

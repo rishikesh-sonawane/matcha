@@ -13,6 +13,7 @@ python-dotenv>=1.0.0
 pdfplumber>=0.10.0
 cloudscraper>=1.2.71
 ddgs>=9.14.0
+feedparser>=6.0.0
 rapidfuzz>=3.0.0
 prompt_toolkit>=3.0.0
 keyring>=24.0.0

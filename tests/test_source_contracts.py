@@ -20,6 +20,7 @@ _SEARCH_TARGETS = {
     "web_search": ("matcha.sources.web_search.search_web_for_jobs", "Web Search"),
     "serpapi": ("matcha.sources.serpapi_jobs.search_serpapi_jobs", "Google Jobs"),
     "career_sites": ("matcha.sources.career_sites.search_career_sites_jobs", "Career Sites"),
+    "rss": ("matcha.sources.rss.search_rss_jobs", "RSS"),
 }
 
 
@@ -93,10 +94,8 @@ class TestSourceContract(unittest.TestCase):
     def test_check_sets_active_backend_on_ok(self):
         for s in ALL_SOURCES:
             s.check(None)
-            if s.name == "career_sites":
-                self.assertIsNone(s.active_backend)  # off by default
-            elif s.name == "serpapi":
-                self.assertIsNone(s.active_backend)  # no key -> off
+            if s.name in ("career_sites", "serpapi", "rss"):
+                self.assertIsNone(s.active_backend)  # off by default (no config)
             else:
                 self.assertIsNotNone(s.active_backend)
 

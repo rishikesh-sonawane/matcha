@@ -31,6 +31,10 @@ test: $(VENV)
 test-verbose: $(VENV)
 	$(PYTHON) -m unittest discover tests -v --buffer
 
+test-coverage: $(VENV)
+	$(VENV)/bin/coverage run -m pytest tests -q
+	$(VENV)/bin/coverage report --fail-under=80
+
 lint: $(VENV)
 	$(RUFF) check .
 

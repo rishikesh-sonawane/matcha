@@ -193,6 +193,37 @@
 - **Consequences:** One code path = no TUI/headless drift; `watch` is
   cron-able; MCP stays optional (hint + exit 1 without the extra).
 
+### ADR 18: Hardening = persisted circuit breakers + private-file discipline (Phase 7)
+- **Status:** **Implemented** (Phase 7, 2026-08-06)
+- **Decision:** (a) Per-source **circuit breakers** persist to
+  `~/.matcha/source_state.json` (`ok_streak`/`fail_streak`/`last_ok`/
+  `cooldown_until`): 3 consecutive search failures open a 30-min cooldown
+  during which `search_jobs` skips the source with a visible note; any
+  success resets. Reads are symlink-rejected + size-capped, writes atomic
+  0600, every IO failure degrades to empty state, and a `threading.Lock`
+  serializes the read-modify-write across the ≤12 search workers (atomic
+  os.replace prevents torn cross-process reads). Doctor reports a `circuit`
+  key per source. (b) **Config hardening** (`utils.py` +
+  `config.py` + `errors.py`): every write is atomic + owner-only
+  (0600 files / 0700 dirs), every read refuses symlinks component-wise and
+  never creates files, reads are size-capped (1MB); new `ConfigSecurityError`.
+  (c) **GitHub profile enrichment** (`matcha github enrich`) merges
+  `gh api user/repos` language+topic skills into profile.json read-only.
+  (d) **RSS source** (`sources/rss.py`, feedparser, feeds from
+  `sources.rss.feeds`). (e) **mypy clean** (36→0 errors) and a **coverage
+  gate ≥80%** (`fail_under=80`, CI + `make test-coverage`).
+- **Context:** Phase 7 spec (§6.7/§17/§18) — a failing source should stop
+  being retried every run (cooldown), config files are high-value attack
+  surfaces (symlink tricks, oversized reads), and quality gates were
+  documented but not enforced.
+- **Consequences:** Resilient sources (skip-not-crash), attack-hardened
+  private files, `matcha github` one-shot enrichment, an 8th source, and
+  enforced mypy + coverage gates. The new hermetic suites also surfaced
+  three real bugs fixed in this phase: `actions._db()` never committed
+  (saved jobs were silently lost), `settings.load_settings` shallow-copied
+  defaults (a `days: 3` overlay leaked into later calls), and
+  `extract_experience` was case-sensitive.
+
 ---
 
 ## Implemented (1.x) — historical decisions, already in the code

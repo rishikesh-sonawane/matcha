@@ -498,3 +498,89 @@ new-vs-seen, optional MCP server (strategy §13/§10.4).
   debt cleanup — do NOT start yet.
 
 ---
+
+## Session 15 — Phase 7: Hardening (2026-08-06)
+
+**Goal:** Phase 7 — circuit breakers, config hardening, GitHub profile
+enrichment, RSS source, coverage ≥80%, mypy debt cleanup (strategy §6.7 /
+§11 / §17 / §18).
+
+- **Built (`sources/breaker.py`):** per-source circuit breakers persisted to
+  `~/.matcha/source_state.json` (`ok_streak`/`fail_streak`/`last_ok`/
+  `cooldown_until`); 3 consecutive failures open a 30-min cooldown during
+  which `search_jobs` skips the source; any success resets. Reads are
+  symlink-rejected + 1MB-capped, writes atomic 0600; every IO failure
+  degrades to empty state (failproof). Wired into `main.search_jobs`
+  (record per source after each run) + `doctor.py` (`circuit` key).
+  **Review fix: thread-safety** — `record_*` runs from ≤12 search workers;
+  added a `threading.Lock` around the read-modify-write + a
+  20-concurrent-record regression test (atomic os.replace already prevents
+  torn cross-process reads).
+- **Built (config hardening, §17):** `utils.py` — `ensure_no_symlink_path`
+  (trust the deepest existing non-symlink ancestor via realpath; reject
+  symlinks below it — the first version rejected macOS system symlinks like
+  `/var→/private/var`), `atomic_write_text` (temp + fsync + os.replace +
+  0600), `read_small_text_no_follow` (size-capped, symlink-rejected),
+  `make_private_dir` (0700). `errors.py` — `ConfigSecurityError` /
+  `ConfigReadOnlyError`. `config.py` — `save_config`/`save_profile` atomic
+  0600, reads never create files, `_MAX_CONFIG_BYTES=1MB`, fernet-key
+  write TOCTOU guarded (`_get_fernet` returns None instead of raising).
+- **Built (GitHub enrichment, §11):** `agent_reach_io.gh_repos()` (read-only
+  `gh api user/repos`, telemetry-off env) + `profile.enrich_github_profile()`
+  (repo languages + topics → skill suggestions, cap 8) + `matcha github
+  enrich` subcommand (no-profile → exit 1; gh absent → hint).
+- **Built (`sources/rss.py`, §6.2):** feedparser RSS source — feeds from
+  `sources.rss.feeds` settings, `resilient_get` rate-limited fetches,
+  per-entry job mapping, `data_quality=partial`; registered in ALL_SOURCES
+  (tier 0, default on) + conditional SCRAPER_DEFS; `RSSConfig` +
+  `Settings.sources`; feedparser added to deps. Feed version guard uses
+  truthiness (`''` not `None` for HTML).
+- **mypy debt cleanup:** `[tool.mypy]` (py310, ignore_missing_imports) +
+  fixed **36 → 0 errors** across 12 legacy files (typed locals for dict
+  read-back in main.py, `str|None` path handling in profile.py, requests
+  payload typing in ai.py, Optional DDGS aliasing in career_sites.py,
+  `_fetch_snapshot` command-path fallback — a `shutil.which` guard broke
+  the mocked agent_reach_io tests, so the runner falls back to the bare
+  command name after the probe passes).
+- **Coverage gate:** baseline 64.42% → **81%+**. 11 new hermetic suites:
+  `test_breaker.py` (9), `test_config_hardening.py` (27), `test_rss.py`,
+  `test_github_enrich.py`, `test_main_surface.py` (31 incl. configure
+  wizards + cmd_github + table builders), `test_profile_extra.py`,
+  `test_actions.py`, `test_sources_utils.py`, `test_base.py`,
+  `test_settings_extra.py`, `test_coverage_sources.py` (49 — career_sites /
+  serpapi / web_search / linkedin helpers + routing). `[tool.coverage]
+  fail_under=80`; `make test-coverage`; CI coverage step.
+- **REAL BUGS surfaced by the new suites (all fixed):** (1) `actions._db()`
+  never committed — `conn.close()` rolled back every write, so **saved jobs
+  were silently lost** (empirically verified: 0 rows after close-no-commit)
+  → `conn.commit()` after the yield; (2) `settings.load_settings` did
+  `dict(_DEFAULTS)` (shallow) then `_deep_merge` mutated the shared nested
+  defaults — a `days: 3` overlay leaked into every later call →
+  `copy.deepcopy`; (3) `extract_experience` regexes were case-sensitive
+  despite the `text_lower` param → lowercase inside; (4) `probe_url` only
+  caught `requests` exceptions → broad `except Exception` (a probe must
+  never crash doctor); (5) `datetime.utcnow()` deprecation → timezone-aware
+  `_now_iso()`.
+- **Also fixed (from review + smoke):** `cmd_github` None-profile guard;
+  profile test patch targets (`matcha.profile.load_profile`/
+  `save_profile` — the functions are bound at import from
+  `matcha.config`); `Source.__new__(Source)` can't bypass an ABC (concrete
+  subclass in tests); mocked `sys.exit` must raise SystemExit;
+  `_search_web_exa`/`exa_status`/`load_config` are imported inside
+  functions → patch the source module. **Cleanup: an earlier broken test
+  had written the "Mona" fixture to the REAL `~/.matcha/profile.json` —
+  removed the polluted file.**
+- **Validation (all green):** **623/623 tests** (unittest + pytest); ruff /
+  format / mypy (0 errors, 38 files) / bandit clean; pre-commit all 7
+  hooks; **coverage gate green (81%)**; live smoke: `doctor --json` shows
+  8 sources + `circuit` key, `source_state.json` persists streaks,
+  `github enrich` degrades gracefully, `make test-coverage` exits 0.
+- **Docs:** strategy → Rev 14 (§6.7 circuit breakers, §11 GitHub
+  enrichment, §17 config hardening marked IMPLEMENTED, Phase 7 ✅, §19
+  checklist MCP/RSS/mypy/coverage items); README Hardening section;
+  memory bank synced (active_task / system_state / session_log).
+- **Next:** Phase 3-adjacent polish (saved-jobs enriched columns in
+  actions.py; optional AI verdict pass §9.5) or a fresh spec — do NOT
+  start beyond Phase 7 scope without one.
+
+---

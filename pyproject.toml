@@ -20,6 +20,7 @@ dependencies = [
     "pdfplumber>=0.10.0",
     "cloudscraper>=1.2.71",
     "ddgs>=9.14.0",
+    "feedparser>=6.0.0",
     "rapidfuzz>=3.0.0",
     "prompt_toolkit>=3.0.0",
     "keyring>=24.0.0",
@@ -66,5 +67,22 @@ exclude_dirs = ["tests", "venv", ".git", ".github"]
 skips = ["B101", "B110", "B311", "B404", "B603", "B607"]
 targets = ["src/matcha"]
 
+[tool.mypy]
+python_version = "3.10"
+# Third-party modules without stubs (yaml, cloudscraper, optional mcp, ...)
+# are tolerated; our own code must still type-check clean.
+ignore_missing_imports = true
+
+[tool.coverage.run]
+include = ["src/matcha/*"]
+source = ["src/matcha"]
+omit = ["src/matcha/skill/*"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+skip_covered = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = ""

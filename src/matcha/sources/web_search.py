@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 try:
     from ddgs import DDGS
 except ImportError:
-    DDGS = None
+    DDGS = None  # type: ignore[assignment, misc]
 
 from matcha.models import ScraperResult
 from matcha.sources.base import Source
@@ -129,7 +129,7 @@ def _search_web_exa(
             if days and _iso_older_than_days(str(row.get("publishedDate") or ""), days):
                 continue
             seen.add(url)
-            job: dict[str, str] = {
+            job: dict[str, Any] = {
                 "title": title,
                 "company": str(row.get("author") or "").strip()
                 or _extract_company(url, text, title),

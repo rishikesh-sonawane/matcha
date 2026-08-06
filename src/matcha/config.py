@@ -4,6 +4,12 @@ from pathlib import Path
 from typing import Any
 
 from matcha.models import ConfigSchema
+from matcha.utils import (
+    ConfigSecurityError,
+    atomic_write_text,
+    make_private_dir,
+    read_small_text_no_follow,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -11,6 +17,10 @@ CONFIG_DIR = Path.home() / ".matcha"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 PROFILE_FILE = CONFIG_DIR / "profile.json"
 FERNET_KEY_FILE = CONFIG_DIR / "fernet.key"
+
+#: Size cap for private JSON reads (Phase 7, strategy §17) — a config larger
+#: than this is an attack or corruption, never a legit file.
+_MAX_CONFIG_BYTES = 1024 * 1024
 
 # Tracks whether keyring is available at import time
 _KEYRING_AVAILABLE: bool = False
@@ -22,7 +32,7 @@ except ImportError:
     pass
 
 _FERNET_AVAILABLE: bool = False
-_Fernet: type | None = None
+_Fernet: Any = None
 try:
     from cryptography.fernet import Fernet as _Fernet
 
@@ -38,14 +48,21 @@ _SECRET_CONFIG_KEYS = {"ai_key", "serpapi_key"}
 def _get_fernet() -> Any:
     if not _FERNET_AVAILABLE:
         return None
-    if FERNET_KEY_FILE.exists():
-        key = FERNET_KEY_FILE.read_bytes()
+    try:
+        raw = read_small_text_no_follow(FERNET_KEY_FILE, max_bytes=_MAX_CONFIG_BYTES)
+    except ConfigSecurityError as e:
+        logger.error("Refusing fernet key read: %s", e)
+        return None
+    if raw is not None:
+        key = raw.encode("utf-8")
     else:
-        key = _Fernet.generate_key()
-        tmp = FERNET_KEY_FILE.with_suffix(".key.tmp")
-        tmp.write_bytes(key)
-        tmp.chmod(0o600)
-        tmp.rename(FERNET_KEY_FILE)
+        try:
+            key = _Fernet.generate_key()
+            atomic_write_text(FERNET_KEY_FILE, key.decode("utf-8"))
+        except (ConfigSecurityError, OSError) as e:
+            # TOCTOU: key missing at read, symlink/inaccessible at write.
+            logger.error("Refusing fernet key write: %s", e)
+            return None
     return _Fernet(key)
 
 
@@ -54,10 +71,15 @@ def _read_encrypted(key: str) -> str:
     if cipher is None:
         return ""
     enc_path = CONFIG_DIR / f".{key}.enc"
-    if not enc_path.exists():
+    try:
+        raw = read_small_text_no_follow(enc_path, max_bytes=_MAX_CONFIG_BYTES)
+    except ConfigSecurityError as e:
+        logger.error("Refusing encrypted read for %s: %s", key, e)
+        return ""
+    if raw is None:
         return ""
     try:
-        return cipher.decrypt(enc_path.read_bytes()).decode("utf-8")
+        return cipher.decrypt(raw.encode("utf-8")).decode("utf-8")
     except Exception as e:
         logger.warning("Failed to decrypt %s: %s", key, e)
         return ""
@@ -69,8 +91,7 @@ def _write_encrypted(key: str, value: str) -> None:
         return
     enc_path = CONFIG_DIR / f".{key}.enc"
     try:
-        enc_path.write_bytes(cipher.encrypt(value.encode("utf-8")))
-        enc_path.chmod(0o600)
+        atomic_write_text(enc_path, cipher.encrypt(value.encode("utf-8")).decode("utf-8"))
     except Exception as e:
         logger.warning("Failed to encrypt %s: %s", key, e)
 
@@ -82,7 +103,8 @@ def _delete_encrypted(key: str) -> None:
 
 
 def ensure_config_dir() -> None:
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    """Create the private config directory (0700) — writes only."""
+    make_private_dir(CONFIG_DIR)
 
 
 def _read_secret(key: str) -> str:
@@ -126,13 +148,19 @@ def _delete_secret(key: str) -> None:
 
 
 def _load_config_raw() -> dict[str, Any]:
-    ensure_config_dir()
-    if CONFIG_FILE.exists():
-        try:
-            with open(CONFIG_FILE) as f:
-                return json.load(f)
-        except (json.JSONDecodeError, OSError) as e:
-            logger.warning("Failed to load config: %s", e)
+    """Read config.json without creating anything and refusing symlinks."""
+    try:
+        raw = read_small_text_no_follow(CONFIG_FILE, max_bytes=_MAX_CONFIG_BYTES)
+    except ConfigSecurityError as e:
+        logger.error("Refusing config read: %s", e)
+        return {}
+    if raw is None:
+        return {}
+    try:
+        loaded = json.loads(raw)
+        return loaded if isinstance(loaded, dict) else {}
+    except json.JSONDecodeError as e:
+        logger.warning("Failed to load config: %s", e)
     return {}
 
 
@@ -158,7 +186,6 @@ def load_config() -> dict[str, Any]:
 
 
 def save_config(config: dict[str, Any]) -> None:
-    ensure_config_dir()
     config = dict(config)
     secrets = {k: config.pop(k, "") for k in _SECRET_CONFIG_KEYS}
     other_secrets = {k: config.pop(k, "") for k in _KEYRING_KEYS - _SECRET_CONFIG_KEYS}
@@ -167,12 +194,15 @@ def save_config(config: dict[str, Any]) -> None:
         serializable = validated.model_dump()
         unknown_keys = {k: v for k, v in config.items() if k not in ConfigSchema.model_fields}
         serializable.update(unknown_keys)
-        with open(CONFIG_FILE, "w") as f:
-            json.dump(serializable, f, indent=2)
+        payload = json.dumps(serializable, indent=2)
     except Exception as e:
         logger.warning("Failed to save config JSON: %s", e)
-        with open(CONFIG_FILE, "w") as f:
-            json.dump(config, f, indent=2)
+        payload = json.dumps(config, indent=2)
+    # Phase 7 (§17): atomic, owner-only (0600), symlink-rejected.
+    try:
+        atomic_write_text(CONFIG_FILE, payload)
+    except ConfigSecurityError as e:
+        logger.error("Refusing config write: %s", e)
     for key, value in secrets.items():
         if value:
             _write_secret(key, value)
@@ -184,20 +214,27 @@ def save_config(config: dict[str, Any]) -> None:
 
 
 def load_profile() -> dict[str, Any] | None:
-    ensure_config_dir()
-    if PROFILE_FILE.exists():
-        try:
-            with open(PROFILE_FILE) as f:
-                return json.load(f)
-        except (json.JSONDecodeError, OSError) as e:
-            logger.warning("Failed to load profile: %s", e)
+    """Read profile.json without creating anything and refusing symlinks."""
+    try:
+        raw = read_small_text_no_follow(PROFILE_FILE, max_bytes=_MAX_CONFIG_BYTES)
+    except ConfigSecurityError as e:
+        logger.error("Refusing profile read: %s", e)
+        return None
+    if raw is None:
+        return None
+    try:
+        loaded = json.loads(raw)
+        return loaded if isinstance(loaded, dict) else None
+    except json.JSONDecodeError as e:
+        logger.warning("Failed to load profile: %s", e)
     return None
 
 
 def save_profile(profile: dict[str, Any]) -> None:
-    ensure_config_dir()
+    # Phase 7 (§17): atomic, owner-only (0600), symlink-rejected.
     try:
-        with open(PROFILE_FILE, "w") as f:
-            json.dump(profile, f, indent=2)
+        atomic_write_text(PROFILE_FILE, json.dumps(profile, indent=2))
+    except ConfigSecurityError as e:
+        logger.error("Refusing profile write: %s", e)
     except OSError as e:
         logger.error("Failed to save profile: %s", e)

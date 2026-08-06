@@ -57,6 +57,12 @@ jobs:
         # F-02: the full suite — previously only tests.test_core ever ran in CI
         run: python -m unittest discover tests -v
 
+      - name: Coverage gate (>=80%)
+        run: |
+          pip install pytest-cov
+          python -m pytest tests -q --cov=src/matcha --cov-report=term
+          python -m coverage report --fail-under=80
+
   build:
     needs: [validate]
     runs-on: ubuntu-latest

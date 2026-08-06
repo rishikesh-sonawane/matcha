@@ -21,6 +21,7 @@ console = Console()
 
 
 def extract_experience(text_lower: str) -> int | None:
+    text_lower = text_lower.lower()
     years = re.findall(
         r"(\d+)\+?\s*(?:years?|yrs?|yr)\s*(?:of)?\s*(?:experience|exp|work)?", text_lower
     )
@@ -33,9 +34,9 @@ def extract_experience(text_lower: str) -> int | None:
 
 
 def parse_resume_pdf(path: str) -> dict[str, Any] | None:
-    path = Path(path)
-    if not path.exists():
-        console.print(f"[red]File not found: {path}[/red]")
+    path_obj = Path(path)
+    if not path_obj.exists():
+        console.print(f"[red]File not found: {path_obj}[/red]")
         return None
 
     try:
@@ -46,7 +47,7 @@ def parse_resume_pdf(path: str) -> dict[str, Any] | None:
 
     text = ""
     try:
-        with pdfplumber.open(path) as pdf:
+        with pdfplumber.open(path_obj) as pdf:
             for page in pdf.pages:
                 page_text = page.extract_text()
                 if page_text:
@@ -160,7 +161,7 @@ def search_linkedin_profile_via_web(username: str) -> dict[str, Any] | None:
                 if not title_el:
                     continue
                 raw_href = title_el.get("href", "")
-                actual_url = extract_url(raw_href) if raw_href else ""
+                actual_url = extract_url(str(raw_href)) if raw_href else ""
                 if (
                     username.lower() not in actual_url.lower()
                     and "linkedin.com/in/" not in actual_url.lower()
@@ -178,7 +179,7 @@ def search_linkedin_profile_via_web(username: str) -> dict[str, Any] | None:
 
     title_el = found.select_one(".result__title a")
     snippet_el = found.select_one(".result__snippet")
-    title_text = title_el.get_text(strip=True)
+    title_text = title_el.get_text(strip=True) if title_el else ""
     snippet = snippet_el.get_text(strip=True) if snippet_el else ""
 
     name = title_text.split(" - ")[0].strip() if " - " in title_text else username
@@ -312,6 +313,96 @@ def manual_profile_entry() -> dict[str, Any]:
         "experience": experience,
         "summary": summary,
     }
+
+
+#: GitHub language -> suggested skill (Phase 7, strategy §11).
+_LANGUAGE_TO_SKILL: dict[str, str] = {
+    "python": "python",
+    "javascript": "javascript",
+    "typescript": "typescript",
+    "go": "golang",
+    "rust": "rust",
+    "java": "java",
+    "c++": "c++",
+    "c": "c",
+    "ruby": "ruby",
+    "php": "php",
+    "kotlin": "kotlin",
+    "swift": "swift",
+    "shell": "bash",
+    "dockerfile": "docker",
+    "html": "html",
+    "css": "css",
+    "terraform": "terraform",
+    "sql": "sql",
+    "jupyter notebook": "python",
+}
+
+#: GitHub repo topics that are also job-search skills.
+_TOPIC_SKILLS = {
+    "kubernetes",
+    "k8s",
+    "docker",
+    "aws",
+    "gcp",
+    "azure",
+    "terraform",
+    "machine-learning",
+    "deep-learning",
+    "data-science",
+    "react",
+    "nodejs",
+    "fastapi",
+    "django",
+    "flask",
+    "postgresql",
+    "redis",
+    "graphql",
+    "linux",
+}
+
+
+def enrich_github_profile(profile: dict[str, Any]) -> dict[str, Any] | None:
+    """Merge GitHub-derived signals into the profile (strategy §11, Phase 7).
+
+    Reads ``gh api user`` + ``user/repos`` read-only (never ``gh auth
+    status``), sets ``github_username`` and appends suggested skills derived
+    from repo languages + topics. Returns the updated profile dict, or None
+    when gh is unavailable so callers can fall back unchanged.
+    """
+    from matcha.agent_reach_io import gh_profile, gh_repos
+
+    user = gh_profile()
+    if not user:
+        return None
+    login = user.get("login") or user.get("name")
+    repos = gh_repos() or []
+
+    suggested: list[str] = []
+    seen: set[str] = set()
+    for repo in repos:
+        lang = str(repo.get("language") or "").strip().lower()
+        skill = _LANGUAGE_TO_SKILL.get(lang)
+        if skill and skill not in seen:
+            seen.add(skill)
+            suggested.append(skill)
+        for topic in repo.get("topics", []):
+            topic_str = str(topic).strip()
+            if topic_str in _TOPIC_SKILLS and topic_str not in seen:
+                seen.add(topic_str)
+                suggested.append(topic_str)
+        if len(suggested) >= 8:
+            break
+
+    updated = dict(profile)
+    if login:
+        updated["github_username"] = str(login)
+    if suggested:
+        existing = {s.lower() for s in updated.get("skills", []) if isinstance(s, str)}
+        additions = [s for s in suggested if s not in existing]
+        if additions:
+            updated["skills"] = list(updated.get("skills", [])) + additions
+    return updated
 
 
 def build_or_load_profile(force_new: bool = False) -> dict[str, Any] | None:

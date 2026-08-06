@@ -11,13 +11,14 @@ against a user profile with a **confidence-weighted heuristic + optional AI**
 pass, enriches the top-N with full posting details, and presents them in a
 keyboard-driven TUI.
 
-The **Matcha 2.0 rebuild is largely complete**: Phases 0 (foundation),
-1 (data quality), 2 (normalize + filters), 4 (ranking recalibration),
-5 (provider-agnostic AI client) and 6 (agent + automation) are DONE. The
-source of truth for the rebuild is
-`revamp/matcha-2.0-strategy.md` (**Rev 13**). The codebase runs from the
-`src/matcha/` package layout with the `matcha` console script; root shims
-and `scrapers/` were deleted in Phase 1.
+The **Matcha 2.0 rebuild is complete through Phase 7**: Phases 0
+(foundation), 1 (data quality), 2 (normalize + filters), 4 (ranking
+recalibration), 5 (provider-agnostic AI client), 6 (agent + automation)
+and 7 (hardening: circuit breakers, config hardening, GitHub enrichment,
+RSS, mypy clean, coverage gate) are DONE. The source of truth for the
+rebuild is `revamp/matcha-2.0-strategy.md` (**Rev 14**). The codebase runs
+from the `src/matcha/` package layout with the `matcha` console script;
+root shims and `scrapers/` were deleted in Phase 1.
 
 Core promise: *"enter your profile once, get ranked, personalized job
 matches"* — the original data-quality bottleneck is now addressed by
@@ -30,7 +31,7 @@ multi-backend sources, top-N enrichment, and a central filter pipeline.
 - **Enrichment-only automation.** Open the apply page; **never auto-submit applications.**
 - **Human TUI and agent surface are equal front-ends.** Identical pipeline (`run_search`) drives the TUI and the headless surface — `matcha search --json`, `matcha watch` (new-vs-seen), `skill` installer, and the optional MCP server (all Phase 6).
 - **Graceful degradation everywhere.** Removing AI keys, OpenCLI, Agent-Reach, mcporter, or the network each still produces a working (if degraded) run with clear messaging (verified live for all of these).
-- **Robustness is a feature.** No silent failure; every source/backend/job failure is isolated, logged, and reported (doctor; circuit breakers are Phase 7).
+- **Robustness is a feature.** No silent failure; every source/backend/job failure is isolated, logged, and reported (doctor; circuit breakers — **implemented Phase 7**: 3 strikes → 30-min cooldown, persisted `source_state.json`).
 - **AI is optional and provider-agnostic.** No API key required to run (heuristic-only mode); OpenAI-compatible REST only — **implemented (Phase 5)**: provider presets in `ai.py` (Groq/Kilo/OpenRouter/OpenAI/local), model tiers best/fast, per-run budget guard, opt-in disk cache (`ai_cache.py`, `ai.cache_ttl`); legacy `MINIMAX` env kept as an alias. MCP used solely for data plumbing (Exa via mcporter) and optional agent exposure.
 - **Existing scrapers stay as named fallbacks, never deleted.** OpenCLI/Exa are premium backends; guest-api/html/ddgs remain zero-config fallbacks.
 - **Provenance is data.** Every job carries `backend` + `data_quality` (`full|partial|snippet`) + `listed_epoch` + `salary_int`; the ranker and TUI tags use them.
@@ -55,7 +56,7 @@ multi-backend sources, top-N enrichment, and a central filter pipeline.
 | Secrets | `keyring` (macOS Keychain) with `cryptography.fernet` fallback | Active |
 | Persistence | SQLite (`~/.matcha/jobs.db` job lifecycle) | Active |
 | Logging | stdlib `logging` → rotating file `~/.matcha/logs/matcha.log` (file only; TUI on stdout) | Active |
-| Quality | `ruff` (py310 target, line-length 100), `bandit` (pyproject targets `src/matcha`), `pre-commit` (7 hooks), `mypy` (24 pre-existing legacy errors, NOT a gate — Phase 7) | Active |
+| Quality | `ruff` (py310 target, line-length 100), `bandit` (pyproject targets `src/matcha`), `pre-commit` (7 hooks), **`mypy` clean (0 errors, 38 files — Phase 7)**, **coverage gate ≥80% (`make test-coverage`, 81%+)** | Active |
 | CI/CD | GitHub Actions 4-stage (lint → typecheck → test → docker build/push GHCR), full `unittest discover` + pytest, matrix incl. 3.14 | Active |
 | Container | Docker multi-stage `python:3.11-slim`, non-root (UID 10001), installs the package, `ENTRYPOINT ["python3","-m","matcha.main"]` | Active |
 
@@ -93,7 +94,7 @@ multi-backend sources, top-N enrichment, and a central filter pipeline.
 - **Session Journal (Crash-Safe):** Append one short timestamped line to `.ai_memory/session_log.md` after every completed step. If a session dies before the final sync, the next session reconstructs state from `git status`/`git diff` plus the journal tail.
 - **Root Cause Engineering Triage:** On failure, follow: `Symptoms → Root Cause Verification → Systematic Investigation → Mitigation Strategy → Permanent Prevention Execution`. Never guess.
 - **No Compromise on Security:** Zero hardcoded secrets; secrets via keyring/fernet; 0600 on sensitive files; credential masking in all output; symlink rejection; read-only config probes that never widen the credential boundary.
-- **Behavior-preserving refactors:** refactors must not change existing behavior; capture the test baseline before and after (455 tests today).
+- **Behavior-preserving refactors:** refactors must not change existing behavior; capture the test baseline before and after (623 tests today).
 
 ## 5. Directory Mapping Blueprint
 
@@ -114,8 +115,8 @@ matcha/                                  # project root (git, branch main)
 │   ├── blueprint.md                     # older 1.x-phase planning (historical)
 │   └── restore_manifest.json            # 1.x state manifest
 ├── src/matcha/                          # ★ real package (installed editable)
-│   ├── main.py                          # orchestrator + CLI + TUI + `doctor` + `--days`
-│   ├── profile.py                       # profile ingestion: PDF / LinkedIn / manual
+│   ├── main.py                          # orchestrator + CLI + TUI + `doctor` + `--days` + breaker wiring + `github`
+│   ├── profile.py                       # profile ingestion: PDF / LinkedIn / manual + enrich_github_profile (Phase 7)
 │   ├── ai.py                            # provider-agnostic AI client: presets, model tiers, budget guard (Phase 5)
 │   ├── ai_cache.py                      # AI result disk cache (SQLite, opt-in TTL) (Phase 5)
 │   ├── track.py                         # new-vs-seen URL tracking for `watch` (Phase 6)
@@ -124,21 +125,24 @@ matcha/                                  # project root (git, branch main)
 │   ├── matcher.py                       # confidence-weighted ranking (Phase 4) + AI wrapper
 │   ├── normalization.py                 # canonical Job: listed_epoch, salary_int, city/region, remote_ok (Phase 2)
 │   ├── filters.py                       # central pipeline: quality→age→must-skills→location→salary + provenance_tags (Phases 2/4)
-│   ├── agent_reach_io.py                # thin adapter to `agent-reach` (doctor snapshot, gh_profile, seed_ai_config) (Phase 1)
+│   ├── agent_reach_io.py                # thin adapter to `agent-reach` (doctor snapshot, gh_profile, gh_repos, seed_ai_config) (Phases 1/7)
 │   ├── config.py settings.py models.py actions.py errors.py probe.py doctor.py utils.py
 │   └── sources/
-│       ├── __init__.py                  # ALL_SOURCES registry
+│       ├── __init__.py                  # ALL_SOURCES registry (8 sources incl. rss)
 │       ├── base.py                      # Source ABC (backends, check(), search())
-│       ├── constants.py  utils.py  enrichment.py
+│       ├── constants.py  utils.py  enrichment.py  breaker.py (Phase 7)  rss.py (Phase 7)
 │       ├── linkedin.py   indeed.py   naukri.py   remoteok.py
 │       ├── web_search.py serpapi_jobs.py  career_sites.py
 │       └── backends/                    # opencli.py · mcporter.py · exa.py (Phase 1)
-├── tests/                               # 455 tests (unittest + pytest)
+├── tests/                               # 623 tests (unittest + pytest)
 │   ├── test_core.py test_ai_provider.py test_ai_client.py test_comprehensive.py test_probe.py
 │   ├── test_doctor.py test_source_contracts.py test_days_filter.py test_matcher_skill_focused.py
 │   ├── test_opencli.py test_enrichment.py test_exa_backend.py test_agent_reach_io.py
 │   ├── test_track.py test_skill.py test_agent_surface.py (Phase 6)
 │   ├── test_naukri_job_page.py test_normalization.py test_filters.py test_ranking.py
+│   ├── test_breaker.py test_config_hardening.py test_rss.py test_github_enrich.py (Phase 7)
+│   ├── test_main_surface.py test_profile_extra.py test_actions.py test_sources_utils.py
+│   ├── test_base.py test_settings_extra.py test_coverage_sources.py (Phase 7)
 ├── README.md  kilo.md  FuturePlan.txt  pyproject.toml  Makefile
 ├── Dockerfile  docker-compose.yml  .github/workflows/ci.yml
 └── venv/                                # Python 3.14.6
@@ -148,5 +152,4 @@ matcha/                                  # project root (git, branch main)
 `config.json` · `profile.json` · `settings.yaml` · `jobs.db` · `fernet.key` ·
 `http_cache.sqlite` (requests-cache) · `logs/` (matcha.log, rotating 5MB × 3)
 · `ai_cache.sqlite` (AI disk cache, created when `ai.cache_ttl` is enabled)
-· planned (2.0, not yet): `source_state.json` (circuit breakers),
-`latest.json` (watch).
+· `source_state.json` (circuit breakers, Phase 7) · `latest.json` (watch, Phase 6).

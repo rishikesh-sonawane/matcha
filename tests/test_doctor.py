@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from matcha.doctor import check_all, format_report, report_to_json
 
-_REPORT_KEYS = {"status", "name", "message", "tier", "backends", "active_backend"}
+_REPORT_KEYS = {"status", "name", "message", "tier", "backends", "active_backend", "circuit"}
 _ALL_NAMES = {
     "linkedin",
     "indeed",
@@ -17,6 +17,7 @@ _ALL_NAMES = {
     "web_search",
     "serpapi",
     "career_sites",
+    "rss",
 }
 
 

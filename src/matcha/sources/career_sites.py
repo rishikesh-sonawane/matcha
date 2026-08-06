@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 try:
     from ddgs import DDGS
 except ImportError:
-    DDGS = None
+    DDGS = None  # type: ignore[assignment, misc]
 
 from matcha.models import ScraperResult
 from matcha.sources.base import Source

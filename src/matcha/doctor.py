@@ -14,6 +14,7 @@ from typing import Any
 from rich.markup import escape
 
 from matcha.sources import get_all_sources
+from matcha.sources.breaker import circuit_status
 from matcha.utils import scrub_url_credentials
 
 _STATUS_ICONS: dict[str, str] = {
@@ -50,6 +51,11 @@ def check_all(config: dict[str, Any] | None = None) -> dict[str, dict]:
         # Doctor is the final output boundary for both expected source
         # messages and unexpected exceptions; scrub every path.
         message = scrub_url_credentials(message)
+        # Phase 7 (strategy §6.7): the doctor reports circuit state. An open
+        # circuit is surfaced in the message so the TUI/agent can act on it.
+        circuit = circuit_status(src.name)
+        if circuit.get("open"):
+            message = f"{message} · circuit OPEN (cooldown until skip)"
         results[src.name] = {
             "status": status,
             "name": src.description,
@@ -57,6 +63,7 @@ def check_all(config: dict[str, Any] | None = None) -> dict[str, dict]:
             "tier": src.tier,
             "backends": src.backends,
             "active_backend": active,
+            "circuit": circuit,
         }
     return results
 

@@ -298,6 +298,34 @@ LinkedIn postings fall back to the zero-config Jina Reader
 (`https://r.jina.ai/`, capped at 10 jobs/batch); `data_quality` stays
 `partial` and is tagged `enrich_source: jina`.
 
+### 5b. Hardening & Reliability (Phase 7)
+
+**Circuit breakers** — per-source state lives in `~/.matcha/source_state.json`
+(`ok_streak` / `fail_streak` / `last_ok` / `cooldown_until`). Three
+consecutive search failures open a **30-minute cooldown**: the source is
+skipped with a visible note instead of retried every run; any success resets
+it. `matcha doctor --json` reports a `circuit` key per source.
+
+**GitHub profile enrichment** — `matcha github enrich` reads `gh api user` +
+`user/repos` (read-only; never `gh auth status`) and appends language- and
+topic-derived skill suggestions plus `github_username` to `profile.json`.
+Requires `gh` installed + authenticated; degrades gracefully otherwise.
+
+**RSS feeds** — `sources.rss.feeds` (in `matcha.yaml` or
+`~/.matcha/settings.yaml`) adds company/job-board feeds as an extra source:
+
+```yaml
+sources:
+  rss:
+    feeds:
+      - https://careers.example.com/jobs.rss
+      - https://remoteok.com/remote-jobs.rss
+```
+
+**Private-file discipline** — all config/profile/secret writes are atomic +
+owner-only (0600 files, 0700 dirs), reads refuse symlinks component-wise and
+never create files, and config reads are size-capped (1MB).
+
 ### 5. Agent & Automation Surface (Phase 6)
 
 The same pipeline (profile → search → filter → rank → enrich) that drives
@@ -369,6 +397,7 @@ trim the pipeline for fast scripted runs.
 | **RemoteOK** | Public JSON API filtered by keyword matching | ~8 listings | Nothing |
 | **Naukri** | DDGS `site:naukri.com` discovery → real `job-listings-*` pages parsed for description/salary/skills (embedded JSON first, Jina render fallback); `ddgs` snippet fallback | 6–44 listings | Nothing |
 | **Web Search** | Exa semantic search (via mcporter, when configured) ▸ `ddgs` API with targeted `site:` queries | 10–30 listings | mcporter (optional) |
+| **RSS** | `feedparser` over your configured company/job-board feeds | feed-dependent | Nothing (add feeds in settings) |
 | **Google Jobs** | SerpAPI `google_jobs` engine (optional) | Rich listings | SerpAPI key |
 
 ---
@@ -461,16 +490,18 @@ matcha/
         ├── models.py        # Pydantic v2 data models + ScraperResult
         ├── settings.py      # YAML config loader
         ├── actions.py       # Saved-job actions
-        ├── errors.py        # Typed exception hierarchy
+        ├── errors.py        # Typed exception hierarchy (ConfigSecurityError)
         ├── probe.py         # Upstream CLI probing (used by doctor)
         ├── doctor.py        # `matcha doctor` health reports
-        ├── utils.py         # Credential scrubbing, UTF-8 helpers
+        ├── utils.py         # Credential scrubbing, atomic writes, symlink rejection
         └── sources/         # Job sources (one module + Source subclass each)
-            ├── __init__.py  # ALL_SOURCES registry
+            ├── __init__.py  # ALL_SOURCES registry (8 sources incl. rss)
             ├── base.py      # Source base class (backends, check(), search())
+            ├── breaker.py   # Circuit breakers (persisted source_state.json)
             ├── constants.py
             ├── utils.py     # Resilient HTTP client, rate limiter, cache
             ├── enrichment.py  # Top-N detail enrichment (OpenCLI + Jina fallback)
+            ├── rss.py       # RSS source (feedparser, sources.rss.feeds)
             ├── backends/    # opencli.py · mcporter.py · exa.py (browser/MCP backends)
             ├── indeed.py    # Indeed: opencli ▸ html ▸ ddgs
             ├── linkedin.py  # LinkedIn: opencli ▸ guest-api
@@ -494,6 +525,8 @@ matcha/
 - **Zero API key lock-in** — Core functionality works without any paid API keys
 - **HTTP caching** — requests-cache with SQLite backend, 30-min TTL, avoids re-scraping identical queries
 - **Rate limiting** — Per-domain token bucket limits prevent IP bans
+- **Circuit breakers** — a repeatedly failing source is skipped during its 30-min cooldown instead of retried every run
+- **Private-file discipline** — atomic owner-only writes, component-wise symlink rejection, reads that never create files
 
 ---
 

@@ -300,7 +300,7 @@ def _call_ai(
     headers: dict[str, str] = {"Content-Type": "application/json"}
     if key:
         headers["Authorization"] = f"Bearer {key}"
-    payload = {
+    payload: dict[str, Any] = {
         "model": model,
         "messages": messages,
         "max_tokens": max_tokens,

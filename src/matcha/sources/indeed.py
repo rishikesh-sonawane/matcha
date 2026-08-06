@@ -10,7 +10,7 @@ from bs4 import BeautifulSoup
 try:
     from ddgs import DDGS
 except ImportError:
-    DDGS = None
+    DDGS = None  # type: ignore[assignment, misc]
 
 from matcha.models import ScraperResult
 from matcha.sources.backends.opencli import _opencli_should_run, run_opencli

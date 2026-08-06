@@ -112,7 +112,9 @@ def _fetch_snapshot() -> dict[str, Any] | None:
     if not agent_reach_available():
         _log_one_time_hint()
         return None
-    path = shutil.which("agent-reach")
+    # ``which`` returns the absolute path when found; fall back to the bare
+    # command name (resolved via PATH) — the probe above already proved it runs.
+    path = shutil.which("agent-reach") or "agent-reach"
     env = utf8_subprocess_env()
     try:
         proc = subprocess.run(
@@ -213,7 +215,9 @@ def gh_profile(timeout: int = 15) -> dict[str, Any] | None:
         return None
     if not _gh_credentials_present():
         return None
-    path = shutil.which("gh")
+    # ``which`` returns the absolute path when found; fall back to the bare
+    # command name — the probe above already proved it runs.
+    path = shutil.which("gh") or "gh"
     env = utf8_subprocess_env()
     env.update(_GH_READ_ONLY_ENV)
     try:
@@ -237,6 +241,60 @@ def gh_profile(timeout: int = 15) -> dict[str, Any] | None:
     return {
         key: payload[key] for key in ("login", "name", "email") if key in payload and payload[key]
     }
+
+
+def gh_repos(timeout: int = 15, limit: int = 20) -> list[dict[str, Any]] | None:
+    """GitHub CLI public repos (languages/topics/stars) — None when unavailable.
+
+    Same read-only discipline as :func:`gh_profile` (strategy §6.5): never
+    run ``gh auth status``; probe ``gh --version`` with telemetry disabled
+    and confirm credentials via env tokens / ``hosts.yml``. Fetches up to 100
+    repos sorted by most-recently-pushed, returns the top ``limit`` by stars.
+    """
+    probe = probe_command("gh", ["--version"], timeout=10, package="gh", env=_GH_READ_ONLY_ENV)
+    if not probe.ok:
+        return None
+    if not _gh_credentials_present():
+        return None
+    # ``which`` returns the absolute path when found; fall back to the bare
+    # command name — the probe above already proved it runs.
+    path = shutil.which("gh") or "gh"
+    env = utf8_subprocess_env()
+    env.update(_GH_READ_ONLY_ENV)
+    try:
+        proc = subprocess.run(
+            [path, "api", "user/repos?per_page=100&sort=pushed&type=owner"],
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            env=env,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        logger.warning("gh api user/repos failed: %s", e)
+        return None
+    if proc.returncode != 0:
+        logger.info("gh api user/repos failed (exit %s)", proc.returncode)
+        return None
+    payload = _parse_json_output(proc.stdout or "")
+    if not isinstance(payload, list):
+        return None
+    repos: list[dict[str, Any]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        language = item.get("language")
+        repos.append(
+            {
+                "full_name": str(item.get("full_name") or ""),
+                "language": str(language) if isinstance(language, str) else "",
+                "topics": [t for t in item.get("topics", []) if isinstance(t, str)],
+                "stargazers_count": int(item.get("stargazers_count") or 0),
+                "description": str(item.get("description") or ""),
+            }
+        )
+    repos.sort(key=lambda r: int(r["stargazers_count"]), reverse=True)
+    return repos[:limit]
 
 
 def _gh_credentials_present() -> bool:

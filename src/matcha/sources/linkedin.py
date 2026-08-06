@@ -186,7 +186,7 @@ def _search_linkedin_guest_api(
 
                     link = ""
                     if link_el:
-                        href = link_el.get("href", "")
+                        href = str(link_el.get("href", "") or "")
                         link = (
                             href if href.startswith("http") else f"https://www.linkedin.com{href}"
                         )
