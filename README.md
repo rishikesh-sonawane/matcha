@@ -21,8 +21,10 @@ Job boards show you **every** posting matching a keyword. This tool shows you on
 **Multi-Source Aggregation** — Searches LinkedIn, Indeed, Naukri, RemoteOK, and web search results simultaneously. Optionally integrates Google Jobs via SerpAPI. 30+ parallel requests across diverse queries yield **200–500+ unique listings** per search.
 
 **Two-Pass Relevance Engine**
-1. **Heuristic pass** — Fast token-based scoring across 5 dimensions (title, skills, keywords, seniority, location) on every job — completes instantly even for 500+ listings.
-2. **AI pass** — Top candidates re-scored by an LLM that understands role semantics, skill adjacency, and career trajectory. Critical prompt tuning ensures honest, discriminating scores.
+1. **Heuristic pass** — Confidence-weighted scoring across 5 dimensions (skills, title, seniority, location, keywords) on every job — text-derived dimensions scale by data richness, so full descriptions outrank snippet guesses. Plus recency, remote-workplace, and must-have-skill bonuses. Completes instantly even for 500+ listings.
+2. **AI pass** — Top N (default 30) **enriched candidates** re-scored by an LLM that understands role semantics, skill adjacency, and career trajectory. Critical prompt tuning ensures honest, discriminating scores.
+
+**Central Filter Pipeline** — every job is normalized (listed date, salary, city/region, remote) then filtered in a fixed order: data quality → age → must-have skills → location → salary, each reporting exactly how many jobs it cut (`Filtered: 96 kept (age −142 · must −21 …)`). Provenance tags (`[full]` / `[snippet]` / `[age?]` / `[salary?]`) make low-confidence matches obvious.
 
 **Three-Way Profile Entry**
 - **PDF Resume** — Extracts name, title, skills, experience, and summary via AI (no fallback keyword matching). All skill detection is LLM-driven.
@@ -74,9 +76,11 @@ Job boards show you **every** posting matching a keyword. This tool shows you on
 2. **Query Expansion** — Base query + AI-generated variant queries targeting adjacent roles
 3. **Parallel Scraping** — `ThreadPoolExecutor` dispatches all queries × all scrapers concurrently (up to 30 tasks)
 4. **Deduplication** — Title+company hash eliminates cross-source duplicates
-5. **First-Pass Ranking** — Heuristic scorer evaluates all jobs in O(n) using token overlap matching
-6. **Second-Pass Ranking** — Top 15 candidates re-scored by LLM with structured JSON output
-7. **Display** — Paginated table with color-coded match scores → interactive detail view
+5. **Normalize + Filter** — `normalization.py` derives `listed_epoch` / `salary_int` / `city` / `remote_ok`; `filters.py` enforces quality → age → must-skills → location → salary centrally (age filter is the final authority on freshness)
+6. **First-Pass Ranking** — Confidence-weighted heuristic (data-richness × dimensions) with recency/workplace/must-skill signals
+7. **Second-Pass Ranking** — Top N (default 30) **enriched candidates** re-scored by LLM with structured JSON output; flatline guard warns on homogeneous scores
+8. **Enrichment** — Top N ranked jobs get full descriptions + apply URLs (OpenCLI job-detail, Jina fallback)
+9. **Display** — Paginated table with color-coded match scores + provenance tags → interactive detail view
 
 ---
 
@@ -253,6 +257,8 @@ filters:
   remote: false      # remote-only mode
   min_salary: 0      # LPA floor (0 = off)
   drop_unknown_salary: false  # drop jobs without a parseable salary
+ranking:
+  normalize_scores: false  # stretch a flat score distribution onto [5, 100]
 ```
 
 **Filters** (Phase 2): after dedup, every job is normalized (`listed_epoch`,
@@ -320,11 +326,11 @@ LinkedIn postings fall back to the zero-config Jina Reader
 
 | Source | Method | Results | Requires |
 |--------|--------|---------|----------|
-| **LinkedIn** | Guest API endpoint (`/jobs-guest/api/seeMoreJobPostings`) | ~10 listings | Nothing |
-| **Indeed India** | `cloudscraper`-based HTML parsing on Python 3.9; falls back to `ddgs` (`site:in.indeed.com/viewjob`) on Python 3.14 | 5–25 listings | Nothing |
+| **LinkedIn** | `opencli` (your logged-in Chrome, richest) ▸ guest API fallback | 25–100 (OpenCLI) / ~10 (guest) | OpenCLI + consent (opt-in) |
+| **Indeed** | `opencli` (browser; US index) ▸ `ddgs` fallback on py3.14 | 5–25 listings | OpenCLI + consent (opt-in) |
 | **RemoteOK** | Public JSON API filtered by keyword matching | ~8 listings | Nothing |
 | **Naukri** | DDGS `site:naukri.com` discovery → real `job-listings-*` pages parsed for description/salary/skills (embedded JSON first, Jina render fallback); `ddgs` snippet fallback | 6–44 listings | Nothing |
-| **Web Search** | `ddgs` API with targeted `site:` queries on known job boards (LinkedIn, Greenhouse, Lever, Ashby) | 10–30 listings | Nothing |
+| **Web Search** | Exa semantic search (via mcporter, when configured) ▸ `ddgs` API with targeted `site:` queries | 10–30 listings | mcporter (optional) |
 | **Google Jobs** | SerpAPI `google_jobs` engine (optional) | Rich listings | SerpAPI key |
 
 ---
@@ -346,9 +352,10 @@ Text-derived dimensions (skills, keywords) are scaled by **data confidence**
 (`full` 1.0 · `partial` 0.85 · `snippet` 0.7), so empty fields contribute ~0;
 soft-mode must-skill misses are capped at 45. Score clamped to 0–100 (floor 5).
 
-### AI Pass (top 15 candidates)
+### AI Pass (top N = 30, enriched candidates only)
 
-Jobs are re-scored by an LLM using a structured prompt covering:
+Only jobs with real descriptions (`data_quality` full/partial or a substantial
+text) are re-scored by an LLM using a structured prompt covering:
 - **Skills match (40%)** — Honest assessment of skill overlap and missing requirements
 - **Title/role alignment (25%)** — Career trajectory fit, not just keyword match
 - **Experience fit (20%)** — Appropriate seniority level
@@ -371,7 +378,7 @@ The AI provider uses the **Kilo Gateway** (`api.kilo.ai`) with model `kilo-auto/
 With AI enabled:
 - Resume PDFs are parsed entirely by AI — extracts name, skills (30+), title, experience, and summary in one pass
 - Search queries are expanded to 3–5 diverse variants targeting adjacent roles
-- Top 15 jobs are re-scored by AI for more accurate relevance ranking
+- Top N (default 30) **enriched** jobs are re-scored by AI for more accurate relevance ranking
 - Job titles are suggested from your skill set (no hardcoded mappings)
 
 ---
@@ -387,9 +394,12 @@ matcha/
 └── src/
     └── matcha/
         ├── __init__.py
-        ├── main.py          # CLI entry point, orchestration, UI, `doctor`
+        ├── main.py          # CLI entry point, orchestration, UI, `doctor`, `--days`
         ├── profile.py       # Profile ingestion (PDF, LinkedIn, manual)
-        ├── matcher.py       # Two-pass relevance scoring engine
+        ├── matcher.py       # Confidence-weighted relevance scoring + AI wrapper
+        ├── normalization.py # Canonical jobs: listed_epoch, salary_int, city, remote_ok
+        ├── filters.py       # Central filter pipeline + provenance tags
+        ├── agent_reach_io.py  # Thin adapter to `agent-reach` (doctor snapshot, gh)
         ├── ai.py            # AI provider client (OpenAI-compatible REST)
         ├── config.py        # Persistent config and profile storage
         ├── models.py        # Pydantic v2 data models + ScraperResult
@@ -404,12 +414,14 @@ matcha/
             ├── base.py      # Source base class (backends, check(), search())
             ├── constants.py
             ├── utils.py     # Resilient HTTP client, rate limiter, cache
-            ├── indeed.py    # Indeed: cloudscraper → ddgs fallback
-            ├── linkedin.py  # LinkedIn guest API
+            ├── enrichment.py  # Top-N detail enrichment (OpenCLI + Jina fallback)
+            ├── backends/    # opencli.py · mcporter.py · exa.py (browser/MCP backends)
+            ├── indeed.py    # Indeed: opencli ▸ html ▸ ddgs
+            ├── linkedin.py  # LinkedIn: opencli ▸ guest-api
             ├── naukri.py    # Naukri job-page parse (job-page ▸ ddgs)
             ├── remoteok.py  # RemoteOK public JSON API
             ├── serpapi_jobs.py  # Google Jobs via SerpAPI (optional)
-            ├── web_search.py    # ddgs API with targeted site: queries
+            ├── web_search.py    # Exa ▸ ddgs with targeted site: queries
             └── career_sites.py  # 200+ employer boards via ddgs (default off)
 ```
 

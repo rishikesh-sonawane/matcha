@@ -13,13 +13,13 @@
 - **Consequences:** 8-phase roadmap (P0 foundation → P7 hardening); scrapers refactored into `sources/` with per-source backends; ranking work deferred to Phase 4. Source of truth: `revamp/matcha-2.0-strategy.md`.
 
 ### ADR 02: Multi-backend routing, richest-first, with real probes
-- **Status:** Accepted (2026-08-06)
+- **Status:** **Implemented** (Phase 1, 2026-08-06)
 - **Decision:** Each source gets an **ordered backend list** (e.g. LinkedIn: `opencli ▸ guest-api ▸ ddgs`) with fallback on failure; health is determined by **actually executing** the tool (ported `probe.probe_command`), never `shutil.which` alone. The active backend is always visible.
 - **Context:** Ported from Agent-Reach's `Channel` pattern; a broken backend must degrade to the next one instead of returning empty.
 - **Consequences:** `sources/base.py` (Source ABC) + `sources/registry.py` (circuit breakers persisted to `~/.matcha/source_state.json`); `probe.py` with `ProbeResult(status: ok|missing|broken|timeout|error)`; doctor reports per-source status + active backend + fix hint.
 
 ### ADR 03: Filters are a centralized pipeline stage, enforced centrally
-- **Status:** Accepted (2026-08-06)
+- **Status:** **Implemented** (Phase 2, 2026-08-06)
 - **Decision:** All filters (data quality → job age → must-have skills → location/remote → salary) live in one `filters.py`, run on normalized jobs, each returning `(keep, reason)` with counts logged and shown (`ingest=412 normalize=412 dedup→287 filter→96 age_dropped=142 …`). `--days` is the **final authority** — a source lying about age can't leak old jobs in.
 - **Context:** User explicitly required a job-age filter and "good relevant jobs"; per-scraper ad-hoc filtering is untrustworthy.
 - **Consequences:** `normalization.py` (listed_epoch, salary_int LPA, city synonyms, remote_ok); unknown-age jobs tagged `[age?]` (never falsely dropped; `--strict-age` drops them); settings.yaml `filters:` section.
@@ -43,13 +43,13 @@
 - **Consequences:** Phase 6 delivers `--json`, `skill/SKILL.md` (zh+en) with installer, `matcha watch` + new-vs-seen `track.py`, optional MCP server mirroring Agent-Reach.
 
 ### ADR 07: Enrichment-only — never auto-submit applications
-- **Status:** Accepted (2026-08-06, user scope decision)
+- **Status:** **Implemented** (Phase 1 part 3, 2026-08-06)
 - **Decision:** Scope is **enrichment only**: fetch full job detail (description, salary, apply_url, workplace, applicants, listed) and open the apply page. No automated submission.
 - **Context:** User explicitly scoped out apply automation; OpenCLI `job-detail` is mature while application flow isn't.
 - **Consequences:** `sources/enrichment.py` (top N=30, parallel ≤5, per-job isolation, graceful failure); `o` opens `apply_url` when present else job URL; saved jobs persist enriched fields.
 
 ### ADR 08: Existing scrapers stay as named fallbacks, never deleted
-- **Status:** Accepted (2026-08-06)
+- **Status:** **Implemented** (Phase 0/1, 2026-08-06)
 - **Decision:** OpenCLI/Exa/Agent-Reach are optional premium backends; the existing scrapers remain as zero-config fallbacks and are refactored into `sources/*` Source subclasses (parsers kept as backends).
 - **Context:** No Node.js/Chrome/consent guarantee; "runs fully without Agent-Reach and fully without AI".
 - **Consequences:** Phase 0 is a behavior-neutral refactor of `scrapers/*` → `sources/*`; every source gets a `check()`; `scrapers/career_sites.py` included.
@@ -61,10 +61,89 @@
 - **Consequences:** `indeed_domain` config key exists; `normalization.py` city synonym table (Pune/Poona); location/remote filter semantics: exact city ≥ region ≥ remote-friendly.
 
 ### ADR 10: Persist AI memory in git; commit at session end
-- **Status:** Accepted (2026-08-06, re-affirmed from prior project convention)
+- **Status:** **Active convention** (2026-08-06, re-affirmed from prior project convention)
 - **Decision:** The `.ai_memory/` directory is committed to the repo and updated continuously; `git commit` at the end of a working session makes recovery deterministic.
 - **Context:** AI assistants are stateless; chat history is disposable, the repo + `.ai_memory/` are the source of truth.
 - **Consequences:** `session_log.md` is append-only (crash-safe write-ahead log); `system_state.md`/`active_task.md` are updated per step; recovery = `git status`/`git diff` + journal tail.
+
+### ADR 11: Naukri job-page fetch = Jina Reader render, not direct HTML
+- **Status:** **Implemented** (Phase 1, 2026-08-06)
+- **Decision:** `sources/naukri.py` gets backends `["job-page", "ddgs"]`. The
+  job-page backend discovers real `job-listings-*` URLs via DDGS, then fetches
+  each posting **through Jina Reader** (`r.jina.ai/<url>`, zero-config,
+  browser-like) and parses the rendered markdown; a direct GET with embedded
+  `application/ld+json` JobPosting / `__NEXT_DATA__` parse is tried first and
+  wins if Naukri ever server-renders again.
+- **Context:** Verified live (2026-08-06): Naukri serves a client-rendered
+  Next.js RSC shell to plain requests (empty `jobDetails:[]`, no JSON-LD, no
+  meta/og) and the internal `jobapi/v3` endpoints reject unauthenticated calls
+  (404/405 without a CSRF session). DDGS-indexed postings are often expired
+  (search-page redirect) — detected and kept as snippets.
+- **Consequences:** Naukri now yields genuine description/salary/experience/key
+  skills/apply URL; expired postings degrade gracefully; `check()` stays
+  hermetic (library-based) so doctor/contract tests stay offline-safe.
+
+### ADR 12: Exa/mcporter = read-only config probe + dual-syntax call, DDGS fallback
+- **Status:** **Implemented** (Phase 1, 2026-08-06)
+- **Decision:** `backends/mcporter.py` inspects mcporter config **read-only**
+  (`MCPORTER_CONFIG` → `~/.mcporter/mcporter.json{,c}` → `<cwd>/config/mcporter.json`),
+  never starts mcporter, never expands `imports` (credential boundary).
+  `backends/exa.py` shells `mcporter call` with **dual syntax** (current
+  openclaw 0.8+ `key=value` first, legacy 0.7 DSL retried on failure),
+  retries once without `includeDomains`, and treats error envelopes as
+  failures. Web Search dispatches exa-when-configured ▸ DDGS.
+- **Context:** The mcporter CLI was rewritten upstream (0.7 DSL → 0.8+ syntax);
+  remote servers can't be verified without running them, so configured-but-
+  unverified is `warn`, never `ok`; absent → graceful DDGS fallback (verified live).
+- **Consequences:** No credential widening, honest doctor status, zero-config
+  semantic search when the user installs mcporter.
+
+### ADR 13: `agent_reach_io.py` = snapshot-first health with own-probe degradation
+- **Status:** **Implemented** (Phase 1, 2026-08-06)
+- **Decision:** When Agent-Reach is installed, health reads come from
+  `agent-reach doctor --json` (TTL-cached 30s, credential-scrubbed); when
+  absent, Matcha uses its own probes + a one-time warning hint (F-14).
+  `gh_profile()` never runs `gh auth status` (writes a device-id) — it reads
+  `GH_TOKEN`/`GITHUB_TOKEN` env or a github.com `hosts.yml` entry, then
+  `gh api user` with read-only env. `seed_ai_config()` borrows `groq_api_key`
+  from `~/.agent-reach/config.yaml` (symlink-rejected, ≤1MB).
+- **Context:** Agent-Reach is an installer+doctor tool, not a wrapper; reusing
+  its health signal avoids re-implementing probes, and read-only config reads
+  keep the credential boundary tight.
+- **Consequences:** Six functions (`agent_reach_available`, `doctor_snapshot`,
+  `opencli_ready`, `exa_search`, `gh_profile`, `seed_ai_config`) all degrade
+  to zero-config behavior when agent-reach is absent (verified live).
+
+### ADR 14: Ranking is confidence-weighted; signals reward fresh/remote/must-have
+- **Status:** **Implemented** (Phase 4, 2026-08-06)
+- **Decision:** `matcher.compute_relevance` keeps the 35/25/15/15/10 max
+  dimension weights but scales the text-derived skills+keyword dimensions by
+  a **data confidence** factor (data_quality `full` 1.0 / `partial` 0.85 /
+  `snippet` 0.7; description-length proxy only for unstamped rows) so a match
+  on an empty field contributes ~0. Adds bounded signals: recency (+5/3/1 by
+  `listed_epoch`), workplace agreement (+3 vs `remote_preference`),
+  must-have-skill coverage (+2 each, cap +6, synonym-aware). Jobs kept by
+  `soft_must_skills` are **capped at 45** so they never outrank hard matches.
+  The AI pass runs **only on enriched candidates** (`ai_eligible`), and a
+  flatline guard (`detect_flatline`/`normalize_scores`) warns on homogeneous
+  distributions (optional stretch via `ranking.normalize_scores`).
+- **Context:** Phase-1 acceptance demanded full-data jobs outrank
+  snippet-guesses; the AI prompt's skills/location weights were wasted on
+  snippet rows; flat 92%-everywhere scoring needed a calibration signal.
+- **Consequences:** `[full]`/`[partial]`/`[snippet]` provenance tags beside
+  `[age?]`/`[salary?]`; score distribution spreads by data richness.
+
+### ADR 15: Provenance is data — stamp result-level quality/backend onto every row
+- **Status:** **Implemented** (Phase 4, 2026-08-06)
+- **Decision:** `main.search_jobs` stamps each row with its `ScraperResult`
+  `data_quality` + `backend` via `setdefault` at ingest, so every source's
+  rows carry provenance even when the source only sets it at result level
+  (only Naukri/enrichment set per-row flags today).
+- **Context:** Without stamping, confidence scaling and the TUI provenance
+  tags were dead for most sources (rows lacked `data_quality`).
+- **Consequences:** Ranker confidence, AI gating, and `[full]`/`[snippet]`
+  tags work uniformly across all sources; explicit per-row flags still win
+  (setdefault).
 
 ---
 

@@ -1,11 +1,16 @@
 # Matcha 2.0 — Pre-Implementation Analysis (gap & blocker review)
 
-> **Status:** Review complete · **Date:** 2026-08-06 · Complements
-> `matcha-2.0-strategy.md` (Rev 3) — the strategy is the *what*, this is the
+> **Status:** Pre-implementation analysis, written 2026-08-06 · Complements
+> `matcha-2.0-strategy.md` — the strategy is the *what*, this is the
 > *how-with-eyes-open*: verified environment facts, cross-cutting migration
 > plan, per-phase gaps/blockers/bugs, and a findings register with resolutions.
-> Every finding is cross-referenced by ID (F-nn). **Nothing here is implemented
-> yet.**
+> Every finding is cross-referenced by ID (F-nn).
+> **As of 2026-08-06 Phases 0, 1, 2 and 4 are COMPLETE and most findings are
+> RESOLVED** — the per-phase sections below record the resolutions inline;
+> the register in §5 is the quick summary. What remains open: F-10 (dedup
+> O(n²), Phase 4-adjacent), F-13 (profile/filter CLI UX, Phase 2-adjacent),
+> F-19 (AI env naming, Phase 5), F-22 (seen-urls/watch, Phase 6), plus
+> Phase 7 hardening items.
 
 ---
 
@@ -210,29 +215,29 @@ Channel contract in Agent-Reach match §6.8 exactly; `opencli --version` +
 
 | ID | Sev | Phase | Finding | Resolution |
 |---|---|---|---|---|
-| F-01 | Med | P0 | `pyproject` target py39 vs 3.10+ syntax | bump py310 + ruff fix |
-| F-02 | High | P0 | CI runs only `tests.test_core` | `unittest discover tests` |
-| F-03 | Med | P0 | CI matrix misses 3.14 | add `"3.14"` |
-| F-04 | High | P0/P1 | naive src/ migration breaks 9 surfaces | shims-first (§3); entry-point migration in P1 |
-| F-05 | Med | P0+ | `os._exit(0)` skips cleanup (SQLite WAL) | `sys.exit(0)` + daemon-thread handling; explicit commits |
-| F-06 | Med | P1/P3 | job-detail has **no salary** | fix §8/§14; salary best-effort; tag `[salary?]` |
-| F-07 | Low | P1 | `-f json` unverified; flag lists partially stale | verify `--help` at implementation; lock format flag |
-| F-08 | Med | P0 | LinkedIn default location "United States" | **resolved:** default to `"India"` (user-confirmed 2026-08-06); normalize in P2 |
-| F-09 | Med | P0 | `test_date_string_within` time-bomb (fails now) | time-relative fixtures |
-| F-10 | Med | P2/P4 | dedup O(n²) | canonical-URL pass + fuzzy collisions, keep-best |
-| F-11 | Med | P0 | career_sites untracked & unwired | register + flag off (default), enable P1 |
-| F-12 | Med | P2 | placeholder-company drop over-drops | drop only if title+company both placeholder |
-| F-13 | Med | P2 | no UX for must_have_skills/min_salary/remote | `matcha profile edit` / `matcha filter set-*` |
-| F-14 | Low | P1 | agent-reach/mcporter absent | own probes + one-time hint; DDGS/own fallbacks — **RESOLVED Phase 1** (mcporter read-only probe + Exa backend + DDGS fallback + `agent_reach_io.py` snapshot/degradation) |
-| F-15 | Low | P1/P2 | RemoteOK epoch/tags dropped | keep `listed_epoch` + `tags` in output |
-| F-16 | Low | P2 | Indeed salary embedded in description | parse salary_int from description |
-| F-17 | Low | P0 | 45s batch timeout semantics | explicit partial-result reporting |
-| F-18 | Low | P0 | ruff UP/N cleanup after target bump | `ruff check --fix` once |
-| F-19 | Low | P5 | legacy `MINIMAX` env | new name + deprecated alias |
-| F-20 | Med | P3 | enrichment URL precondition | skip-list + Jina fallback + partial tagging |
-| F-21 | Low | P2 | `--days 0` / epoch semantics | UTC epoch vs `time.time()` |
-| F-22 | Low | P6 | seen_urls migration | idempotent ALTER TABLE + table |
-| F-23 | Low | P0 | Shims vs console-script timing | shims in P0; delete in P1 after entry-point migration |
+| F-01 | Med | P0 | `pyproject` target py39 vs 3.10+ syntax | **RESOLVED (P0):** bump py310 + ruff fix |
+| F-02 | High | P0 | CI runs only `tests.test_core` | **RESOLVED (P0):** `unittest discover tests` |
+| F-03 | Med | P0 | CI matrix misses 3.14 | **RESOLVED (P0):** add `"3.14"` |
+| F-04 | High | P0/P1 | naive src/ migration breaks 9 surfaces | **RESOLVED (P0/P1):** shims-first (§3); entry-point migration done in P1 |
+| F-05 | Med | P0+ | `os._exit(0)` skips cleanup (SQLite WAL) | **RESOLVED (P0):** `sys.exit(0)` + daemon-thread handling; explicit commits |
+| F-06 | Med | P1/P3 | job-detail has **no salary** | **RESOLVED (P1):** §8/§14 fixed; salary best-effort; tagged `[salary?]` |
+| F-07 | Low | P1 | `-f json` unverified; flag lists partially stale | **RESOLVED (P1):** verified `--help`; format flag + row shapes locked |
+| F-08 | Med | P0 | LinkedIn default location "United States" | **RESOLVED (P0):** default `"India"` (user-confirmed); normalized in P2 |
+| F-09 | Med | P0 | `test_date_string_within` time-bomb (fails now) | **RESOLVED (P0):** time-relative fixtures |
+| F-10 | Med | P2/P4 | dedup O(n²) | **OPEN (P4-adjacent):** canonical-URL pass + fuzzy collisions, keep-best |
+| F-11 | Med | P0 | career_sites untracked & unwired | **RESOLVED (P0):** registered + flag off (default) |
+| F-12 | Med | P2 | placeholder-company drop over-drops | **RESOLVED (P2):** drop only if title+company both placeholder |
+| F-13 | Med | P2 | no UX for must_have_skills/min_salary/remote | **OPEN (P2-adjacent):** `matcha profile edit` / `matcha filter set-*`; fields set via profile.json/settings today |
+| F-14 | Low | P1 | agent-reach/mcporter absent | **RESOLVED Phase 1** (mcporter read-only probe + Exa backend + DDGS fallback + `agent_reach_io.py` snapshot/degradation) |
+| F-15 | Low | P1/P2 | RemoteOK epoch/tags dropped | **RESOLVED (P1/P2):** `listed_epoch` + `tags` kept |
+| F-16 | Low | P2 | Indeed salary embedded in description | **RESOLVED (P2):** `salary_int` parsed from description |
+| F-17 | Low | P0 | 45s batch timeout semantics | **RESOLVED (P0):** explicit partial-result reporting in TUI |
+| F-18 | Low | P0 | ruff UP/N cleanup after target bump | **RESOLVED (P0):** `ruff check --fix` once |
+| F-19 | Low | P5 | legacy `MINIMAX` env | **OPEN (P5):** new name + deprecated alias |
+| F-20 | Med | P3 | enrichment URL precondition | **RESOLVED (P1/P3):** Jina zero-config fallback + partial tagging |
+| F-21 | Low | P2 | `--days 0` / epoch semantics | **RESOLVED (P2):** UTC epoch vs `time.time()`; `--days 0` = today only |
+| F-22 | Low | P6 | seen_urls migration | **OPEN (P6):** idempotent ALTER TABLE + table |
+| F-23 | Low | P0 | Shims vs console-script timing | **RESOLVED (P0/P1):** shims in P0; deleted in P1 after entry-point migration |
 
 ## 6. Understanding corrections (applied to the strategy doc)
 

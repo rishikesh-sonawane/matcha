@@ -956,10 +956,16 @@ counts shown; garbage jobs dropped.
 > `FilterConfig` + `settings.filters` defaults; 64 hermetic tests. 371/371
 > tests; ruff/format/bandit clean.
 
-### Phase 3 — Enrichment (2–3 days)
+### Phase 3 — Enrichment (2–3 days) ⚠️ DELIVERED EARLY (Phase 1 part 3)
 `enrichment.py`, model + DB columns, TUI detail fields, apply_url-aware `o`.
 **Accept:** top-30 LinkedIn jobs enriched ≤60s parallel; per-job failures
 graceful.
+
+> ✅ Delivered inside **Phase 1 part 3** (2026-08-06) as part of the data-
+> quality work — see §8. Remaining Phase-3 polish (not yet done): persist
+> enriched+normalized fields into saved jobs (`actions.py` new columns:
+> salary, salary_int, apply_url, listed_epoch) and the `seen_urls` table
+> (F-22, Phase 6).
 
 ### Phase 4 — Ranking recalibration (2–3 days) ✅ COMPLETE (2026-08-06)
 Confidence-weighted heuristic, recency/workplace signals, AI on enriched

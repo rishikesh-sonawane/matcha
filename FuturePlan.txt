@@ -1,3 +1,19 @@
+>>> STATUS (2026-08-06): This 1.x-era production plan is largely COMPLETE.
+>>> Done in the 2.0 rebuild (see `revamp/matcha-2.0-strategy.md` Rev 11,
+>>> `.ai_memory/`, README): tests (401) + CI full-suite + 3.14 matrix,
+>>> type hints + Pydantic models, structured logging (rotating file), rate
+>>> limiting + HTTP cache, CI/CD + Docker, YAML config + non-interactive mode,
+>>> SQLite job lifecycle, async parallel AI scoring (top N = 30), config
+>>> encryption (keyring + fernet), fuzzy dedup (rapidfuzz), scraper health
+>>> monitoring (`matcha doctor`), retry with backoff, better LinkedIn (OpenCLI),
+>>> Naukri proper job-level extraction (job-page backend), better Indeed
+>>> (OpenCLI backend), ruff + pre-commit.
+>>> NOT done (future phases): proxy/user-agent rotation, email digests + cron
+>>> watch mode (Phase 6), web API / multi-tenant (out of scope), profile
+>>> merge UI (partially via supplement flow), coverage gate ≥80% (Phase 7),
+>>> Glassdoor/Wellfound/TimesJobs scrapers.
+>>> The items below are kept as the historical 1.x plan.
+
 Current State Assessment:
 Strengths:
 1. Clean modular architecture with separation of concerns

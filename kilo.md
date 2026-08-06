@@ -1,5 +1,14 @@
 # Matcha — Project Context
 
+> ⚠️ **SUPERSEDED (2026-08-06).** This file documents the **1.x-era**
+> implementation (flat root layout, `scrapers/`, guest-API scrapers, top-15 AI
+> scoring). Matcha now runs from **`src/matcha/` as the installed `matcha`
+> console script** with Phases 0, 1, 2 and 4 of the 2.0 rebuild complete
+> (multi-backend sources, top-N enrichment, central filters, confidence-
+> weighted ranking). For current architecture and usage see **`README.md`**
+> and **`revamp/matcha-2.0-strategy.md` (Rev 11)**; the live state lives in
+> **`.ai_memory/`**. Content below is kept as the historical 1.x context.
+
 ## Overview
 
 Matcha is a Python terminal application (TUI) that aggregates job listings from multiple sources, ranks them by relevance to a user's professional profile, and displays them in an interactive, color-coded terminal interface. It uses a two-pass relevance engine (heuristic + optional AI via Kilo Gateway) and supports three methods of profile entry (PDF resume, LinkedIn URL, manual).

@@ -12,8 +12,9 @@ wins — then fix the memory file.
 
 > ⚠️ Note: there is **no `AGENTS.md`** in this repo. `.ai_memory/` is the sole
 > memory layer. The Matcha 2.0 rebuild plan lives in `revamp/` — see
-> `revamp/matcha-2.0-strategy.md` (the source of truth for all next steps) and
-> `revamp/phase-0-handoff-prompt.txt` (ready-made prompt to start Phase 0).
+> `revamp/matcha-2.0-strategy.md` (**Rev 11**; Phases 0, 1, 2 and 4 marked
+> complete) and `revamp/matcha-2.0-implementation-analysis.md` (findings
+> register F-01..F-23).
 
 ## The files
 
@@ -70,11 +71,12 @@ Context limit, daily cap, crash, closed tab — if the final sync never happened
 
 1. Close the current chat. Open a **new** Freebuff session.
 2. Paste the startup prompt (workflow §1).
-3. It should reconstruct: **Matcha 1.x complete; Matcha 2.0 planning done;
-   next = get user's go-ahead, then start Phase 0** (src/ layout, errors.py,
-   probe.py, doctor.py, sources/ registry — per `revamp/phase-0-handoff-prompt.txt`).
-   If it says anything materially different, that's a protocol bug — report it
-   and fix the design.
+3. It should reconstruct: **Matcha 2.0 Phases 0, 1, 2 and 4 complete
+   (401/401 tests) — running from `src/matcha/` as the installed `matcha`
+   console script; current focus = Phases 3/5 boundary** (saved-jobs enriched
+   columns, AI provider-agnostic client), per `revamp/matcha-2.0-strategy.md`
+   Rev 11 and `.ai_memory/active_task.md`. If it says anything materially
+   different, that's a protocol bug — report it and fix the design.
 
 ## Do's and Don'ts
 
