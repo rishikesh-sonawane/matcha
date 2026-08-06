@@ -73,6 +73,7 @@ class RateLimiter:
 limiter: RateLimiter = RateLimiter()
 limiter.set_rate("linkedin.com", 3)
 limiter.set_rate("indeed.com", 5)
+limiter.set_rate("naukri.com", 6)
 limiter.set_rate("remoteok.com", 10)
 limiter.set_rate("serpapi.com", 8)
 limiter.set_rate("duckduckgo.com", 6)

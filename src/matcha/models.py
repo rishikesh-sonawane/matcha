@@ -31,6 +31,22 @@ class Job(BaseModel):
     description: str = ""
     url: str = ""
     source: str = ""
+    # enrichment + normalization (Phase 1/2, strategy §14)
+    apply_url: str = ""
+    salary: str = ""
+    salary_int: int | None = None
+    workplace_type: str = ""
+    job_type: str = ""
+    listed: str = ""
+    listed_epoch: int | None = None
+    applicants: str = ""
+    company_url: str = ""
+    # provenance
+    backend: str = ""
+    data_quality: str = "partial"  # full | partial | snippet
+    city: str = ""
+    region: str = ""
+    remote_ok: bool = False
 
 
 class Profile(BaseModel):
@@ -41,6 +57,11 @@ class Profile(BaseModel):
     experience: str = ""
     summary: str = ""
     location: str = ""
+    # Phase 2 filter preferences (strategy §7/§14)
+    must_have_skills: list[str] = Field(default_factory=list)
+    min_salary: int = 0
+    remote_preference: str = ""  # remote | hybrid | onsite
+    github_username: str = ""
 
 
 class RelevanceResult(BaseModel):
@@ -93,8 +114,28 @@ class EnrichmentConfig(BaseModel):
     max_workers: int = 5
 
 
+class FilterConfig(BaseModel):
+    """Central filter pipeline settings (strategy §7.6)."""
+
+    days: int = 7
+    strict_age: bool = False
+    min_must_matches: int = 1
+    soft_must_skills: bool = False
+    remote: bool = False
+    min_salary: int = 0
+    drop_unknown_salary: bool = False
+
+
+class RankingConfig(BaseModel):
+    """Phase 4 ranking recalibration (strategy §9)."""
+
+    normalize_scores: bool = False  # stretch a flat score distribution onto [5,100]
+
+
 class Settings(BaseModel):
     search: SearchConfig = Field(default_factory=SearchConfig)
     ai: AIConfig = Field(default_factory=AIConfig)
     scrapers: ScraperConfig = Field(default_factory=ScraperConfig)
     enrichment: EnrichmentConfig = Field(default_factory=EnrichmentConfig)
+    filters: FilterConfig = Field(default_factory=FilterConfig)
+    ranking: RankingConfig = Field(default_factory=RankingConfig)

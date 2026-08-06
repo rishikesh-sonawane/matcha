@@ -245,7 +245,40 @@ enrichment:
   top_n: 30          # how many ranked jobs to enrich
   timeout: 30        # seconds per job-detail call
   max_workers: 5     # parallel detail fetches (capped at 5)
+filters:
+  days: 7            # job-age window — the central filter is the FINAL authority
+  strict_age: false  # drop unknown-age jobs instead of tagging [age?]
+  min_must_matches: 1  # must-have skills required in title+description
+  soft_must_skills: false  # keep below-threshold jobs, flagged for a rank cap
+  remote: false      # remote-only mode
+  min_salary: 0      # LPA floor (0 = off)
+  drop_unknown_salary: false  # drop jobs without a parseable salary
 ```
+
+**Filters** (Phase 2): after dedup, every job is normalized (`listed_epoch`,
+`salary_int` LPA, synonym-canonicalized `city`/`region`, `remote_ok`) and then
+run through a **central filter pipeline** in a fixed order — quality → age →
+must-skills → location → salary — each reporting exactly how many jobs it
+cut. The TUI shows the filter summary before results
+(`Filtered: 96 kept (age −142 · must −21 · loc −33 …)`) and tags uncertain
+provenance (`[age?]` / `[salary?]`). Must-have skills, a salary floor, and a
+remote preference can be set in `~/.matcha/profile.json`
+(`must_have_skills`, `min_salary`, `remote_preference`) or via `filters:`
+above; `matcha --days N` overrides the age window for one run.
+
+**Ranking** (Phase 4): the heuristic scorer is now **confidence-weighted** —
+the skills/keyword dimensions scale by data richness (`data_quality`:
+`full` 1.0 · `partial` 0.85 · `snippet` 0.7), so a match on an empty field
+contributes ~0 and **full-data jobs outrank snippet-guesses**. Fresh postings
+(`listed_epoch`) earn up to +5, remote/hybrid jobs matching your
+`remote_preference` earn +3, and each matched must-have skill earns +2 (cap
++6). Soft-mode jobs (`soft_must_skills: true` that missed the must-skill
+bar) are capped at 45 so they never outrank hard matches. The **AI pass runs
+only on enriched candidates** (`data_quality` full/partial or a substantial
+description), and a flatline guard warns when the top-decile score spread is
+near zero (`ranking.normalize_scores: true` stretches it onto [5, 100]). The
+results table shows provenance tags next to each score: `[full]` / `[partial]`
+/ `[snippet]` plus `[age?]` / `[salary?]`.
 
 **Enrichment** (Phase 1): after ranking, the top `top_n` jobs get full
 descriptions + apply URLs via OpenCLI job-detail (`opencli linkedin
@@ -290,7 +323,7 @@ LinkedIn postings fall back to the zero-config Jina Reader
 | **LinkedIn** | Guest API endpoint (`/jobs-guest/api/seeMoreJobPostings`) | ~10 listings | Nothing |
 | **Indeed India** | `cloudscraper`-based HTML parsing on Python 3.9; falls back to `ddgs` (`site:in.indeed.com/viewjob`) on Python 3.14 | 5–25 listings | Nothing |
 | **RemoteOK** | Public JSON API filtered by keyword matching | ~8 listings | Nothing |
-| **Naukri** | `ddgs` API with `site:naukri.com` search, non-job content filtered out | 6–44 listings | Nothing |
+| **Naukri** | DDGS `site:naukri.com` discovery → real `job-listings-*` pages parsed for description/salary/skills (embedded JSON first, Jina render fallback); `ddgs` snippet fallback | 6–44 listings | Nothing |
 | **Web Search** | `ddgs` API with targeted `site:` queries on known job boards (LinkedIn, Greenhouse, Lever, Ashby) | 10–30 listings | Nothing |
 | **Google Jobs** | SerpAPI `google_jobs` engine (optional) | Rich listings | SerpAPI key |
 
@@ -300,14 +333,18 @@ LinkedIn postings fall back to the zero-config Jina Reader
 
 ### Heuristic Pass (all jobs)
 
-| Dimension | Weight | Method |
-|-----------|--------|--------|
-| Title Match | 20% | Token overlap between job title and profile title/headline |
+| Dimension | Max | Method |
+|-----------|-----|--------|
 | Skills Match | 35% | Ratio of profile skills found in job title + description |
-| Keyword Match | 15% | Profile keywords found in job posting text |
-| Seniority | 10% | Level alignment (entry/mid/senior) based on experience |
-| Location | 8% | City/region match; remote bonus |
-| *(Floor)* | *(Remainder)* | Score clamped to 0–100 |
+| Title Match | 25% | Token overlap between job title and profile title/headline |
+| Seniority | 15% | Level alignment (entry/mid/senior) based on experience |
+| Location | 15% | City/region match; remote bonus |
+| Keyword Match | 10% | Profile keywords found in job posting text |
+| Recency / workplace / must-skills | +11 | Fresh posting, remote-preference agreement, must-have coverage |
+
+Text-derived dimensions (skills, keywords) are scaled by **data confidence**
+(`full` 1.0 · `partial` 0.85 · `snippet` 0.7), so empty fields contribute ~0;
+soft-mode must-skill misses are capped at 45. Score clamped to 0–100 (floor 5).
 
 ### AI Pass (top 15 candidates)
 
@@ -369,7 +406,7 @@ matcha/
             ├── utils.py     # Resilient HTTP client, rate limiter, cache
             ├── indeed.py    # Indeed: cloudscraper → ddgs fallback
             ├── linkedin.py  # LinkedIn guest API
-            ├── naukri.py    # Naukri via ddgs API search
+            ├── naukri.py    # Naukri job-page parse (job-page ▸ ddgs)
             ├── remoteok.py  # RemoteOK public JSON API
             ├── serpapi_jobs.py  # Google Jobs via SerpAPI (optional)
             ├── web_search.py    # ddgs API with targeted site: queries

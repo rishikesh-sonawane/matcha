@@ -155,6 +155,10 @@ class TestJSONParsing(unittest.TestCase):
     def test_parse_clean_object(self):
         self.assertEqual(oc._parse_json_output('{"ok": true}'), {"ok": True})
 
+    def test_parse_envelope_with_nested_array(self):
+        # an envelope dict containing an array must win over its inner array
+        self.assertEqual(oc._parse_json_output('{"rows": [{"a": 1}]}'), {"rows": [{"a": 1}]})
+
     def test_parse_with_noise_prefix_and_ansi(self):
         text = '\x1b[32mdebug\x1b[0m\nINFO progress\n[{"title": "x"}]'
         self.assertEqual(oc._parse_json_output(text), [{"title": "x"}])

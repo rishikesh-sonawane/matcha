@@ -26,8 +26,16 @@ from rich.table import Table
 from matcha.actions import is_job_saved, load_saved_jobs, save_job, unsave_job
 from matcha.ai import ai_generate_queries, check_ai_available
 from matcha.config import load_config, save_config
-from matcha.matcher import compute_relevance, compute_relevance_ai
+from matcha.filters import apply_filters, build_filter_summary, provenance_tags
+from matcha.matcher import (
+    ai_eligible,
+    compute_relevance,
+    compute_relevance_ai,
+    detect_flatline,
+    normalize_scores,
+)
 from matcha.models import ScraperResult
+from matcha.normalization import normalize_jobs
 from matcha.profile import build_or_load_profile
 from matcha.settings import load_settings
 from matcha.sources.indeed import search_indeed_jobs
@@ -295,6 +303,12 @@ def search_jobs(
                     pending[source_name] = False
                     if result.errors:
                         source_errors.setdefault(source_name, []).extend(result.errors)
+                    # Provenance is data (strategy §6.2): stamp the result-level
+                    # quality/backend onto every row so ranker + TUI tags work for
+                    # all sources (only Naukri/enrichment set per-row flags today).
+                    for job in result.jobs:
+                        job.setdefault("data_quality", result.data_quality)
+                        job.setdefault("backend", result.backend)
                     unique = deduplicate(result.jobs)
                     source_counts[source_name] = source_counts.get(source_name, 0) + len(unique)
                     all_jobs.extend(unique)
@@ -326,6 +340,7 @@ def rank_jobs(
     use_ai: bool = False,
     ai_top_n: int = 30,
     ai_timeout: int = 60,
+    normalize_flatline: bool = False,
 ) -> list[RankedJob]:
     ranked: list[RankedJob] = []
     for job in jobs:
@@ -333,30 +348,47 @@ def rank_jobs(
         ranked.append((relevance["score"], job, relevance["reasons"]))
     ranked.sort(key=lambda x: x[0], reverse=True)
 
+    # Phase 4 (§9.3): the AI pass runs only on enriched candidates — the prompt
+    # weights finally have real description/location inputs, never snippet noise.
     if use_ai:
-        ai_top_n = min(len(ranked), ai_top_n)
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            console=console,
-            transient=True,
-        ) as progress:
-            task = progress.add_task("[yellow]AI-scoring top candidates...", total=ai_top_n)
-            with ThreadPoolExecutor(max_workers=min(ai_top_n, 8)) as ai_executor:
-                ai_futures = {
-                    ai_executor.submit(
-                        compute_relevance_ai, ranked[i][1], profile, ai_timeout=ai_timeout
-                    ): i
-                    for i in range(ai_top_n)
-                }
-                for f in as_completed(ai_futures):
-                    i = ai_futures[f]
-                    relevance = f.result()
-                    if relevance:
-                        ranked[i] = (relevance["score"], ranked[i][1], relevance["reasons"])
-                    progress.update(task, advance=1)
-        ranked.sort(key=lambda x: x[0], reverse=True)
+        ai_idx = [i for i, (_, job, _) in enumerate(ranked) if ai_eligible(job)]
+        ai_idx = ai_idx[: min(len(ai_idx), ai_top_n)]
+        if ai_idx:
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                console=console,
+                transient=True,
+            ) as progress:
+                task = progress.add_task("[yellow]AI-scoring top candidates...", total=len(ai_idx))
+                with ThreadPoolExecutor(max_workers=min(len(ai_idx), 8)) as ai_executor:
+                    ai_futures = {
+                        ai_executor.submit(
+                            compute_relevance_ai, ranked[i][1], profile, ai_timeout=ai_timeout
+                        ): i
+                        for i in ai_idx
+                    }
+                    for f in as_completed(ai_futures):
+                        i = ai_futures[f]
+                        relevance = f.result()
+                        if relevance:
+                            ranked[i] = (relevance["score"], ranked[i][1], relevance["reasons"])
+                        progress.update(task, advance=1)
+            ranked.sort(key=lambda x: x[0], reverse=True)
+
+    # Phase 4 (§9.4): calibration guard on the FINAL scores (post-AI, so the
+    # presented distribution is what we judge). Homogeneous scores mean the
+    # heuristic couldn't separate signal; flag it and optionally spread them.
+    if detect_flatline([r[0] for r in ranked]):
+        logger.warning(
+            "Score distribution is flat (top-decile spread < %.1f) — results are "
+            "homogeneous; enriched jobs should outrank snippet-guesses",
+            5.0,
+        )
+        if normalize_flatline:
+            scores = normalize_scores([r[0] for r in ranked])
+            ranked = [(scores[i], ranked[i][1], ranked[i][2]) for i in range(len(ranked))]
 
     return ranked
 
@@ -400,6 +432,8 @@ def build_results_table(
             score_color = "red"
         url = job.get("url", "")
         saved_mark = " [yellow]\u2605[/yellow]" if url and is_job_saved(url, saved_ids) else ""
+        # Provenance tags (strategy §9.6): [full]/[partial]/[snippet] + [age?]/[salary?].
+        tags = "".join(f"[dim][{t}][/dim]" for t in provenance_tags(job))
         row_style = (
             "reverse bold" if highlight is not None and (i - 1) == (start + highlight) else None
         )
@@ -408,7 +442,7 @@ def build_results_table(
             job.get("title", "N/A") + saved_mark,
             job.get("company", "N/A"),
             job.get("source", "N/A"),
-            f"[{score_color}]{score}%[/{score_color}]",
+            f"[{score_color}]{score}%[/{score_color}]{tags}",
             style=row_style,
         )
 
@@ -479,6 +513,7 @@ def prompt_loop(
     source_counts: dict[str, int],
     source_errors: dict[str, list[str]],
     ai_enabled: bool,
+    filter_summary: str = "",
 ) -> str | None:
     if not ranked:
         console.print("[yellow]No jobs found. Try different search terms.[/yellow]")
@@ -497,6 +532,8 @@ def prompt_loop(
     ai_tag = " [bold yellow](AI)[/bold yellow]" if ai_enabled else ""
     console.print(f"\n[bold]Found {len(ranked)} total jobs[/bold]{ai_tag}")
     console.print("  " + " | ".join(summary_parts))
+    if filter_summary:
+        console.print(f"  [dim]Filtered: {len(ranked)} kept ({filter_summary})[/dim]")
     if error_parts:
         console.print("  [bold]Errors:[/bold] " + " | ".join(error_parts))
 
@@ -731,6 +768,12 @@ def run() -> None:
         "--non-interactive", "-b", action="store_true", help="Skip prompts (requires YAML config)"
     )
     parser.add_argument("--config", type=str, default=None, help="Path to YAML config file")
+    parser.add_argument(
+        "--days",
+        type=int,
+        default=None,
+        help="Only jobs posted within N days (central filter; overrides settings)",
+    )
     args = parser.parse_args()
 
     if args.command == "doctor":
@@ -782,7 +825,8 @@ def run() -> None:
             or config.get("last_location")
             or ""
         )
-        default_days = config.get("last_days") or settings["search"].get("days", 7)
+        last_days = config.get("last_days")
+        default_days = last_days if last_days is not None else settings["search"].get("days", 7)
 
         if args.non_interactive:
             query = default_query
@@ -801,9 +845,13 @@ def run() -> None:
                 "Show jobs posted within how many days?", default=str(default_days)
             )
             try:
-                days = max(1, int(days_str))
+                days = max(0, int(days_str))
             except ValueError:
                 days = None
+
+        if args.days is not None:
+            # --days 0 = today only (strategy §7.1); don't let falsy-0 be ignored.
+            days = max(0, int(args.days))
 
         save_config({"last_query": query, "last_location": location, "last_days": days})
         profile["location"] = location
@@ -832,9 +880,36 @@ def run() -> None:
                 continue
             break
 
+        # Phase 2 (strategy §7): normalize → central filter pipeline. The age
+        # filter is the FINAL authority on job freshness — scrapers pass the
+        # same window only to fetch less, never to bypass it.
+        filters_cfg = dict(settings.get("filters", {}))
+        if days is not None:
+            filters_cfg["days"] = days
+        with console.status("[yellow]Filtering results...[/yellow]"):
+            jobs = normalize_jobs(jobs)
+            jobs, filter_reports = apply_filters(jobs, profile, filters_cfg)
+        filter_summary = build_filter_summary(filter_reports)
+        if not jobs:
+            console.print("[yellow]No jobs survived the filters.[/yellow]")
+            if filter_summary:
+                console.print(f"  [dim]Dropped: {filter_summary}[/dim]")
+            result = Prompt.ask("Search again?", default="y")
+            if result.lower() in ("y", "yes"):
+                continue
+            break
+
         ai_top_n = settings.get("ai", {}).get("top_n", 30)
         ai_timeout = settings.get("ai", {}).get("timeout", 60)
-        ranked = rank_jobs(jobs, profile, use_ai=use_ai, ai_top_n=ai_top_n, ai_timeout=ai_timeout)
+        normalize_flatline = settings.get("ranking", {}).get("normalize_scores", False)
+        ranked = rank_jobs(
+            jobs,
+            profile,
+            use_ai=use_ai,
+            ai_top_n=ai_top_n,
+            ai_timeout=ai_timeout,
+            normalize_flatline=normalize_flatline,
+        )
 
         # Phase 1 part 3 (strategy §7 step 7 / §8): enrich the top N with real
         # posting details (OpenCLI job-detail, Jina fallback). Silently skips
@@ -853,7 +928,13 @@ def run() -> None:
                 )
             if enriched:
                 console.print(f"[dim]Enriched [cyan]{enriched}[/cyan] top jobs with details[/dim]")
-        result = prompt_loop(ranked, source_counts, source_errors, ai_enabled=use_ai)
+        result = prompt_loop(
+            ranked,
+            source_counts,
+            source_errors,
+            ai_enabled=use_ai,
+            filter_summary=filter_summary,
+        )
 
         if result != "re_run":
             break

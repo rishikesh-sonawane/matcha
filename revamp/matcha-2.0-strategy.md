@@ -11,6 +11,49 @@
 > `sources/enrichment.py`: OpenCLI job-detail top-N parallel ≤5 + per-job
 > isolation, Jina zero-config fallback (ungated by consent, capped at 10),
 > TUI shows salary/apply_url and `o` opens apply_url)
+> Rev 7 (adds: Phase 1 Exa Web Search backend DONE — §6.2/§6.3: read-only
+> mcporter config probing + dual-syntax `mcporter call` (openclaw 0.8+
+> `key=value` first, legacy 0.7 DSL retry), `includeDomains` retry guard,
+> error-envelope detection; Web Search degrades to DDGS when mcporter absent)
+> Rev 8 (adds: Phase 1 `agent_reach_io.py` DONE — §6.5 implemented:
+> `agent-reach doctor --json` snapshot (TTL-cached 30s, credential-scrubbed)
+> with own-probe degradation + one-time F-14 hint; `gh_profile()` read-only
+> via hosts.yml/env tokens (never `gh auth status`); `seed_ai_config()`
+> borrows groq_api_key from `~/.agent-reach/config.yaml`; exa_search
+> delegates to backends/exa.py)
+> Rev 9 (adds: **Phase 1 COMPLETE** — Naukri job-page extraction DONE — §6.2
+> Naukri row implemented in `sources/naukri.py` (`job-page ▸ ddgs`): DDGS
+> discovery → fetch real `job-listings-*` pages (embedded JSON-LD /
+> `__NEXT_DATA__` first, Jina Reader render fallback — verified live that
+> Naukri serves an empty client-rendered Next.js shell to plain requests and
+> the internal jobapi rejects unauthenticated calls), parse description /
+> salary / experience / key skills / apply URL, detect expired→search-page
+> redirects, per-job isolation + provenance; `check()` hermetic. 307/307 tests.)
+> Rev 10 (adds: **Phase 2 DONE — centralized filter pipeline** — §7 implemented in
+> `normalization.py` (canonical `listed_epoch` / `salary_int` LPA parser incl.
+> lakhs/crores/monthly/K forms, city synonyms + region map, `remote_ok`,
+> `normalize_jobs`) and `filters.py` (fixed order quality → age → must-skills →
+> location → salary; `FilterReport` per stage; unknown-age `[age?]` + unknown-
+> salary `[salary?]` tagging; `--days 0` = today only, `--strict-age` drops
+> unknown-age; must-skills word-boundary + `k8s↔kubernetes` synonym map, soft
+> mode; location exact-city ≥ region ≥ remote-friendly; salary floor on
+> `salary_int`). `FilterConfig` + `settings.filters` defaults wired; `main.py`
+> normalizes → filters after search, prints per-stage counts, tags `[age?]`/
+> `[salary?]` in the TUI. 371/371 tests; ruff/format/bandit clean.)
+> Rev 11 (adds: **Phase 4 DONE — ranking recalibration** — §9 implemented in
+> `matcher.py`: confidence-weighted scoring (`_data_confidence` full 1.0 /
+> partial 0.85 / snippet 0.7 scales the text-derived skills+keyword dimensions,
+> so a match on an empty field contributes ~0 and full-data jobs outrank
+> snippet-guesses), recency bonus (+5/3/1 by `listed_epoch`, unknown-age 0),
+> workplace bonus (+3 vs `remote_preference`), must-have-skill coverage bonus
+> (+2 each, cap +6, synonym-aware via `filters.matches_skill`), soft-mode rank
+> cap (`must_skills_soft` → ≤45); `rank_jobs` runs the AI pass **only on
+> enriched candidates** (`ai_eligible`) and applies the calibration guard
+> (`detect_flatline` + optional `normalize_scores` via `ranking.normalize_scores`);
+> TUI shows `[full]`/`[partial]`/`[snippet]` provenance tags (new
+> `filters.provenance_tags`) beside `[age?]`/`[salary?]`; every job row is
+> stamped with its `ScraperResult` `data_quality`/`backend` at ingest
+> (provenance is data). 401/401 tests; ruff/format/bandit clean.)
 
 ---
 
@@ -246,6 +289,22 @@ class Source(ABC):
 | **LinkedIn** | `opencli` (authenticated, 25–100/job, details) | `guest-api` (~10, no desc) | apply_url, salary, workplace_type, full description, applicants, listed |
 | **Indeed** (US index) | `opencli` (browser, bypasses Cloudflare; adapter is US-site — §6.3) | `html` (cloudscraper, py≤3.11) ▸ `ddgs` | salary, tags, full description via `indeed job` |
 | **Naukri** | `job-page` (parse real `job-listings-*` pages) | `ddgs` (link discovery → enrich) | real description from posting page |
+
+> ✅ **Naukri row implemented (Phase 1, 2026-08-06):** `sources/naukri.py`
+> backends `["job-page", "ddgs"]`. DDGS discovers candidate links; the
+> job-page backend fetches each real `job-listings-*` posting (cap 8/batch,
+> 12s timeout, ≤4 parallel, per-job isolated) and merges genuine fields.
+> **Verified live:** Naukri is a client-rendered Next.js RSC shell — plain
+> requests return ~15–35KB with empty `jobDetails:[]`, no JSON-LD; the
+> internal `jobapi/v3` endpoints 404/405 without a CSRF session. The page is
+> therefore fetched via **Jina Reader** (`r.jina.ai/<url>`, same zero-config
+> pattern as §8) and parsed from its markdown; a direct GET is still tried
+> first and its embedded `application/ld+json` JobPosting / `__NEXT_DATA__`
+> wins whenever Naukri server-renders again. Expired postings redirect to
+> search pages ("Jobs In ... - N Job Vacancies") — detected and kept as
+> snippets with `enrich_error`. Provenance: `data_quality` full/partial,
+> `enrich_source="job-page"`, result `backend="job-page"`; `check()` stays
+> hermetic (library-based) so doctor/contract tests stay offline-safe.
 | **RemoteOK** | `api` | — | structured, full description |
 | **Web Search** | `exa` (semantic, via mcporter) | `ddgs` | clean results, no regex-guessing |
 | **Career Sites** | `ddgs` (batched) | `exa` | snippet-level (enrichable when URL is a real posting) |
@@ -334,25 +393,49 @@ def probe_command(cmd, args=("--version",), timeout=10, retries=0,
   (e.g. stale `OPENCLI_DAEMON_PORT`). See §6.8.
 - Used by every `Source.check()` and by `agent_reach_io`.
 
-### 6.5 `agent_reach_io.py` (thin adapter)
+### 6.5 `agent_reach_io.py` (thin adapter) — IMPLEMENTED (Rev 8)
 
 ```python
-def agent_reach_available() -> bool           # shutil.which("agent-reach")
-def doctor_snapshot() -> dict | None           # `agent-reach doctor --json`
-def opencli_ready() -> bool                    # parsed from snapshot
-def exa_search(query, num=5) -> list[dict]     # `mcporter call 'exa.web_search_exa(...)'`
-def gh_profile() -> dict | None                # `gh api user/repos` (optional)
-def seed_ai_config() -> dict | None            # borrow groq_api_key if present
+def agent_reach_available() -> bool           # probe_command("agent-reach", ["--version"])
+def doctor_snapshot() -> dict | None           # `agent-reach doctor --json` (TTL-cached 30s)
+def opencli_ready() -> bool                    # snapshot-first, own probe fallback
+def exa_search(query, num=5) -> list[dict]     # delegates to backends/exa.py
+def gh_profile() -> dict | None                # gh api user (read-only; hosts.yml/env tokens)
+def seed_ai_config() -> dict | None            # borrow groq_api_key → {ai_key, ai_url, ai_model}
 ```
 
+Implemented in `agent_reach_io.py` (2026-08-06):
+
 - If Agent-Reach is installed, `check()` and enrichment read health from
-  `agent-reach doctor --json`. If not, Matcha uses its own probes. Standalone
-  always.
-- **Credential-boundary rule (verified):** when Agent-Reach is absent, inspect
-  `mcporter` config **read-only** (`MCPORTER_CONFIG` if set, else
-  `~/.mcporter/mcporter.json{,c}` then `<cwd>/config/mcporter.json`) — never
-  start `mcporter` just to check. Deliberately do **not** expand `imports`
-  (editor configs) — that widens the credential-read boundary. `gh` probes
+  `agent-reach doctor --json` (parsed `{channel: {status, name, message,
+  tier, backends, active_backend}}` — same shape as Matcha's own doctor). If
+  not, Matcha uses its own probes. Standalone always.
+- `doctor_snapshot()` is **TTL-cached (30s)** so repeated health reads don't
+  spawn a subprocess per call; channel messages are credential-scrubbed;
+  any parse/exit failure degrades to `None`. When agent-reach is absent a
+  **one-time warning** (F-14) is logged (`pip install agent-reach` optional).
+- `opencli_ready()` prefers the snapshot (any OpenCLI-backed channel with
+  status ok/warn = ready) and falls back to Matcha's loopback probe.
+- `gh_profile()` never runs `gh auth status` (writes a device-id) — it
+  accepts `GH_TOKEN`/`GITHUB_TOKEN` env or a github.com `hosts.yml` entry
+  (read-only, symlink-rejected), then `gh api user` with
+  `GH_TELEMETRY=false DO_NOT_TRACK=true GH_NO_UPDATE_NOTIFIER=1`.
+- `seed_ai_config()` reads `~/.agent-reach/config.yaml` read-only
+  (symlink-rejected, ≤1MB), borrows `groq_api_key`, returns
+  `{ai_key, ai_url: groq, ai_model}` for `matcha.ai.configure_ai`.
+- **mcporter probing (verified):** read `mcporter` config **read-only**
+  (`MCPORTER_CONFIG` if set, else `~/.mcporter/mcporter.json{,c}` then
+  `<cwd>/config/mcporter.json`) — never start `mcporter` just to check.
+  Deliberately do **not** expand `imports` (editor configs) — that widens the
+  credential-read boundary. Implemented in `backends/mcporter.py` (Phase 1).
+- **mcporter call syntax (verified 2026-08-06):** the CLI was rewritten
+  upstream — `wshobson/mcporter` 0.7.x used
+  `mcporter call 'exa.web_search_exa(query: "...", numResults: 5)'`;
+  `openclaw/mcporter` 0.8+ uses `mcporter call exa.web_search_exa
+  query="..." numResults=5`. `backends/exa.py` tries the current form first
+  and retries the legacy DSL on failure (dual syntax). `includeDomains`
+  (career-site ATS domains) may not parse as an array literal in either
+  syntax, so a failed call retries once without it. `gh` probes
   pass `GH_TELEMETRY=false DO_NOT_TRACK=true GH_NO_UPDATE_NOTIFIER=1` and
   doctor never runs `gh auth status` (it writes a device-id).
 
@@ -541,6 +624,13 @@ def enrich_job(job, timeout=30) -> dict:
 
 ## 9. Ranking — calibrated to "good relevant jobs"
 
+> ✅ **Implemented (Phase 4, 2026-08-06)** in `src/matcha/matcher.py` —
+> confidence-weighted dimensions (full 1.0 / partial 0.85 / snippet 0.7),
+> recency + workplace + must-have-skill-coverage signals, soft-mode rank cap,
+> AI pass gated to enriched candidates (`ai_eligible`), flatline guard with
+> optional normalization (`settings.ranking.normalize_scores`), and
+> `[full]`/`[partial]`/`[snippet]` provenance tags in the TUI (§9.6).
+
 1. **Score enriched descriptions** when `data_quality=="full"`, snippets
    otherwise; dimensions weighted by confidence (a match on an empty field
    contributes ~0).
@@ -617,9 +707,10 @@ pass. Prompt changes are diff-reviewable.
 
 ### 10.4 MCP usage
 
-- **Exa** — `agent_reach_io.exa_search` shells `mcporter call
-  'exa.web_search_exa(query: "...", numResults: 5)'`; used as Web Search
-  backend when the server is configured, DDGS otherwise.
+- **Exa** — `backends/exa.py` shells `mcporter call
+  exa.web_search_exa query="..." numResults=5` (legacy 0.7 DSL retried on
+  failure); used as Web Search backend when the server is configured (read-only
+  config probe), DDGS otherwise. Implemented Phase 1.
 - **Matcha MCP server** (optional) — expose `matcha_search`, `matcha_status`
   to any MCP-aware agent; same code path as `--json`, wrapped as MCP tools.
 - Never required to run; purely additive.
@@ -842,25 +933,47 @@ Naukri job-page extraction, `agent_reach_io`. **Also (start):** the
 entry-point migration deferred from Phase 0 — `[project]` + console script
 `matcha`, `pip install -e .`, bandit/pyinstaller/Dockerfile/README path
 updates, then **delete the root shims**.
+
+> ✅ **Phase 1 COMPLETE (2026-08-06).** All six items landed: entry-point
+> migration; OpenCLI backends (+ consent flow) for LinkedIn/Indeed; top-N
+> enrichment (`sources/enrichment.py`, §8); Exa Web Search backend (§6.2,
+> mcporter read-only probe); `agent_reach_io.py` (§6.5); Naukri job-page
+> extraction (§6.2 row above). 307/307 tests; ruff/format/bandit clean.
+
 **Accept:** LinkedIn ≥25 results with descriptions (consented); Indeed works on
 py3.14; doctor shows active backends; `matcha doctor --json` runs via the
 installed console script.
 
-### Phase 2 — Normalize + filters (2–3 days)
+### Phase 2 — Normalize + filters (2–3 days) ✅ COMPLETE (2026-08-06)
 `normalization.py`, `filters.py` (age/must-skills/location/salary/quality),
 filter report in TUI and JSON.
 **Accept:** `--days` is enforced centrally; unknown-age jobs tagged; filter
 counts shown; garbage jobs dropped.
+
+> ✅ **Phase 2 COMPLETE (2026-08-06).** `normalization.py` + `filters.py`
+> landed and are wired into `main.py` (normalize → filter after search;
+> `--days`/`--strict-age`; per-stage counts + `[age?]`/`[salary?]` tags).
+> `FilterConfig` + `settings.filters` defaults; 64 hermetic tests. 371/371
+> tests; ruff/format/bandit clean.
 
 ### Phase 3 — Enrichment (2–3 days)
 `enrichment.py`, model + DB columns, TUI detail fields, apply_url-aware `o`.
 **Accept:** top-30 LinkedIn jobs enriched ≤60s parallel; per-job failures
 graceful.
 
-### Phase 4 — Ranking recalibration (2–3 days)
+### Phase 4 — Ranking recalibration (2–3 days) ✅ COMPLETE (2026-08-06)
 Confidence-weighted heuristic, recency/workplace signals, AI on enriched
 candidates, flatline detection, verdict pass, provenance tags.
 **Accept:** score distribution spreads; full-data jobs outrank snippet-guesses.
+
+> ✅ **Phase 4 COMPLETE (2026-08-06).** Confidence-weighted heuristic scoring
+> (data-richness × dimension weights), recency/workplace/must-skill signals,
+> `must_skills_soft` rank cap, AI pass gated to enriched candidates,
+> flatline detection + optional normalization, `[full]`/`[snippet]`
+> provenance tags, per-row provenance stamping at ingest. 30 hermetic tests
+> (`tests/test_ranking.py`). **Deferred:** AI verdict pass (top-K "would you
+> apply?" line, §9.5) — optional, AI-gated. 401/401 tests;
+> ruff/format/bandit clean.
 
 ### Phase 5 — AI provider-agnostic + cache + budget (2–3 days)
 `ai/client.py`, presets (Groq/Kilo/OpenRouter/local), model tiers, disk cache,
@@ -881,21 +994,23 @@ coverage ≥80%, README + docs.
 
 ## 19. Gaps Closed (rev 2 checklist)
 
-- [ ] Job-age filter enforced **centrally** with normalized `listed_epoch` + unknown-age tagging
-- [ ] Must-have-skills dealbreaker gate (with synonym map, soft mode)
-- [ ] Location/remote filter with city synonym normalization
-- [ ] Salary-floor filter + `[salary?]` tagging
-- [ ] Data-quality gate (placeholder/tracking-URL/garbage rejection)
+- [x] Job-age filter enforced **centrally** with normalized `listed_epoch` + unknown-age tagging
+- [x] Must-have-skills dealbreaker gate (with synonym map, soft mode)
+- [x] Location/remote filter with city synonym normalization
+- [x] Salary-floor filter + `[salary?]` tagging
+- [x] Data-quality gate (placeholder/tracking-URL/garbage rejection)
 - [ ] Canonical URL + fuzzy dedup with **keep-best by data_quality**
 - [ ] New-vs-seen tracking for `watch`
 - [ ] Circuit breakers per source
 - [ ] Typed error taxonomy; zero bare `except`
 - [ ] AI: provider-agnostic REST client, free-tier presets, model tiers, disk cache, budget guard, heuristic-only fallback
-- [ ] MCP: Exa via mcporter; optional Matcha MCP server; never required
+- [x] MCP: Exa via mcporter; optional Matcha MCP server; never required
 - [ ] `src/` package layout; mypy strict; ruff; coverage gate
 - [ ] Pydantic models used at runtime (jobs/profile/filters/settings)
 - [ ] Config hardening: atomic writes, 0600, symlink rejection, masking
-- [ ] Filter/pipeline stage counts surfaced in TUI + JSON
+- [x] Filter/pipeline stage counts surfaced in TUI + JSON
+- [x] Confidence-weighted scoring + provenance tags ([full]/[snippet]) — Phase 4
+- [ ] AI verdict pass (top-K "would you apply?" line) — optional, AI-gated
 - [ ] RSS source + GitHub profile enrichment (optional)
 
 ---

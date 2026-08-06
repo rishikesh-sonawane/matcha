@@ -273,7 +273,9 @@ def _extract_error(raw: str, code: int) -> str:
 def _parse_json_output(text: str) -> Any | None:
     """Tolerant JSON extraction: strips ANSI codes and leading noise."""
     text = re.sub(r"\x1b\[[0-9;]*m", "", text).strip()
-    starts = [i for i in (text.find("["), text.find("{")) if i != -1]
+    # Prefer the EARLIEST { or [ — an envelope dict with a nested results
+    # array must win over its inner array.
+    starts = sorted(i for i in (text.find("["), text.find("{")) if i != -1)
     for start in starts:
         try:
             return json.JSONDecoder().raw_decode(text[start:])[0]

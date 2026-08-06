@@ -33,6 +33,18 @@ _DEFAULTS: dict[str, Any] = {
         "timeout": 30,
         "max_workers": 5,
     },
+    "filters": {
+        "days": 7,
+        "strict_age": False,
+        "min_must_matches": 1,
+        "soft_must_skills": False,
+        "remote": False,
+        "min_salary": 0,
+        "drop_unknown_salary": False,
+    },
+    "ranking": {
+        "normalize_scores": False,
+    },
 }
 
 

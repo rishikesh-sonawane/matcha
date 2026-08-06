@@ -122,3 +122,247 @@
   saved-jobs enriched columns, filters module — do NOT start yet.
 
 ---
+
+## Session 8 — Exa Web Search backend (2026-08-06)
+
+**Goal:** Phase 1 Exa semantic search via mcporter, DDGS fallback (strategy
+§6.2/§6.3, F-14).
+
+- **Research:** mcporter CLI rewritten upstream — `wshobson/mcporter` 0.7.x
+  DSL (`call 'exa.web_search_exa(query: "...", numResults: 5)'`) →
+  `openclaw/mcporter` 0.8+ (`call exa.web_search_exa query="..."
+  numResults=5`). Exa MCP tool is `web_search_exa` → `{results: [{title,
+  url, publishedDate, author, text, score}]}`; no `job_listing` category →
+  scoped via `includeDomains` (career-site ATS domains). Verified live:
+  mcporter NOT installed on this machine.
+- **Built:** `backends/mcporter.py` (read-only config inspection —
+  `MCPORTER_CONFIG` → home → project layers; `server_names` +
+  `imports_unchecked`; never starts mcporter, never expands editor imports —
+  credential boundary) and `backends/exa.py` (`exa_status` off/warn/error
+  semantics — configured is warn, never ok since remote unverified;
+  `exa_search` with `startPublishedDate` recency; `run_mcporter_call` dual
+  syntax with first-error reporting). Web Search dispatches exa-when-
+  configured ▸ ddgs; check() honest.
+- **Review fixes:** (1) `includeDomains` array literal may not parse in
+  either mcporter syntax → retry once without it; (2) error envelopes
+  (`success: false`/`error` key, no results) were reported as empty success
+  → now failures with extracted messages; (3) `_extract_mcporter_error`
+  only matched top-level `Error:` lines → JSON-tolerant extraction
+  (`_find_error_message`); (4) first (most informative) syntax error kept;
+  (5) latent earliest-`{`/`[` JSON parse bug ALSO fixed in
+  `backends/opencli.py` (+ regression test).
+- **Validation (all green):** 252/252 tests (unittest + pytest); ruff /
+  format / bandit clean; live smoke: `exa_status()==off`,
+  `exa_configured()==False`, `exa_search()==None`, web_search falls back to
+  `ddgs` (11 jobs) — correct graceful degradation.
+- **Docs:** strategy → Rev 7 (§6.3 dual-syntax + read-only probe verified,
+  roadmap checkbox checked); analysis F-14 → RESOLVED (Exa part). Memory
+  bank synced.
+- **Next:** Naukri job-page extraction; `agent_reach_io.py` (verify
+  `agent-reach doctor --json` shape in `~/Code/projects/Agent-Reach`
+  first). Phase 2 boundary: do NOT start yet.
+
+---
+
+## Session 9 — `agent_reach_io.py` thin adapter (2026-08-06)
+
+**Goal:** Phase 1 `agent_reach_io.py` — reuse `agent-reach doctor --json`
+health when present, degrade to Matcha's own probes when absent (F-14),
+per strategy §6.5.
+
+- **Verified (Agent-Reach v1.5.0):** `agent-reach --version` exists
+  (side-effect-free probe); `agent-reach doctor --json` emits
+  `{channel: {status, name, message, tier, backends, active_backend}}` —
+  same shape as Matcha's own doctor; OpenCLI channels report `backends:
+  ["OpenCLI"]` and `warn` when bridge-connected; gh auth lives in
+  `hosts.yml` (never `gh auth status` — writes device-id); `groq_api_key`
+  lives in `~/.agent-reach/config.yaml`.
+- **Built:** `agent_reach_io.py` (strategy §6.5, all six functions):
+  `agent_reach_available()`; `doctor_snapshot()` (`agent-reach doctor
+  --json`, TTL-cached 30s, credential-scrubbed messages, None on any
+  failure); `opencli_ready()` snapshot-first (any OpenCLI channel ok/warn =
+  ready) with own-probe fallback; `exa_search()` delegates to
+  `backends/exa.py` (code reuse); `gh_profile()` read-only (GH_TOKEN/
+  GITHUB_TOKEN env OR hosts.yml, then `gh api user` with read-only env);
+  `seed_ai_config()` borrows groq_api_key → `{ai_key, ai_url, ai_model}`.
+  One-time **warning**-level F-14 hint when agent-reach absent.
+- **Review fixes:** gh env-token support (GH_TOKEN/GITHUB_TOKEN — reference
+  parity), hint raised INFO→WARNING (visible in CLI), `_opencli_ready_from_
+  snapshot` any-channel semantics, thread-safety comment on module globals,
+  GROQ_MODEL documented as a seed default.
+- **Validation (all green):** 283/283 tests (unittest + pytest); ruff /
+  format / bandit clean. Live smoke: `agent_reach_available()==False` +
+  one-time warning fired; `doctor_snapshot()==None`; `opencli_ready()==
+  False` (own probe); **`gh_profile()` returned the real GitHub profile
+  read-only from hosts.yml**; `seed_ai_config()==None` (no agent-reach
+  config).
+- **Docs:** strategy → Rev 8 (§6.5 marked IMPLEMENTED + adapter facts);
+  analysis F-14 → fully RESOLVED (Exa part + agent_reach_io part). Memory
+  bank synced.
+- **Next:** Naukri job-page extraction (last Phase-1 item); Phase 2 boundary:
+  re-rank on enriched signals, saved-jobs enriched columns, filters module
+  — do NOT start yet.
+
+---
+
+## Session 10 — Naukri job-page extraction (2026-08-06)
+
+**Goal:** Phase 1 last item — parse real `job-listings-*` posting pages so
+Naukri yields genuine descriptions/salary/skills instead of snippet guesses
+(strategy §6.2 row: `job-page ▸ ddgs`).
+
+- **Research (live, 2026-08-06):** Naukri serves a **client-rendered Next.js
+  RSC shell** — plain requests return a ~15–35KB page with empty
+  `jobDetails:[]`, no JSON-LD, no meta/og tags; the internal `jobapi/v3`
+  endpoints reject unauthenticated calls (404/405 without CSRF session).
+  **Jina Reader (`r.jina.ai/<url>`) renders real content** (47KB markdown,
+  browser-like) — the workable zero-config fetch (same pattern as
+  enrichment.py). DDGS-indexed Naukri URLs are mostly **expired** (Feb–May
+  2026 IDs vs Aug 2026) → they redirect to "Jobs In ... - N Job Vacancies"
+  search pages — must be detected + skipped.
+- **Built (`sources/naukri.py`):** backends `["job-page", "ddgs"]`;
+  `search_naukri_jobs(..., backend=)` dispatch. job-page = DDGS discovery →
+  parallel (≤4 workers) fetch of real postings (cap `_JOB_PAGE_MAX=8`,
+  timeout 12s): direct GET with browser headers only when server-rendered
+  (≥50KB or `__NEXT_DATA__`/`ld+json` markers), else Jina render. Parsers:
+  `_parse_embedded` (schema.org JobPosting JSON-LD + `__NEXT_DATA__`
+  recursive walk) and `_parse_rendered_text` (markdown: "About the job"
+  description, `₹a-b LPA` salary, `X-Y Years` experience, Key Skills,
+  posted date, Apply link, title/company/location with URL-slug fallbacks
+  for company + Indian cities). `_is_search_page_render` catches expired
+  redirects. Per-job isolation (`enrich_error`), provenance
+  (`data_quality` full/partial, `enrich_source="job-page"`, result backend
+  flips to job-page). `check()` stays hermetic (ok/library-based) so
+  doctor + contract tests remain offline-safe. `limiter.set_rate("naukri.com", 6)`.
+- **Review fixes:** (1) markdown `**bold**`/`## ATX` headings not matched by
+  section regexes → `_plain()` strips emphasis before heading matches;
+  (2) JSON-LD currency lives on `MonetaryAmount`, not the value block;
+  (3) failed fetches explicitly tag `data_quality="snippet"`;
+  (4) multi-word company slugs (`tata-consultancy-services`) → fold generic
+  company words (services/solutions/consultancy...) up to 3 chunks;
+  (5) title artifacts from odd renders (`## Job description`, numbered
+  lists, "Employment Type:" lines) rejected by `_TITLE_ARTIFACTS` +
+  `_is_usable_title` so the snippet title is kept.
+- **Validation (all green):** 307/307 tests (unittest + pytest); ruff /
+  format / bandit clean. Live smoke: `search_naukri_jobs("python
+  developer", days=30)` → job-page backend, 8–9 jobs, real salaries
+  (`₹7-12 Lacs`, `₹5-10 Lacs`), descriptions parsed (data_quality full),
+  expired pages skipped, one failed fetch isolated as snippet. A second
+  run hit DDGS junk results (no job-listings URLs) → correctly stayed on
+  `ddgs`/snippet with zero fetches.
+- **Docs:** strategy → Rev 9 (§6.2 Naukri row + verified-facts note,
+  roadmap checkbox); analysis Naukri note → RESOLVED (Jina-render path,
+  not direct curl). Memory bank synced.
+- **Next:** **Phase 1 COMPLETE.** Phase 2 boundary: normalization + filters
+  module (central `--days` enforcement, must-skills/location/salary/
+  quality gates), re-rank on enriched signals, saved-jobs enriched columns
+  — do NOT start yet.
+
+---
+
+## Session 11 — Phase 2: Normalize + central filters (2026-08-06)
+
+**Goal:** Phase 2 — `normalization.py` + `filters.py` (quality → age →
+must-skills → location → salary) with per-stage counts in the TUI (strategy §7).
+
+- **Built (`src/matcha/normalization.py`):** `normalize_job` (in place,
+  additive) sets `listed_epoch` (relative "X days ago", ISO-8601, month-name
+  dates incl. "Posted:" prefix, RemoteOK `epoch` int, existing key),
+  `salary_int` (upper-bound LPA: LPA ranges, Lacs, Crores, Indian annual
+  "₹8,00,000 - ₹12,00,000", per-month ×12, "₹30-40K per month"; **bare
+  numbers only count with a currency prefix** so "3-6 Years" never parses as
+  salary), `city`/`region` synonym maps (Bangalore→Bengaluru, Gurgaon→
+  Gurugram, Trivandrum→Thiruvananthapuram, remote/WFH→Remote; state/NCR
+  region map), `remote_ok` (location/workplace/description; hybrid counts).
+- **Built (`src/matcha/filters.py`):** `FilterReport` dataclass (name/kept/
+  dropped/unknown/reason/tags) + the five fixed-order stages — **quality**
+  (empty title, both-placeholder F-12 rule, unresolved tracking URLs, no
+  URL; placeholder-company-alone tagged `partial`) → **age** (days window;
+  unknown tagged `age:"unknown"` + kept, `strict_age` drops, `days=0` = today
+  only) → **must-skills** (word-boundary + synonym map k8s↔kubernetes,
+  aws↔amazon web services, ci/cd↔gitops; `min_must_matches`;
+  `soft_must_skills` flags instead of dropping) → **location** (exact city ≥
+  region fallback; remote acceptable per `remote_preference`; `remote: true`
+  = remote-only; unknown location kept) → **salary** (LPA floor from profile
+  or settings; unknown tagged `salary_tag:"unknown"` + kept,
+  `drop_unknown_salary`). `apply_filters` returns `(kept, reports)` with
+  per-stage exception isolation; `build_filter_summary` renders the counts.
+- **Wiring:** `FilterConfig` pydantic + `Settings.filters` defaults + `Job`/
+  `Profile` §14 fields; main.py inserts `normalize_jobs` → `apply_filters`
+  between search and rank (the age filter is the FINAL freshness authority;
+  scrapers keep passing the window only to fetch less), adds a `--days` CLI
+  override, prints the "Filtered: N kept (…)" line in the results summary,
+  and tags `[age?]`/`[salary?]` next to match scores.
+- **Review fixes (self-caught via smoke + review):** stage dispatch passed 3
+  args to 1-arg/2-arg filters → every stage crashed into the failure path
+  (uniform `(jobs, profile, cfg)` signatures); `_MONTHLY_PAT` missed
+  "a month"; K-unit math wrong (`×12/100`, not `/1000`) + ordering so
+  "₹30-40K per month" wins the K path; hybrid → remote_ok; "Posted:" prefix
+  stripped before ISO parse; `₹10L` shorthand unit; `days=0` today-only
+  semantics (**self-review pass:** `--days 0` was silently ignored — `if
+  args.days:` is falsy for 0, interactive clamped `max(1, …)`, and
+  `default_days = last_days or 7` swallowed a saved 0; the age filter's
+  `cutoff=now` for days=0 also dropped "today"-listed jobs whose epoch
+  parses just before now → CLI now uses `is not None` + `max(0, …)`, and
+  the filter uses a one-day window for days=0; regression test added).
+- **Validation (all green):** 371/371 tests (unittest + pytest) — +64 new
+  (`test_normalization.py` 26, `test_filters.py` 38); ruff / format / bandit
+  clean. Live smoke of the full pipeline verified exact per-stage counts and
+  the surviving-job set (quality −1 · age −1 · must −1 · loc −1 → 1 kept).
+- **Docs:** strategy → Rev 10 (§7 marked implemented + settings YAML); README
+  filters YAML example + Filters section. Memory bank synced.
+- **Next:** Phase 4 boundary: ranking recalibration (confidence-weighted,
+  AI verdict, `must_skills_soft` rank cap, `[full]`/`[snippet]` tags);
+  saved-jobs enriched columns — do NOT start yet.
+
+---
+
+## Session 12 — Phase 4: Ranking recalibration (2026-08-06)
+
+**Goal:** Phase 4 — confidence-weighted scoring on enriched data, recency /
+workplace / must-skill signals, soft-mode rank cap, provenance tags (strategy §9).
+
+- **Built (`src/matcha/matcher.py`):** `compute_relevance` keeps the base
+  35/25/15/15/10 max weights but scales the text-derived skills + keyword
+  dimensions by `_data_confidence` (data_quality `full` 1.0 · `partial` 0.85 ·
+  `snippet` 0.7; description-length proxy only for unstamped rows) so a match
+  on an empty field contributes ~0. New signals: `_recency_bonus` (+5/<3d,
+  +3/<7d, +1/<14d; unknown age 0), `_workplace_bonus` (+3 when remote_ok /
+  workplace agrees with `remote_preference`), `_must_skills_bonus` (+2 per
+  matched must-have skill, cap +6, synonym-aware). Soft cap: `must_skills_soft`
+  → ≤45. `detect_flatline` (top-decile spread < 5, needs ≥15 scores — the
+  first version flagged everything on 10-score batches) + `normalize_scores`
+  (monotonic stretch to [5,100]). `ai_eligible` (full/partial or ≥60-char
+  description).
+- **Wiring:** `main.py search_jobs` now stamps every row with its
+  result-level `data_quality`/`backend` (provenance is data — only
+  Naukri/enrichment set per-row flags before; without this the TUI tags and
+  confidence scaling were dead for most sources). `rank_jobs` gates the AI
+  pass to `ai_eligible` candidates and runs the flatline guard on FINAL
+  (post-AI) scores with an optional `normalize_flatline`;
+  `build_results_table` renders `[full]`/`[partial]`/`[snippet]` tags via new
+  `filters.provenance_tags`. `matches_skill` made public for reuse.
+  `RankingConfig(normalize_scores=False)` + `settings.ranking` defaults.
+- **Review fixes:** (1) `_FULL_DESC` bar lowered 60→30 so a 47-char legacy
+  description still counts as confident (test_core perfect-match asserts ≥70);
+  the explicit data_quality flag carries the real enriched-vs-snippet signal
+  and is now stamped at ingest; (2) flatline decile needed `max(3, len//10)`
+  and a ≥15-score gate (10-score batches were always "flat"); (3) AI executor
+  guarded with `if ai_idx:` (no empty progress bar); (4) flatline
+  detect/normalize moved AFTER the AI pass so the presented distribution is
+  judged; (5) test bug: `mock.patch.dict` ADDED to the real SCRAPER_DEFS →
+  all 5 real scrapers ran (network! 48 jobs) → `clear=True` (hermetic,
+  19s suite restored); (6) two merged-line syntax slips from editing fixed.
+- **Validation (all green):** 401/401 tests (unittest + pytest) — +30 new
+  (`tests/test_ranking.py`); ruff / format / bandit clean. Live smoke of
+  `rank_jobs` verified ordering: full-data fresh job 86.2 > soft-mode 45.0
+  (capped) > snippet 40.0, with correct provenance tags.
+- **Docs:** strategy → Rev 11 (§9 marked implemented + weights table,
+  Phase 4 ✅, §19 checklist += confidence-weighted scoring + verdict-pass
+  deferred); README Ranking paragraph + heuristic table updated. Memory bank
+  synced.
+- **Next:** Phase 5 boundary: AI provider-agnostic REST client (presets,
+  model tiers, disk cache, budget guard) + optional §9.5 verdict pass;
+  saved-jobs enriched columns — do NOT start yet.
+
+---

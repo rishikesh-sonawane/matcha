@@ -1,6 +1,7 @@
 import logging
 import re
 import time
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
 
@@ -72,6 +73,98 @@ def _is_older_than_days(text: str, max_days: int) -> bool:
 
 
 def search_web_for_jobs(
+    query: str,
+    location: str = "",
+    **kwargs: Any,
+) -> ScraperResult:
+    """Acquire web-search jobs, preferring the Exa semantic backend.
+
+    Phase 1 (strategy §6.2): when the Exa MCP server is configured in
+    mcporter, search semantically for clean job postings; degrade to the DDGS
+    keyword path on any failure (never return empty because Exa hiccuped).
+    """
+    backend = kwargs.pop("backend", None)
+    config = kwargs.pop("config", None)
+    # Exa needs no consent (it is a public search API, not the user's browser)
+    # and no config beyond the mcporter server being present.
+    if backend is None:
+        backend = "exa" if _exa_should_run(config) else "ddgs"
+    if backend == "exa":
+        result = _search_web_exa(query, location, **kwargs)
+        if result is not None:
+            return result
+        logger.info("Exa unavailable at search time; falling back to DDGS")
+    return _search_web_ddgs(query, location, **kwargs)
+
+
+def _exa_should_run(config: dict[str, Any] | None) -> bool:
+    del config  # exa configuration lives in the mcporter config files
+    from matcha.sources.backends.exa import exa_configured
+
+    return exa_configured()
+
+
+def _search_web_exa(
+    query: str,
+    location: str = "",
+    **kwargs: Any,
+) -> ScraperResult | None:
+    """Run an Exa semantic search; None = could not run (caller falls back)."""
+    from matcha.sources.backends.exa import exa_search
+
+    days = kwargs.get("days")
+    rows = exa_search(query, location=location, days=days, num=int(kwargs.get("num") or 5))
+    if rows is None:
+        return None
+
+    jobs: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for row in rows:
+        try:
+            title = _clean_title(str(row.get("title") or ""))
+            url = str(row.get("url") or "")
+            text = str(row.get("text") or "")
+            if not title or not url or url in seen:
+                continue
+            if days and _iso_older_than_days(str(row.get("publishedDate") or ""), days):
+                continue
+            seen.add(url)
+            job: dict[str, str] = {
+                "title": title,
+                "company": str(row.get("author") or "").strip()
+                or _extract_company(url, text, title),
+                "location": _extract_location(text, url, title),
+                "description": text[:1000],
+                "url": url,
+                "source": _identify_source(url),
+            }
+            if row.get("publishedDate"):
+                job["listed"] = str(row["publishedDate"])[:10]
+            if row.get("score") is not None:
+                job["score"] = float(row["score"])
+            jobs.append(job)
+        except (AttributeError, ValueError, TypeError) as e:
+            logger.warning("Failed to parse Exa result: %s", e)
+            continue
+
+    return ScraperResult(jobs=jobs, source="Web Search", backend="exa", data_quality="partial")
+
+
+def _iso_older_than_days(iso: str, days: int) -> bool:
+    """True when an ISO-8601 date is older than ``days`` (client-side recency)."""
+    if not iso:
+        return False
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    age_days = (datetime.now(timezone.utc) - dt).total_seconds() / 86400
+    return age_days > days
+
+
+def _search_web_ddgs(
     query: str,
     location: str = "",
     **kwargs: Any,
@@ -161,17 +254,29 @@ def search_web_for_jobs(
 
 
 class WebSearchSource(Source):
-    """Web Search — DDGS across career-site domains."""
+    """Web Search — Exa semantic backend (via mcporter), DDGS fallback."""
 
     name = "web_search"
-    description = "Web Search — DDGS across career-site domains"
-    backends = ["ddgs"]
+    description = "Web Search — Exa semantic, DDGS keyword fallback"
+    backends = ["exa", "ddgs"]
     tier = 0
 
     def check(self, config: dict[str, Any] | None = None) -> tuple[str, str]:
-        status, msg = self._ddgs_status(DDGS is not None)
-        self.active_backend = "ddgs" if status == "ok" else None
-        return status, msg
+        from matcha.sources.backends.exa import exa_status
+
+        for backend in self.ordered_backends(config):
+            if backend == "exa":
+                status, msg = exa_status(config)
+                if status in ("ok", "warn"):
+                    self.active_backend = "exa"
+                    return status, msg
+                self.active_backend = None  # off/error — try the next backend
+            elif backend == "ddgs":
+                status, msg = self._ddgs_status(DDGS is not None)
+                self.active_backend = "ddgs" if status == "ok" else None
+                return status, msg
+        self.active_backend = None
+        return "error", "Web Search unavailable via any backend"
 
     def search(self, query: str, location: str = "", **kwargs: Any) -> ScraperResult:
         return search_web_for_jobs(query, location, **kwargs)
