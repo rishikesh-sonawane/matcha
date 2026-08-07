@@ -16,12 +16,18 @@ from matcha.models import ScraperResult
 
 
 class _FakeDDGS:
-    """Minimal DDGS stand-in: context manager with .text() returning rows."""
+    """Minimal DDGS stand-in: context manager with .text() returning rows.
 
-    def __init__(self, rows=None, exc=None):
+    Accepts the ``timeout`` kwarg the shared ``ddgs_text`` helper passes to
+    the factory (Session 23), and records call kwargs for retry assertions.
+    """
+
+    def __init__(self, rows=None, exc=None, timeout=None):
         self._rows = rows or []
         self._exc = exc
+        self._timeout = timeout
         self.text_calls = []
+        self.text_kwargs = []
 
     def __enter__(self):
         return self
@@ -31,6 +37,7 @@ class _FakeDDGS:
 
     def text(self, query, max_results=5, timelimit=""):
         self.text_calls.append(query)
+        self.text_kwargs.append((max_results, timelimit))
         if self._exc:
             raise self._exc
         return self._rows
@@ -133,7 +140,7 @@ class TestCareerSitesHelpers(unittest.TestCase):
             ]
         )
         with (
-            mock.patch("matcha.sources.career_sites.DDGS", lambda: fake),
+            mock.patch("matcha.sources.career_sites.DDGS", lambda *a, **k: fake),
             mock.patch("matcha.sources.career_sites.limiter.acquire"),
         ):
             result = search_career_sites_jobs("engineer", "Pune", days=7, max_queries=2)
@@ -159,7 +166,7 @@ class TestCareerSitesHelpers(unittest.TestCase):
             ]
         )
         with (
-            mock.patch("matcha.sources.career_sites.DDGS", lambda: fake),
+            mock.patch("matcha.sources.career_sites.DDGS", lambda *a, **k: fake),
             mock.patch("matcha.sources.career_sites.limiter.acquire"),
         ):
             result = search_career_sites_jobs("engineer", max_queries=1)
@@ -174,7 +181,7 @@ class TestCareerSitesHelpers(unittest.TestCase):
             ]
         )
         with (
-            mock.patch("matcha.sources.career_sites.DDGS", lambda: fake),
+            mock.patch("matcha.sources.career_sites.DDGS", lambda *a, **k: fake),
             mock.patch("matcha.sources.career_sites.limiter.acquire"),
         ):
             result = search_career_sites_jobs("engineer", days=7, max_queries=1)
@@ -185,8 +192,9 @@ class TestCareerSitesHelpers(unittest.TestCase):
 
         fake = _FakeDDGS(exc=RuntimeError("ddgs down"))
         with (
-            mock.patch("matcha.sources.career_sites.DDGS", lambda: fake),
+            mock.patch("matcha.sources.career_sites.DDGS", lambda *a, **k: fake),
             mock.patch("matcha.sources.career_sites.limiter.acquire"),
+            mock.patch("matcha.sources.utils.time.sleep"),  # retry backoff
         ):
             result = search_career_sites_jobs("engineer", max_queries=1)
         self.assertTrue(result.errors)
@@ -200,7 +208,7 @@ class TestCareerSitesHelpers(unittest.TestCase):
 
         fake = _FakeDDGS(rows=[_BadRow()])
         with (
-            mock.patch("matcha.sources.career_sites.DDGS", lambda: fake),
+            mock.patch("matcha.sources.career_sites.DDGS", lambda *a, **k: fake),
             mock.patch("matcha.sources.career_sites.limiter.acquire"),
         ):
             result = search_career_sites_jobs("engineer", max_queries=1)
@@ -580,7 +588,7 @@ class TestWebSearch(unittest.TestCase):
         )
         with (
             mock.patch("matcha.sources.web_search._search_web_exa", return_value=None),
-            mock.patch("matcha.sources.web_search.DDGS", lambda: fake),
+            mock.patch("matcha.sources.web_search.DDGS", lambda *a, **k: fake),
             mock.patch("matcha.sources.web_search.limiter.acquire"),
         ):
             result = search_web_for_jobs("engineer")
@@ -644,7 +652,7 @@ class TestWebSearch(unittest.TestCase):
             ]
         )
         with (
-            mock.patch("matcha.sources.web_search.DDGS", lambda: fake),
+            mock.patch("matcha.sources.web_search.DDGS", lambda *a, **k: fake),
             mock.patch("matcha.sources.web_search.limiter.acquire"),
         ):
             result = _search_web_ddgs("engineer")

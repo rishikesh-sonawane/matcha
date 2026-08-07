@@ -18,11 +18,15 @@ from matcha.sources.constants import (
     SEARCH_PAGE_PATTERNS,
 )
 
-from .utils import limiter
+from .utils import ddgs_text, limiter
 
 logger = logging.getLogger(__name__)
 
-limiter.set_rate("career_sites.ddgs", 6)
+# Session 23: Career Sites shares the single ``duckduckgo.com`` bucket (30
+# rpm) with Web Search/Naukri/Indeed so total DuckDuckGo load stays bounded —
+# its old separate 6-rpm ``career_sites.ddgs`` bucket starved it the same way
+# it starved Web Search (up to 16 DDGS calls/run at 6 rpm = 160s vs the 75s
+# batch budget), and a 30-rpm twin bucket would double total DDG load.
 
 CAREER_SITES: dict[str, str] = {
     "Tech Mahindra": "careers.techmahindra.com",
@@ -402,14 +406,10 @@ def search_career_sites_jobs(
     )
 
     for q in queries:
-        limiter.acquire("career_sites.ddgs")
+        limiter.acquire("duckduckgo.com")
         try:
-            with DDGS() as ddgs:
-                raw = (
-                    ddgs.text(q, max_results=5, timelimit=timelimit)
-                    if timelimit
-                    else ddgs.text(q, max_results=5)
-                )
+            # Session 23: shared helper — generous timeout + bounded retry.
+            raw = ddgs_text(q, max_results=5, timelimit=timelimit, ddgs=DDGS)
         except Exception as e:
             logger.warning("Career sites DDGS query failed (%s): %s", q, e)
             errors.append(f"DDGS query failed: {q[:50]}")

@@ -87,7 +87,63 @@ limiter.set_rate("indeed.com", 5)
 limiter.set_rate("naukri.com", 6)
 limiter.set_rate("remoteok.com", 10)
 limiter.set_rate("serpapi.com", 8)
-limiter.set_rate("duckduckgo.com", 6)
+# Session 23: 6 rpm (1 req/10s) was starving the Web Search source — a single
+# run fires ~15 DDGS calls (5 site queries × up to 3 app queries) plus Naukri
+# and Indeed fallbacks, all through THIS bucket, so the batch timed out before
+# it finished. A direct probe sustained ~20 rpm with zero failures; 30 rpm
+# (1 req/2s) is the minimum that keeps ~35 total DDGS calls inside the 75s
+# batch budget (35 × 2s = 70s worst-case pacing) and is still polite to
+# DuckDuckGo. All DDGS consumers share one bucket so total load stays bounded.
+limiter.set_rate("duckduckgo.com", 30)
+
+
+def ddgs_text(
+    query: str,
+    *,
+    max_results: int = 5,
+    timelimit: str = "",
+    timeout: float = 12.0,
+    retries: int = 1,
+    ddgs: Any = None,
+) -> list[dict[str, Any]]:
+    """One DDGS text search with a real timeout and a bounded retry.
+
+    DDGS (DuckDuckGo metasearch) is free and occasionally flaky: connection
+    timeouts, refused connections (the startpage fallback), and "ddgs down"
+    are TRANSIENT. Session 23: give every call a generous timeout (the
+    library's 5s default sits right at the observed latency edge) and retry
+    once with a short backoff so a single blip cannot kill the query. The
+    caller is responsible for ``limiter.acquire`` (rate pacing) and for
+    checking ``DDGS is not None`` first.
+
+    ``ddgs`` is the DDGS class/factory (defaults to the installed library).
+    Tests pass a fake factory; production callers pass their module-level
+    ``DDGS`` so the library stays an optional dependency.
+    """
+    if ddgs is None:
+        from ddgs import DDGS as _DDGS  # type: ignore[assignment]
+
+        ddgs = _DDGS
+    last_exc: Exception | None = None
+    for attempt in range(retries + 1):
+        try:
+            with ddgs(timeout=timeout) as client:  # type: ignore[operator]
+                if timelimit:
+                    return list(client.text(query, max_results=max_results, timelimit=timelimit))
+                return list(client.text(query, max_results=max_results))
+        except Exception as e:  # noqa: BLE001 — transient network/backend errors
+            last_exc = e
+            if attempt < retries:
+                wait = 1.0 + attempt
+                logger.warning(
+                    "DDGS query failed (attempt %d/%d, retry in %.0fs): %s",
+                    attempt + 1,
+                    retries + 1,
+                    wait,
+                    e,
+                )
+                time.sleep(wait)
+    raise last_exc if last_exc is not None else RuntimeError("ddgs query failed")
 
 
 def _get_domain(url: str) -> str:

@@ -108,5 +108,83 @@ class TestResilientGet(unittest.TestCase):
             resilient_get("https://x.example", session=session)
 
 
+class _FakeClient:
+    """DDGS-ish client: context manager with .text() returning rows.
+
+    ``fail_times`` lets the first N calls raise (transient blip) and later
+    calls succeed — mirrors the real library's flaky free-tier behaviour.
+    """
+
+    def __init__(self, rows, exc=None, fail_times=0):
+        self._rows = rows or []
+        self._exc = exc
+        self._fail_times = fail_times
+        self.calls = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def text(self, query, max_results=5, timelimit=""):
+        self.calls += 1
+        if self._fail_times > 0:
+            self._fail_times -= 1
+            raise self._exc if self._exc else RuntimeError("transient")
+        return self._rows
+
+
+class TestDdgsText(unittest.TestCase):
+    """Session 23: the shared DDGS helper must retry transient failures."""
+
+    def _factory(self, client):
+        return lambda *a, **k: client
+
+    def test_happy_path(self):
+        from matcha.sources.utils import ddgs_text
+
+        client = _FakeClient([{"title": "t", "href": "u"}])
+        rows = ddgs_text("engineer", ddgs=self._factory(client))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(client.calls, 1)
+
+    def test_retries_once_then_succeeds(self):
+        from matcha.sources.utils import ddgs_text
+
+        client = _FakeClient([{"title": "t"}], exc=TimeoutError("timed out"), fail_times=1)
+        with mock.patch("matcha.sources.utils.time.sleep"):
+            rows = ddgs_text("engineer", ddgs=self._factory(client))
+        self.assertEqual(len(rows), 1)  # transient failure recovered
+        self.assertEqual(client.calls, 2)  # 1 failure + 1 retry
+
+    def test_persistent_failure_raises(self):
+        from matcha.sources.utils import ddgs_text
+
+        client = _FakeClient([], exc=RuntimeError("ddgs down"), fail_times=9)
+        with (
+            mock.patch("matcha.sources.utils.time.sleep"),
+            self.assertRaises(RuntimeError),
+        ):
+            ddgs_text("engineer", ddgs=self._factory(client))
+        self.assertEqual(client.calls, 2)  # both attempts exhausted
+
+    def test_timelimit_passed_through(self):
+        from matcha.sources.utils import ddgs_text
+
+        client = _FakeClient([])
+        with mock.patch("matcha.sources.utils.time.sleep"):
+            ddgs_text("engineer", timelimit="w", ddgs=self._factory(client))
+        self.assertEqual(client.calls, 1)
+
+    def test_ddgs_rate_is_30_rpm(self):
+        # Session 23: 6 rpm (1 req/10s) starved the DDGS sources under the 75s
+        # batch timeout; 30 rpm keeps the pipeline inside budget while staying
+        # polite to DuckDuckGo.
+        from matcha.sources.utils import limiter
+
+        self.assertEqual(limiter._buckets["duckduckgo.com"].max_tokens, 30)
+
+
 if __name__ == "__main__":
     unittest.main()

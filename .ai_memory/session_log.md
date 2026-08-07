@@ -641,6 +641,49 @@ session also fixed the underlying quality issues.
 
 ---
 
+### 2026-08-07 — Session 23: Web Search (DDGS) flakiness fixed at the root (DONE)
+
+**Goal:** user: "investigate why the Web Search (DDGS) source is flaky and
+make it more reliable."
+
+- **Root cause #1 — the DDGS rate limiter was starving the batch.**
+  ``duckduckgo.com`` bucket was 6 rpm (1 req/10s), and Web Search fires up to
+  15 calls/run (5 site queries × 3 app queries) PLUS Naukri (3) and Indeed
+  fallbacks through the SAME bucket — ~19 calls × 10s pacing = 190s against
+  the 75s batch timeout ⇒ the batch died and Web Search returned nothing
+  every run ("Scraper batch timed out"). Career Sites had its OWN 6-rpm
+  bucket (same starvation). Fix: ``duckduckgo.com`` → **30 rpm**, and Career
+  Sites now shares that single bucket (bounded total DDG load instead of a
+  second 30-rpm twin). Direct probe proved ~20 rpm sustained with zero
+  failures — 30 rpm is polite and fits the batch budget.
+- **Root cause #2 — no retry + 5s default timeout.** DDGS is a free
+  metasearch: ConnectTimeout, refused connections (startpage fallback) and
+  "ddgs down" are TRANSIENT, and the library's 5s default timeout sits right
+  at the observed latency edge (probe: 1.7–5.2s/query) — one blip killed the
+  query. Fix: shared ``ddgs_text()`` helper in ``sources/utils.py`` (12s
+  timeout, 1 bounded retry with 1s backoff, takes the module's ``DDGS``
+  factory so the lib stays optional); wired through web_search, career_sites,
+  naukri and indeed — all four DDGS consumers benefit.
+- **Cosmetic:** main.py batch-timeout log said "45s" but the timeout is 75s
+  (Session 21) — message now says 75s.
+- **Validation:** 694/694 tests (unittest + pytest) — +6 new (ddgs_text
+  happy/retry/persistent-failure/timelimit/rate + Naukri transient-failure
+  retry); ruff/format/mypy (0 errors) clean; coverage 81% (gate ≥80%). Live:
+  two consecutive runs — `errors: {}` both times, all 8 sources contributing
+  (Web Search 32/27 found), zero batch timeouts, retry recovering blips
+  ("attempt 1/2" then success). Web Search rows are remote/unspecified →
+  correctly excluded by the Hyderabad on-site filter (the "remote
+  excluded" note, not flakiness).
+- **Review fixes:** (1) the two retry tests that incur the real 1s backoff
+  (career_sites exception path + Naukri transient-failure) now patch
+  `matcha.sources.utils.time.sleep` so the suite stays fast; (2) the 30-rpm
+  comment now justifies the rate by batch budget (30 tokens ≈ 19 calls with
+  ~10s headroom vs the 75s timeout) instead of "proven safe".
+- **Docs:** memory bank synced (this entry).
+- **Next:** fresh spec or further polish — do NOT start a new phase without one.
+
+---
+
 ### 2026-08-07 — Session 22: no fake US jobs, no [age?] noise, no source error spam (DONE)
 
 **Goal:** user's run showed US Indeed jobs ranked above local matches

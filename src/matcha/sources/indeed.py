@@ -20,7 +20,7 @@ from matcha.sources.backends.opencli import (
 )
 from matcha.sources.base import Source, probe_url
 
-from .utils import limiter, resilient_get
+from .utils import ddgs_text, limiter, resilient_get
 
 logger = logging.getLogger(__name__)
 
@@ -269,8 +269,8 @@ def _search_indeed_via_ddgs(query: str, location: str) -> list[dict[str, str]]:
         return []
     limiter.acquire("duckduckgo.com")
     try:
-        with DDGS() as ddgs:
-            raw = ddgs.text(search_q, max_results=15)
+        # Session 23: shared helper — generous timeout + bounded retry.
+        raw = ddgs_text(search_q, max_results=15, ddgs=DDGS)
     except Exception as e:
         logger.warning("DDGS Indeed fallback failed: %s", e)
         return []

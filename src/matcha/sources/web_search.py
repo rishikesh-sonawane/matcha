@@ -23,7 +23,7 @@ from matcha.sources.constants import (
     STOP_WORDS,
 )
 
-from .utils import limiter
+from .utils import ddgs_text, limiter
 
 logger = logging.getLogger(__name__)
 
@@ -199,12 +199,10 @@ def _search_web_ddgs(
     for q in site_queries:
         limiter.acquire("duckduckgo.com")
         try:
-            with DDGS() as ddgs:
-                raw = (
-                    ddgs.text(q, max_results=5, timelimit=timelimit)
-                    if timelimit
-                    else ddgs.text(q, max_results=5)
-                )
+            # Session 23: shared helper — generous timeout + bounded retry, so
+            # a transient ConnectTimeout/refused connection doesn't kill the
+            # query (DDGS is a free metasearch; blips are normal).
+            raw = ddgs_text(q, max_results=5, timelimit=timelimit, ddgs=DDGS)
         except Exception as e:
             logger.warning("Web search DDGS query failed (%s): %s", q, e)
             errors.append(f"DDGS query failed: {q[:50]}")

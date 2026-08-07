@@ -1,6 +1,6 @@
 # Current System State — Matcha
 
-> Last verified: 2026-08-07 (Session 22 — no fake US jobs, no [age?] noise, no source error spam).
+> Last verified: 2026-08-07 (Session 23 — Web Search/DDGS flakiness fixed at the root).
 > If any checkbox below conflicts with the actual code, **the code wins** —
 > update this file.
 
@@ -231,8 +231,10 @@ one.
 
 ## Test Baseline (2026-08-07)
 
-- **688/688 tests pass** (`unittest discover tests` AND `pytest tests/`).
-  680 at end of Session 21; +8 from Session 22 (headless location stamping
+- **694/694 tests pass** (`unittest discover tests` AND `pytest tests/`).
+  688 at end of Session 22; +6 from Session 23 (ddgs_text happy/retry/
+  persistent-failure/timelimit/rate-30 + Naukri transient-failure retry).
+  688 at end of Session 22: +8 (headless location stamping
   ×2, SerpAPI posted_at parse, no-date window stamp, window-epoch bounds,
   loose-window keeps age-tag, opencli-fallback 403 suppression ×2).
   680 at end of Session 21: +5 (Indeed empty-title recovery
@@ -303,6 +305,7 @@ one.
 - [x] **Session 17 — AI live + results quality round 2 (DONE 2026-08-06):** diagnosed + fixed the real reason "AI can't make smart decisions": the user's stored Kilo key (`MINIMAX` env, 67-char `sk-`) was never wired (`ai_provider` empty ⇒ `check_ai_available()=False`) → `configure_provider('kilo')`, live-verified end-to-end. AI re-scoring moved to AFTER enrichment (`_ai_rescore` + shared `_apply_flatline_guard`) so the judge scores real descriptions (live: top jobs 85.0, verdicts "Your 4 years of AWS/Terraform expertise…", 36/60 AI calls). Naukri dead postings (expired → search-page redirect) now DROPPED (`_EXPIRED` sentinel; URLs logged). Junk-title gate extended (`top companies hiring for …`). 650/650 tests; ruff/format/mypy/bandit clean.
 - [x] **Session 18 — docs overhaul + doctor AI status + MCP AI surface (DONE 2026-08-07):** README rewritten + verified against source (full env-var reference + AI resolution order, exact AI preset models, corrected SerpAPI YAML sample — key is a `--configure` secret, CLI command reference, config precedence, `~/.matcha` layout, Docker/Makefile) + QUICKSTART.md (5 commands). `ai.py ai_status()` + doctor `ai` entry (ok/off/warn/error, scrubbed URL, key never leaks, "AI matching" section in the text report); MCP `matcha_status` surfaces the same `ai` entry (docstrings + hermetic test). 659/659 tests; ruff/format/mypy clean.
 - [x] **Session 22 — no fake US jobs, no [age?] noise, no source error spam (DONE 2026-08-07):** headless `_headless_credentials` now stamps `profile["location"]` from `-l`/config (the TUI did; search/watch/MCP didn't ⇒ location filter was a no-op ⇒ US Indeed rows ranked above Hyderabad matches). SerpAPI date extraction: `detected_extensions.posted_at` + `extensions[]` fallback; rows with NO date get the honest server-side window stamp (`"within 3days"` + worst-case `listed_epoch`, 120s grace for search→filter latency) **gated on `_window_guarantees_age`** (server window ≤ requested days — days=5/7 loose-window rows keep the honest `[age?]` instead of a misleading stamp that the central filter would silently drop). Google `[age?]` tags 9/13 → 0. OpenCLI→HTML fallback clears only `HTTP \d{3}` anti-bot noise (was showing `E…` on healthy sources + tripping breakers); genuine parse errors stay. Live: 207 found/26 kept, errors {}, Google 13/13 dated, top 96/96/95. 688/688 tests; ruff/mypy clean; coverage 81%.
+- [x] **Session 23 — Web Search/DDGS flakiness fixed at the root (DONE 2026-08-07):** the shared `duckduckgo.com` rate bucket was 6 rpm (1 req/10s) while Web Search fires ~15 DDGS calls/run + Naukri + Indeed through it — ~190s of pacing vs the 75s batch timeout ⇒ batch died, Web Search contributed 0 every run, and the stale "45s" log message hid the real budget. Fix: `duckduckgo.com` → **30 rpm** (probe proved ~20 rpm sustained safe), Career Sites now shares that one bucket (was a separate 6-rpm twin, also starved), and a shared `ddgs_text()` helper (`sources/utils.py`: 12s timeout + 1 bounded retry) is wired through web_search/career_sites/naukri/indeed so transient ConnectTimeout/refused-connection/"ddgs down" blips are retried instead of killing the query. Live: two runs, `errors: {}` both, all 8 sources contributing (Web Search 27–32 found), zero batch timeouts; main.py timeout message corrected 45s→75s. 694/694 tests; ruff/mypy clean; coverage 81%.
 
 **Design pillars:** multi-backend richest-first routing · doctor-first observability ·
 filters as a central pipeline stage · enrichment over volume · graceful degradation ·

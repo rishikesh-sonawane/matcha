@@ -140,6 +140,16 @@ def _patch_ddgs(urls):
     return ddgs, instance
 
 
+def _patch_ddgs_flaky(urls, exc):
+    """Patch DDGS so the first call raises ``exc`` then succeeds (retry path)."""
+    instance = mock.MagicMock()
+    instance.text.side_effect = [exc, urls]
+    ddgs = mock.patch("matcha.sources.naukri.DDGS")
+    m = ddgs.start()
+    m.return_value.__enter__.return_value = instance
+    return ddgs, instance
+
+
 class TestRenderedParse(unittest.TestCase):
     def test_live_job_page_fields(self):
         fields = _parse_rendered_text(LIVE_MARKDOWN, JOB_URL)
@@ -282,6 +292,23 @@ class TestJobPageDispatch(unittest.TestCase):
         self.acquire = mock.patch("matcha.sources.naukri.limiter.acquire")
         self.acquire.start()
         self.addCleanup(self.acquire.stop)
+
+    def test_transient_ddgs_failure_retries(self):
+        # Session 23: DDGS (a free metasearch) blips — a single ConnectTimeout
+        # must not lose discovery. The shared helper retries once.
+        ddgs, instance = _patch_ddgs_flaky(_search_ok(), TimeoutError("timed out"))
+        self.addCleanup(ddgs.stop)
+        with (
+            mock.patch("matcha.sources.utils.time.sleep"),  # retry backoff
+            mock.patch(
+                "matcha.sources.naukri._fetch_job_page", return_value=LIVE_MARKDOWN
+            ) as fetch,
+        ):
+            result = search_naukri_jobs("python developer")
+        self.assertEqual(len(result.jobs), 1)
+        self.assertEqual(result.jobs[0]["title"], "Python Developer")
+        self.assertEqual(instance.text.call_count, 2)  # 1 failure + 1 retry
+        fetch.assert_called_once()
 
     def test_job_page_backend_enriches(self):
         ddgs, _ = _patch_ddgs(_search_ok())

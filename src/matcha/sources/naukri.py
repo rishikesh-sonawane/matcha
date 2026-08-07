@@ -44,7 +44,7 @@ from matcha.models import ScraperResult
 from matcha.sources.base import Source
 from matcha.sources.constants import NAUKRI_NON_JOB_PATHS, NON_JOB_TITLE_PATTERNS, STOP_WORDS
 
-from .utils import limiter, resilient_get
+from .utils import ddgs_text, limiter, resilient_get
 
 logger = logging.getLogger(__name__)
 
@@ -327,12 +327,8 @@ def _search_naukri_ddgs(
     logger.info("Searching Naukri: q=%s location=%s", query, location)
     limiter.acquire("duckduckgo.com")
     try:
-        with DDGS() as ddgs:
-            raw = list(
-                ddgs.text(site_query, max_results=20, timelimit=timelimit)
-                if timelimit
-                else ddgs.text(site_query, max_results=20)
-            )
+        # Session 23: shared helper — generous timeout + bounded retry.
+        raw = ddgs_text(site_query, max_results=20, timelimit=timelimit, ddgs=DDGS)
     except Exception as e:
         msg = f"Naukri DDGS search failed: {e}"
         logger.warning(msg)

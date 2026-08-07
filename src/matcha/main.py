@@ -431,7 +431,7 @@ def search_jobs(
                         _last_state = _state
                     time.sleep(0.05)
             except TimeoutError:
-                logger.warning("Scraper batch timed out after 45s, returning partial results")
+                logger.warning("Scraper batch timed out after 75s, returning partial results")
                 live.update(_status_table())
         finally:
             executor.shutdown(wait=False, cancel_futures=True)

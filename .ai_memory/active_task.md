@@ -2,6 +2,20 @@
 
 ## Current Focus
 
+**Session 23 (2026-08-07): Web Search (DDGS) flakiness fixed at the root.**
+Root cause: the shared `duckduckgo.com` rate bucket was **6 rpm** (1 req/10s)
+while Web Search fires ~15 DDGS calls/run + Naukri + Indeed through it —
+~190s of pacing vs the 75s batch timeout ⇒ the batch died and Web Search
+contributed 0 every run ("Scraper batch timed out"). Fixes: `duckduckgo.com`
+→ **30 rpm** (probe proved ~20 rpm sustained safe); Career Sites now shares
+that single bucket (was a separate 6-rpm twin, also starved); shared
+`ddgs_text()` helper in `sources/utils.py` (12s timeout + 1 bounded retry)
+wired through web_search/career_sites/naukri/indeed so transient
+ConnectTimeout/refused/"ddgs down" blips are retried, not fatal; main.py
+batch-timeout message corrected 45s→75s. Live: two runs, `errors: {}` both,
+all 8 sources contributing (Web Search 27–32 found), zero batch timeouts.
+**694/694 tests · ruff/mypy clean · coverage 81%.**
+
 **Session 22 (2026-08-07): no fake US jobs, no [age?] noise, no source
 error spam.** Three user-visible defects fixed at the root: (1) headless
 runs (search/watch/MCP) never stamped `profile["location"]` from `-l` ⇒ the
