@@ -13,7 +13,13 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from matcha.filters import FilterReport, apply_filters, build_filter_summary, filter_notes
+from matcha.filters import (
+    FilterReport,
+    apply_filters,
+    build_filter_summary,
+    filter_notes,
+    provenance_tags,
+)
 from matcha.normalization import normalize_jobs
 
 
@@ -115,6 +121,39 @@ class TestQualityFilter(unittest.TestCase):
         ):
             kept, _ = apply_filters([_job(title=title)], {})
             self.assertEqual(len(kept), 1, f"legit title {title!r} should be kept")
+
+    def test_url_as_title_dropped(self):
+        # Session 26: workday/intranet listing pages leaked as titles.
+        for title in (
+            "ptc.wd1.myworkdayjobs.com/PTC/job/Pune",
+            "intel.wd1.myworkdayjobs.com/en",
+            "www.example.com/jobs/123",
+        ):
+            kept, _ = apply_filters([_job(title=title)], {})
+            self.assertEqual(len(kept), 0, f"URL-as-title {title!r} should be dropped")
+
+    def test_skill_list_fragment_title_dropped(self):
+        # Session 26: scraped description fragments leaked as titles — a
+        # 3+-comma skill list with no role word is never a real posting.
+        for title in (
+            "AWS Cloud, EKS, Terraform, Gitlab CI/CD, Scripting, Python",
+            "GO, RESTful API, AWS, Terraform, Docker, PostgreSQL",
+        ):
+            kept, _ = apply_filters([_job(title=title)], {})
+            self.assertEqual(len(kept), 0, f"fragment title {title!r} should be dropped")
+
+    def test_role_comma_titles_not_dropped(self):
+        # Legit long titles with commas/parens name the ROLE (reviewer-caught
+        # Session 26: role words past char 60 must not false-positive).
+        for title in (
+            "Software Engineer (Devops - Jenkins, Terraform, Kubernetes, AWS (EC2), CI/CD )",
+            "Senior Engineer, Site Reliability [T500-28287]",
+            "Cloud & DevOps Engineer",
+            "Remote Senior — AWS, Terraform, Kubernetes, Docker, CI/CD Engineer",
+            "Senior DevOps Engineer in Bengaluru, Karnataka, India",
+        ):
+            kept, _ = apply_filters([_job(title=title)], {})
+            self.assertEqual(len(kept), 1, f"role title {title!r} should be kept")
 
 
 class TestAgeFilter(unittest.TestCase):
@@ -263,6 +302,84 @@ class TestLocationFilter(unittest.TestCase):
     def test_unknown_location_kept(self):
         kept, _ = apply_filters([_normalized(location="")], {"location": "Pune"}, {})
         self.assertEqual(len(kept), 1)
+
+    def test_unknown_location_tagged_loca(self):
+        # Session 25: unknown-location rows must be HONEST — tagged [loc?]
+        # (they were silently kept before, which is how location-less junk
+        # like "LMI Government Consulting" looked like a legit match).
+        kept, _ = apply_filters([_normalized(location="")], {"location": "Pune"}, {})
+        self.assertEqual(kept[0].get("loc_tag"), "unknown")
+        self.assertIn("loc?", provenance_tags(kept[0]))
+
+    def test_strict_location_drops_unknown(self):
+        kept, reports = apply_filters(
+            [_normalized(location="")], {"location": "Pune"}, {"strict_location": True}
+        )
+        self.assertEqual(len(kept), 0)
+        notes = filter_notes(reports)
+        self.assertTrue(notes)
+        self.assertIn("strict_location", notes[0])
+
+    def test_multi_city_profile_keeps_each_city(self):
+        # Session 25 (user-reported): a multi-city preference "Hyderabad, Pune,
+        # Bengaluru" was reduced to ONE arbitrary city by normalize_city, so
+        # the user's other cities were silently dropped. Every city must match.
+        jobs = normalize_jobs(
+            [
+                _job(title="H", location="Hyderabad, Telangana, India"),
+                _job(title="P", location="Pune, Maharashtra, India"),
+                _job(title="B", location="Bengaluru, Karnataka, India"),
+            ]
+        )
+        kept, _ = apply_filters(jobs, {"location": "Hyderabad, Pune, Bengaluru"}, {})
+        self.assertEqual(sorted(j["title"] for j in kept), ["B", "H", "P"])
+
+    def test_multi_city_profile_still_drops_other_cities(self):
+        jobs = normalize_jobs([_job(location="Chennai, Tamil Nadu, India")])
+        kept, _ = apply_filters(jobs, {"location": "Hyderabad, Pune, Bengaluru"}, {})
+        self.assertEqual(len(kept), 0)
+
+    def test_country_suffix_does_not_shadow_city(self):
+        # Session 25: normalize_city("Pune, Maharashtra, India") must be Pune,
+        # not India — the generic country key was winning by length.
+        kept, _ = apply_filters(
+            [_normalized(location="Pune, Maharashtra, India")], {"location": "Pune"}, {}
+        )
+        self.assertEqual(len(kept), 1)
+
+    def test_remote_location_accepts_remote_jobs(self):
+        kept, _ = apply_filters([_normalized(location="Remote")], {"location": "Remote"}, {})
+        self.assertEqual(len(kept), 1)
+
+    def test_country_level_preference_accepts_any_known_city(self):
+        # Session 25 (reviewer-caught regression): a country-level preference
+        # ("India") used to match every Indian-city job because the old
+        # normalize_city returned "India" for all of them; the city-aware
+        # rewrite must keep that behavior.
+        for city in ("Pune, Maharashtra, India", "Hyderabad, Telangana, India", "Chennai"):
+            kept, _ = apply_filters([_normalized(location=city)], {"location": "India"}, {})
+            self.assertEqual(len(kept), 1, f"{city!r} should match country-level India")
+
+    def test_country_level_preference_unknown_city_tagged(self):
+        # Unknown city under "India": kept but honestly tagged [loc?] (default
+        # strict_location=False) — only strict mode drops it.
+        kept, _ = apply_filters([_normalized(location="")], {"location": "India"}, {})
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(kept[0].get("loc_tag"), "unknown")
+        self.assertIn("loc?", provenance_tags(kept[0]))
+        kept, _ = apply_filters(
+            [_normalized(location="")], {"location": "India"}, {"strict_location": True}
+        )
+        self.assertEqual(len(kept), 0)
+
+    def test_strict_location_and_remote_notes_combine(self):
+        jobs = [_normalized(location="Remote"), _normalized(location="")]
+        kept, reports = apply_filters(jobs, {"location": "Pune"}, {"strict_location": True})
+        self.assertEqual(len(kept), 0)
+        notes = filter_notes(reports)
+        self.assertTrue(notes)
+        self.assertIn("remote", notes[0].lower())
+        self.assertIn("strict_location", notes[0])
 
 
 class TestSalaryFilter(unittest.TestCase):

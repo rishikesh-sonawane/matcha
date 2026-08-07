@@ -994,3 +994,109 @@ why would I see it again tomorrow."
 - **Validation:** 694/694 tests ×2 locally; ruff check/format clean; mypy 0; bandit 0; pre-commit green; coverage 81% (≥80). **CI green on the PR: validate 3.10/3.11/3.12/3.13/3.14 + build (pyinstaller + docker image) — 6/6 jobs ✓.**
 - **main untouched:** still at 9cd76d2 (Session 23 memory sync); branch is 3 commits ahead; PR #4 open for review.
 - **Next:** merge PR #4 to main (user decides) — then fresh spec or polish.
+
+---
+
+### 2026-08-07 — Session 25: location filter fixed — multi-city + country-level + [loc?] (user-driven)
+
+**Goal:** user: "something is wrong … now showing random jobs and not location
+specific" — top-10 included "LMI Government Consulting", "Ringier South
+Africa", "DevOps Engineer in Parsippany, New Jersey" on a Hyderabad/Pune/
+Bengaluru search, plus a wall of 47.5% `[snippet][age?]` LinkedIn rows.
+
+- **Root cause #1 — multi-city location was mangled:** profile default
+  `"Hyderabad, Pune, Bengaluru"` went through `normalize_city()` which
+  returns ONE city — and the synonym loop's longest-key-first iteration made
+  the LAST city win by accident (`"Bengaluru"`). So Hyderabad + Pune jobs
+  were DROPPED by the location filter and every other city looked like a
+  mismatch — hence "random" results.
+- **Root cause #2 — `normalize_city` country-shadow:** longest-key-first let
+  generic keys shadow real cities — `"Pune, Maharashtra, India"` →
+  `"India"` (5 chars beats 4), `"Bengaluru, …"` → `"India"`. Rewritten to
+  collect ALL synonym matches and prefer the first non-generic city
+  (`_GENERIC_LOCATIONS` = india/remote/wfh/…), with a title-case word regex
+  as the last-resort city guess. Now `"Pune, Maharashtra, India"` →
+  `"Pune"` (verified: Pune/Bengaluru/Hyderabad/Mumbai all resolve).
+- **Root cause #3 — unknown-location jobs leaked untagged:**
+  `elif not city: kept.append(job)` kept location-less rows (scraped
+  description fragments like 'infrastructure, pl') with NO provenance tag.
+  Now `_filter_location` tags them `loc_tag="unknown"` → rendered
+  `[loc?]`; new `settings filters.strict_location` (default false) drops
+  them instead, with an actionable filter note.
+- **Multi-city + country support (reviewer-driven hardening):**
+  `_filter_location` now splits the profile location on `,`/`;`/`and` into
+  `_profile_cities` + `_profile_regions` sets and matches ANY city (with the
+  pre-existing region fallback, so Mumbai still rides Maharashtra). A
+  country-level preference (`location: "India"`) now matches all Indian
+  cities (regression the reviewer caught — the old code returned "India"
+  for every Indian-city string); explicit `location: "Remote"` accepts
+  remote jobs. Positional tie-break (first-mentioned city wins) added to
+  `normalize_city` for two-city strings.
+- **Live verification (user's exact scenario):** `matcha search -q DevOps
+  -l "Hyderabad, Pune, Bengaluru" -d 7 --json` → 48 kept: 38 in a
+  preferred city, the 8 junk rows (Ringier SA, LMI, Parsippany NJ, intel/
+  ptc workday fragments, "The most") now carry `[loc?]`; `strict_location:
+  true` drops exactly those 8. City histogram: Bengaluru 23 · Pune 9 ·
+  Hyderabad 6 (+ Maharashtra-region Mumbai).
+- **Validation:** 705/705 tests (pytest + unittest) — new regression suites:
+  multi-city keeps all 3 cities + drops other-city; Pune-not-shadowed;
+  country-level "India" preference matches Indian cities; unknown-location
+  tagged `[loc?]`; strict_location drops + note; Remote-location accepts
+  remote; first-city positional tie-break. ruff/format/mypy(0)/bandit clean;
+  coverage 82% (≥80).
+- **Docs:** README filters section — multi-city matching, `[loc?]` tag,
+  `strict_location`, country-level preference. Memory bank synced.
+- **Next:** commit/push Session 25 (user decides) — then fresh spec or polish.
+
+---
+
+### 2026-08-07 — Session 26: results quality round 3 — enrichment fixed, >80% scores, no junk (user-driven)
+
+**Goal:** user: "run the TUI and test everything … I want good ratings more than
+80% … make sure no junk exists … links working … CI green." First TUI run
+reproduced the complaints: top 55%, wall of 47.5% [snippet], scraped-fragment
+junk at #1, no verdict line.
+
+- **Root cause #1 — LinkedIn URL shape killed enrichment:** search rows carry
+  `in.linkedin.com/jobs/view/<slug>-<id>?position=..` URLs, but OpenCLI
+  `job-detail` ONLY resolves canonical `www.linkedin.com/jobs/view/<id>`
+  (live-verified: subdomain + query → EMPTY). Every row failed with
+  `enrich_error: job-detail failed` → 0 enriched → 0 AI-eligible → AI judge
+  never ran → flat heuristic 47.5% wall. Fixed: `canonical_job_url()` in
+  linkedin.py (extracts the 7+-digit job id, rebuilds the www URL), applied
+  at row-mapping in BOTH opencli + guest-api paths and again defensively in
+  `_enrich_linkedin`. Bonus: canonical URLs make dedup/seen-tracking stable
+  (one-time caveat: previously-seen `in.` URLs re-surface once as "new").
+- **Root cause #2 — Jina zero-config path is dead:** Jina now key-gates
+  anonymous access (403; empty bearer → 401). `_jina_enrich` now sends a
+  browser UA + optional `JINA_API_KEY` env bearer; without a key the
+  fallback honestly stays dead (OpenCLI is the primary path anyway).
+- **Root cause #3 — transient job-detail flakiness:** under a heavy batch the
+  OpenCLI daemon intermittently returns EMPTY for job-detail (observed 0
+  enriched twice in a row, then 27-30 enriched once idle). Added bounded
+  `_job_detail_with_retry` (1 retry, 1s sleep) for LinkedIn + Indeed. (My
+  first version had a keyword-only-arg bug — `timeout` after `*args` — that
+  broke EVERY call; the TUI test caught it: TypeError in log → 0 enriched.)
+- **Junk elimination:** quality-gate `_is_junk_title` extended — URL-as-title
+  leaks (`ptc.wd1.myworkdayjobs.com/...`) and skill-list fragments with no
+  role word ("AWS Cloud, EKS, Terraform, Gitlab CI/CD, Scripting") are now
+  dropped (reviewer-caught: role scan covers the WHOLE title so
+  "Remote Senior — AWS, ..., CI/CD Engineer" never false-positives). Plus
+  `filters.strict_location: true` enabled in the user's settings.yaml —
+  unknown-location rows are dropped instead of tagged [loc?] (all 8 live
+  unknown-location rows were junk).
+- **Live verification (all green):** `matcha search -q DevOps -l "Hyderabad,
+  Pune, Bengaluru" -d 7 --json` → 149 found, 36 kept, **30 enriched, top 15
+  at 95.0% [full]**, score bands 28×≥80% / 1×60-79 / 1×40-59 / 6×<40, **0
+  junk titles, 0 unknown-location rows**, 5 verdicts, 0 errors. Top-12 links
+  verified **12/12 HTTP 200** (workday/greenhouse/joindevops/LinkedIn/cutshort/
+  breezy/YC apply URLs). TUI (tmux, real keys): top rows 95.0%[full],
+  Microsoft 85%, detail panel "Match Score: 95.0% · Verdict: ✓ Recommend —
+  Perfect seniority match with high skill overlap in AWS, Terraform, and
+  CI/CD for a Bengaluru-based role", clean quit. Kilo API health OK
+  (`api.kilo.ai` 200, `check_ai_available` True).
+- **Validation:** 716/716 tests (pytest + unittest) — +11 new (canonical_job_url
+  ×5, canonical-before-detail, retry ×2, junk URL/fragment ×4, role-word
+  false-positive regression); ruff/format/mypy(0)/bandit clean; coverage 82%.
+- **Docs/memory:** README + memory bank synced (Session 26). Next: commit/push
+  Sessions 25+26 (user decides) — then fresh spec or polish.

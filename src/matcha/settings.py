@@ -51,6 +51,7 @@ _DEFAULTS: dict[str, Any] = {
         "remote": False,
         "min_salary": 0,
         "drop_unknown_salary": False,
+        "strict_location": False,
     },
     "ranking": {
         "normalize_scores": False,

@@ -2,7 +2,17 @@
 
 ## Current Focus
 
-**Session 24 (2026-08-07): CI pipeline fixed on branch `fix/ci-reliability`
+**Session 25 (2026-08-07): location filter fixed — multi-city, country-level,
+[loc?] (uncommitted).** User saw "random jobs, not location specific" (LMI
+Government Consulting / Ringier South Africa on a Hyderabad search): multi-city
+profile location was mangled to one city (Bengaluru won by accident →
+Hyderabad/Pune jobs dropped), normalize_city let "India" shadow real cities,
+and unknown-location rows leaked in untagged. Now: any-of multi-city matching
+with region fallback, country-level "India" preference works, explicit
+"Remote" accepted, unknown-location jobs tagged [loc?], new
+`filters.strict_location` drops them. 705/705 tests · coverage 82%.
+
+Session 24 (2026-08-07): CI pipeline fixed on branch `fix/ci-reliability`
 (PR #4) — main untouched.** CI failed on every push since 07:38: the
 validate job ran unpinned `pip install ruff` → drifted to 0.16.1 while
 local + pre-commit pin 0.15.16; ruff 0.16 reformats Python code fences in
@@ -396,7 +406,41 @@ Next: fresh spec or further polish — do NOT start a new phase without one.
 
 ## Immediate Next Steps
 
-1. **Session 24 — CI fixed on `fix/ci-reliability` (2026-08-07, user-driven;
+1. **Session 26 — results quality round 3 (2026-08-07, user-driven,
+   uncommitted)**: user: "run the TUI … I want good ratings more than 80% …
+   make sure no junk exists … links working … CI green." Root cause: search
+   rows carry `in.linkedin.com/jobs/view/<id>?position=..` URLs but OpenCLI
+   job-detail only resolves canonical www URLs → EVERY row failed enrichment
+   → 0 AI-eligible → AI judge never ran → flat 47.5% [snippet] wall. Fixed:
+   `canonical_job_url()` (linkedin.py, applied in both opencli + guest-api
+   row mapping + defensively in _enrich_linkedin); bounded `_job_detail_with
+   _retry` (1×1s) for transient daemon empties; Jina fallback now sends a
+   browser UA + optional JINA_API_KEY (anonymous tier is key-gated now);
+   junk gate extended (URL-as-title + skill-list fragments with no role
+   word; role scan covers whole title per reviewer); user settings.yaml
+   `filters.strict_location: true`. **Live-verified: 30 enriched, top 15 at
+   95.0% [full], 28/36 ≥80%, 0 junk titles, 0 unknown-location rows,
+   12/12 links HTTP 200, TUI shows 95% + verdict lines, clean quit.
+   716/716 tests, coverage 82%, ruff/mypy/bandit clean.** Next: commit/push
+   Sessions 25+26 (user decides) — then fresh spec or polish.
+2. **Session 25 — location filter fixed (2026-08-07, user-driven, uncommitted)**:
+   user saw "random jobs, not location specific" (LMI Government Consulting,
+   Ringier South Africa on a Hyderabad search). Root causes: multi-city
+   profile location `"Hyderabad, Pune, Bengaluru"` mangled to ONE city
+   (`normalize_city` longest-key-first → `"Bengaluru"` won by accident —
+   Hyderabad/Pune jobs were DROPPED); `normalize_city` country-shadow
+   (`"Pune, Maharashtra, India"` → `"India"`); unknown-location jobs kept
+   untagged (scraped description fragments like 'infrastructure, pl').
+   Fixed: `normalize_city` collects ALL matches + prefers non-generic city
+   + positional tie-break; `_filter_location` matches ANY of a multi-city
+   set with region fallback, honors country-level `location: "India"` and
+   explicit `Remote`, tags unknown-location jobs `[loc?]`;
+   `filters.strict_location` (default false) drops them. Live-verified on
+   the user's exact scenario: 48 kept → 38 preferred-city + 8 junk rows
+   tagged `[loc?]` (strict drops exactly those 8). 705/705 tests, coverage
+   82%, ruff/mypy/bandit clean. Next: commit/push (user decides) — then
+   fresh spec or polish.
+3. **Session 24 — CI fixed on `fix/ci-reliability` (2026-08-07, user-driven;
    PR #4 open, `main` untouched)**: 3 commits — (a) `ci.yml`: pin
    ruff==0.15.16 bandit==1.9.4 pre-commit==4.6.0 pyinstaller==6.20.0
    pytest-cov==7.1.0 + ruff scoped to `src tests` + `fail-fast: false`;
@@ -405,7 +449,7 @@ Next: fresh spec or further polish — do NOT start a new phase without one.
    `!README.md` allowlist (.dockerignore `*.md` was excluding the COPYed
    README). CI green: validate 3.10/3.11/3.12/3.13/3.14 + build = 6/6.
    Next: user merges PR #4 (or says merge).
-2. **Session 23 landed + pushed (2026-08-07, user-driven, `a806a0b`)**: Web
+4. **Session 23 landed + pushed (2026-08-07, user-driven, `a806a0b`)**: Web
    Search (DDGS) flakiness fixed at the root — the shared `duckduckgo.com`
    rate bucket was 6 rpm vs ~19 DDGS calls/run → ~190s pacing against the
    75s batch timeout ⇒ batch died, Web Search contributed 0 every run.
@@ -414,14 +458,14 @@ Next: fresh spec or further polish — do NOT start a new phase without one.
    through web_search/career_sites/naukri/indeed, main.py timeout message
    45s→75s. Live: two runs, `errors: {}` both, all 8 sources contributing
    (Web Search 27–32 found), zero batch timeouts. 694/694 tests.
-3. **Session 22 landed + pushed (2026-08-07, user-driven, `a13afde`)**: no
+5. **Session 22 landed + pushed (2026-08-07, user-driven, `a13afde`)**: no
    fake US jobs (headless `_headless_credentials` now stamps
    `profile["location"]` from -l — location filter was a no-op on the
    agent surface), no Google `[age?]` noise (SerpAPI posted_at parsed;
    date-less rows get an honest window stamp gated on
    `_window_guarantees_age`), no source-error spam (OpenCLI→HTML fallback
    clears only HTTP-status noise). Live: 207 found/26 kept, errors {}.
-4. **Session 21 landed + pushed (2026-08-07, user-driven, `54eb272`)**: "i
+6. **Session 21 landed + pushed (2026-08-07, user-driven, `54eb272`)**: "i
    dont want jobs cached… results are kinda the same… operate on the other
    sources" — root-caused and fixed: (a) the Session 20 all-seen fallback
    was re-showing the same list → now a clear **"No new jobs"** state
@@ -433,7 +477,7 @@ Next: fresh spec or further polish — do NOT start a new phase without one.
    under `apply_options`) → 38 kept; (f) Career Sites/Web Search starved
    under the 45s batch timeout → query   caps + 75s timeout → Career Sites 32 kept. Live: 230 found/140 kept,
    0 junk.
-5. **Session 20 landed (2026-08-07, user-driven)**: live link audit proved
+7. **Session 20 landed (2026-08-07, user-driven)**: live link audit proved
    the "wrong links" complaint — LinkedIn `/job-apply/` apply links 404
    while stable `jobs/view` URLs work; `stable_apply_url()` now normalizes
    at both ingest points (search parse + enrichment). Same-jobs UX: the
@@ -441,7 +485,7 @@ Next: fresh spec or further polish — do NOT start a new phase without one.
    toggles, `[seen]` marker, saving retires a job). Pre-existing bug
    fixed: provenance tags (`[full]/[age?]`) were swallowed by rich markup
    — now visible.
-6. **Session 19 landed (2026-08-07, user-driven)**: config-wipe root cause
+8. **Session 19 landed (2026-08-07, user-driven)**: config-wipe root cause
    fixed (`save_config` merge semantics — the (AI) banner was showing while
    ZERO AI calls fired because `ai_provider` was wiped on every interactive
    run); Naukri aggregate listing pages gated out at discovery
@@ -449,14 +493,14 @@ Next: fresh spec or further polish — do NOT start a new phase without one.
    **fernet-only** (keyring removed per user preference — no macOS keychain
    prompts); machine restored (kilo + key, consents, SerpAPI) and
    live-verified: AI on, top 85.0%, 5 verdicts, Naukri junk 0.
-7. **Optional follow-ups the user may want**: `matcha doctor` should now
+9. **Optional follow-ups the user may want**: `matcha doctor` should now
    show **8/8 sources + AI ok**; a devtools-MCP integration is NOT needed
    — the OpenCLI browser bridge already is the Chrome access for
    LinkedIn/Indeed; consider `filters.remote: true` or
    `remote_preference` if the Hyderabad search's remote-exclusion note
    matters.
-8. **Do NOT start a new phase without a fresh spec.**
-9. OpenCLI bridge is CONNECTED on this machine (v1.8.4, consents True) —
+10. **Do NOT start a new phase without a fresh spec.**
+11. OpenCLI bridge is CONNECTED on this machine (v1.8.4, consents True) —
    live LinkedIn/Indeed enrichment verified; mcporter and agent-reach not
    installed (unchanged).
 

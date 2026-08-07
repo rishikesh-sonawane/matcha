@@ -27,6 +27,8 @@ separate pipeline stage.
 """
 
 import logging
+import os
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
@@ -38,7 +40,7 @@ from matcha.sources.backends.opencli import (
     linkedin_job_detail,
     opencli_status,
 )
-from matcha.sources.linkedin import stable_apply_url
+from matcha.sources.linkedin import canonical_job_url, stable_apply_url
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +64,13 @@ _LINKEDIN_MERGE_KEYS = (
 
 #: Keys merged from OpenCLI Indeed job detail (includes salary).
 _INDEED_MERGE_KEYS = ("description", "job_type", "salary", "url")
+
+#: Session 26: the OpenCLI daemon (and LinkedIn's API) intermittently returns
+#: empty for job-detail right after a heavy search batch — one bounded retry
+#: with a short pause absorbs those transient failures (verified live: batch
+#: would otherwise lose ALL enrichment, starving AI re-scoring).
+_JOB_DETAIL_RETRIES = 1
+_JOB_DETAIL_RETRY_SLEEP = 1.0
 
 _JINA_BASE = "https://r.jina.ai/"
 _JINA_MAX_DESCRIPTION = 3000
@@ -145,10 +154,14 @@ def _enrich_linkedin(
     url = str(job.get("url") or "")
     if "linkedin.com/jobs" not in url:
         return False
+    # Session 26: OpenCLI job-detail only resolves the canonical
+    # www.linkedin.com/jobs/view/<id> form — in.linkedin.com / query params
+    # silently return empty, killing enrichment (and thus AI re-scoring).
+    url = canonical_job_url(url)
     if opencli_ready:
         if not consent_granted(config, "linkedin"):
             return False
-        detail = linkedin_job_detail(url, timeout=timeout)
+        detail = _job_detail_with_retry(linkedin_job_detail, url, timeout=timeout)
         if not detail:
             job["enrich_error"] = "job-detail failed"
             return False
@@ -178,7 +191,7 @@ def _enrich_indeed(
         return False  # no zero-config fallback for Indeed yet
     if not consent_granted(config, "indeed"):
         return False
-    detail = indeed_job_detail(job_key, timeout=timeout)
+    detail = _job_detail_with_retry(indeed_job_detail, job_key, timeout=timeout)
     if not detail:
         job["enrich_error"] = "job detail failed"
         return False
@@ -190,10 +203,36 @@ def _enrich_indeed(
     return True
 
 
+def _job_detail_with_retry(fn: Any, *args: Any, timeout: int) -> Any:
+    """Call an OpenCLI job-detail adapter with one bounded retry on empty."""
+    for attempt in range(_JOB_DETAIL_RETRIES + 1):
+        detail = fn(*args, timeout=timeout)
+        if detail:
+            return detail
+        if attempt < _JOB_DETAIL_RETRIES:
+            time.sleep(_JOB_DETAIL_RETRY_SLEEP)
+    return None
+
+
+_JINA_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+)
+
+
 def _jina_enrich(job: dict[str, Any], url: str, timeout: int) -> bool:
-    """Best-effort Jina Reader fallback (strategy §8)."""
+    """Best-effort Jina Reader fallback (strategy §8).
+
+    Session 26: Jina gated anonymous access (403) — a browser User-Agent is
+    sent, and an optional ``JINA_API_KEY`` env var (or config
+    ``scrapers.jina.api_key``) upgrades the call to an authenticated one.
+    """
     try:
-        resp = requests.get(_JINA_BASE + url, timeout=timeout)
+        headers = {"User-Agent": _JINA_UA}
+        jina_key = os.environ.get("JINA_API_KEY") or ""
+        if jina_key:
+            headers["Authorization"] = f"Bearer {jina_key}"
+        resp = requests.get(_JINA_BASE + url, headers=headers, timeout=timeout)
         if resp.status_code != 200:
             return False
         text = resp.text.strip()

@@ -119,9 +119,26 @@ class TestCityRegionRemote(unittest.TestCase):
         self.assertEqual(normalize_city("Trivandrum"), "Thiruvananthapuram")
         self.assertEqual(normalize_city("Hyderabad, Telangana"), "Hyderabad")
 
+    def test_country_suffix_never_shadows_city(self):
+        # Session 25 (user-reported): "Pune, Maharashtra, India" must be Pune —
+        # the generic "india" key was winning by raw length and every such job
+        # was mis-normalized to "India", silently dropping real city matches.
+        self.assertEqual(normalize_city("Pune, Maharashtra, India"), "Pune")
+        self.assertEqual(normalize_city("Hyderabad, Telangana, India"), "Hyderabad")
+        self.assertEqual(normalize_city("Bengaluru, Karnataka, India"), "Bengaluru")
+        self.assertEqual(normalize_city("Mumbai, Maharashtra, India"), "Mumbai")
+        self.assertEqual(normalize_city("Chennai, Tamil Nadu, India"), "Chennai")
+
     def test_city_remote(self):
         self.assertEqual(normalize_city("Remote"), "Remote")
         self.assertEqual(normalize_city("Work from home"), "Remote")
+
+    def test_two_real_cities_earliest_wins(self):
+        # Session 25 (reviewer-caught): the tie-break must be positional — the
+        # city mentioned FIRST in the string wins, not dict-insertion order.
+        self.assertEqual(normalize_city("Hyderabad, Bengaluru"), "Hyderabad")
+        self.assertEqual(normalize_city("Pune, Mumbai"), "Pune")
+        self.assertEqual(normalize_city("Bengaluru, Hyderabad"), "Bengaluru")
 
     def test_city_empty(self):
         self.assertEqual(normalize_city(""), "")

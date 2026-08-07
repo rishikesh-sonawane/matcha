@@ -31,6 +31,27 @@ SECONDS_PER_DAY: int = 86400
 #: Session 20). Matcha always applies via the stable job page instead.
 _JOB_APPLY_RE = re.compile(r"/job-apply/(\d+)")
 
+#: LinkedIn job IDs are 7+ digits. Country subdomains (``in.linkedin.com``),
+#: guest-API query params (``?position=..&pageNum=..``) and slug names all
+#: vary per row, but the numeric ID is the canonical identity.
+_JOB_VIEW_ID_RE = re.compile(r"/jobs/view/(?:[^/?#]*?)(\d{7,})(?:[?#]|$)")
+
+
+def canonical_job_url(url: str) -> str:
+    """Return the canonical ``www.linkedin.com/jobs/view/<id>`` form of a job URL.
+
+    OpenCLI ``job-detail`` only resolves the canonical ``www.linkedin.com``
+    form — country subdomains (``in.linkedin.com``) return empty (verified
+    live, Session 26), and guest-API query params (``?position=..``) are
+    noise. Canonicalizing also makes dedup / seen-tracking stable across
+    subdomain + query variations. Non-jobs/view URLs pass through unchanged.
+    """
+    url = (url or "").strip()
+    m = _JOB_VIEW_ID_RE.search(url)
+    if not m:
+        return url
+    return f"https://www.linkedin.com/jobs/view/{m.group(1)}"
+
 
 def stable_apply_url(url: str, apply_url: str = "") -> str:
     """Return a stable LinkedIn apply URL.
@@ -147,7 +168,9 @@ def _parse_linkedin_rows(rows: list[dict[str, Any]], default_location: str) -> l
         # Session 20: OpenCLI search rows can carry an ephemeral job-apply
         # link that 404s outside a live session — always keep the stable
         # jobs/view URL as the apply destination (and label it apply_url so
-        # the detail panel + `o` open the real posting).
+        # the detail panel + `o` open the real posting). Session 26: also
+        # canonicalize the URL itself — job-detail needs www + /jobs/view/<id>.
+        job["url"] = canonical_job_url(job.get("url", ""))
         job["apply_url"] = stable_apply_url(job.get("url", ""), job.get("apply_url", ""))
         jobs.append(job)
     return jobs
@@ -218,6 +241,10 @@ def _search_linkedin_guest_api(
                         link = (
                             href if href.startswith("http") else f"https://www.linkedin.com{href}"
                         )
+                        # Session 26: guest cards resolve to in.linkedin.com/
+                        # jobs/view/<slug>?position=.. — canonicalize so
+                        # enrichment (OpenCLI job-detail) and dedup work.
+                        link = canonical_job_url(link)
 
                     if title:
                         jobs.append(

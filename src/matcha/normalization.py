@@ -325,14 +325,41 @@ def normalize_salary_int(salary: str) -> int | None:
 # ---------------------------------------------------------------------------
 
 
+#: Country-level / remote synonyms are FALLBACKS, never the primary city.
+#: A real city in the string must win over them ("Pune, Maharashtra, India"
+#: is Pune, not India) — Session 25: the old longest-key-first iteration let
+#: "india"/"remote" shadow the actual city ("pune" < "india" by length) and
+#: the location filter silently dropped or mis-matched those rows.
+_GENERIC_LOCATIONS = frozenset({"India", "Remote"})
+
+
 def normalize_city(location: str) -> str:
-    """Primary city of a location string, synonym-canonicalized ("" if none)."""
+    """Primary city of a location string, synonym-canonicalized ("" if none).
+
+    The most specific city wins, tie-broken by position: when the string
+    mentions several known places ("Pune, Maharashtra, India"), a real city
+    beats the country-level fallbacks (``India`` / ``Remote``), and the city
+    that appears earliest in the string wins ("Hyderabad, Bengaluru" →
+    "Hyderabad").
+    """
     if not location:
         return ""
     loc = str(location).lower().strip()
-    for key in sorted(_CITY_SYNONYMS, key=len, reverse=True):
-        if re.search(rf"(?<![a-z0-9]){re.escape(key)}(?![a-z0-9])", loc):
-            return _CITY_SYNONYMS[key]
+    matches: list[tuple[int, str]] = []
+    seen: set[str] = set()
+    for key, canon in _CITY_SYNONYMS.items():
+        m = re.search(rf"(?<![a-z0-9]){re.escape(key)}(?![a-z0-9])", loc)
+        if m and canon not in seen:
+            matches.append((m.start(), canon))
+            seen.add(canon)
+    matches.sort()  # earliest position first (deterministic, intuitive)
+    # Prefer a specific city; fall back to a generic country/remote value only
+    # when no real city is present ("India" / "Remote" alone).
+    for _, canon in matches:
+        if canon not in _GENERIC_LOCATIONS:
+            return canon
+    if matches:
+        return matches[0][1]
     m = re.search(r"\b([A-Z][a-zA-Z]{2,}(?: [A-Z][a-zA-Z]+)?)\b", str(location).strip())
     if m and m.group(1).lower() not in {"india", "remote"}:
         candidate = m.group(1)

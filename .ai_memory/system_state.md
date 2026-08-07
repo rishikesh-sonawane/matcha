@@ -1,6 +1,6 @@
 # Current System State — Matcha
 
-> Last verified: 2026-08-07 (Session 24 — CI pipeline fixed; branch fix/ci-reliability, PR #4).
+> Last verified: 2026-08-07 (Session 26 — enrichment fixed: canonical LinkedIn URLs → 95% [full] results, zero junk).
 > If any checkbox below conflicts with the actual code, **the code wins** —
 > update this file.
 
@@ -280,11 +280,11 @@ one.
 - Makefile targets: `run` / `test` / `test-coverage` / `lint` / `format` /
   `static-analysis` / `pre-commit` / `check`.
 
-## Git State (2026-08-07, Session 24)
+## Git State (2026-08-07, Session 25)
 
-- Working branch: `fix/ci-reliability` (Session 24 CI fixes — 3 commits ahead
-  of `main`; PR #4 open). **`main` is untouched** at `9cd76d2` (Session 23
-  memory sync), in sync with `origin/main`.
+- Working branch: `fix/ci-reliability` (Session 24 CI fixes + Session 25
+  location-filter fix, uncommitted — 3 commits ahead of `main`; PR #4
+  open). **`main` is untouched** at `9cd76d2`, in sync with `origin/main`.
 - **CI was broken on every push since 07:38** (unpinned `pip install ruff`
   drifted 0.15.16 → 0.16.1; ruff 0.16 reformats markdown code fences, and
   the default fail-fast matrix canceled the other 4 Python versions, hiding

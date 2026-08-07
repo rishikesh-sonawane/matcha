@@ -38,6 +38,7 @@ from matcha.sources.linkedin import (
     _date_posted_flag,
     _parse_linkedin_rows,
     _search_linkedin_opencli,
+    canonical_job_url,
     search_linkedin_jobs,
     stable_apply_url,
 )
@@ -372,6 +373,43 @@ class TestLinkedInRowMapping(unittest.TestCase):
         self.assertEqual(_date_posted_flag(7), "week")
         self.assertEqual(_date_posted_flag(30), "month")
         self.assertEqual(_date_posted_flag(90), "any")
+
+
+class TestCanonicalJobUrl(unittest.TestCase):
+    """Session 26: OpenCLI job-detail only resolves www.linkedin.com/jobs/view/<id>.
+
+    Country subdomains + guest-API query params made enrichment silently fail
+    (every row got `enrich_error: job-detail failed`), which starved AI
+    re-scoring (0 eligible candidates → no >80% scores).
+    """
+
+    def test_country_subdomain_with_query_canonicalized(self):
+        url = (
+            "https://in.linkedin.com/jobs/view/devops-engineer-ii-at-miq-4441190126"
+            "?position=4&pageNum=0&refId=abc"
+        )
+        self.assertEqual(canonical_job_url(url), "https://www.linkedin.com/jobs/view/4441190126")
+
+    def test_canonical_form_passes_through(self):
+        url = "https://www.linkedin.com/jobs/view/4441190126"
+        self.assertEqual(canonical_job_url(url), url)
+
+    def test_guest_api_card_url_canonicalized(self):
+        url = "https://in.linkedin.com/jobs/view/4429179323?position=1&pageNum=0"
+        self.assertEqual(canonical_job_url(url), "https://www.linkedin.com/jobs/view/4429179323")
+
+    def test_non_jobs_view_url_untouched(self):
+        for url in ("https://in.linkedin.com/company/acme", "https://example.com/jobs/1", ""):
+            self.assertEqual(canonical_job_url(url), url)
+
+    def test_row_mapping_canonicalizes_url(self):
+        # OpenCLI rows may carry in.linkedin.com URLs — the mapped job must be
+        # canonical so enrichment + dedup + seen-tracking are stable.
+        rows = [
+            {"title": "Dev", "url": "https://in.linkedin.com/jobs/view/x-5551234567?position=2"}
+        ]
+        jobs = _parse_linkedin_rows(rows, "India")
+        self.assertEqual(jobs[0]["url"], "https://www.linkedin.com/jobs/view/5551234567")
 
 
 class TestIndeedDispatch(unittest.TestCase):

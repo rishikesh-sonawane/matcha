@@ -86,6 +86,50 @@ class TestEnrichLinkedIn(unittest.TestCase):
         self.assertEqual(job.get("description", ""), "")  # search data untouched
         self.assertNotIn("data_quality", job)
 
+    @mock.patch("matcha.sources.enrichment.opencli_status", return_value=READY)
+    @mock.patch("matcha.sources.enrichment.linkedin_job_detail")
+    def test_transient_empty_detail_retried_once(self, detail, status):
+        # Session 26 (live): the OpenCLI daemon intermittently returns EMPTY
+        # for job-detail right after a heavy search batch — one bounded retry
+        # absorbs it; two empties in a row still fail in isolation.
+        with CONSENT:
+            detail.side_effect = [None, {"description": "recovered"}]
+            job = _linkedin_job()
+            self.assertTrue(enrich_job(job))
+        self.assertEqual(detail.call_count, 2)
+        self.assertEqual(job["description"], "recovered")
+        self.assertEqual(job["data_quality"], "full")
+
+    @mock.patch("matcha.sources.enrichment.opencli_status", return_value=READY)
+    @mock.patch("matcha.sources.enrichment.linkedin_job_detail", return_value=None)
+    def test_two_empty_details_still_fail(self, detail, status):
+        with CONSENT:
+            job = _linkedin_job()
+            self.assertFalse(enrich_job(job))
+        self.assertEqual(detail.call_count, 2)  # 1 retry, then give up
+        self.assertIn("enrich_error", job)
+
+    @mock.patch("matcha.sources.enrichment.opencli_status", return_value=READY)
+    @mock.patch("matcha.sources.enrichment.linkedin_job_detail")
+    def test_country_subdomain_url_canonicalized_before_detail(self, detail, status):
+        # Session 26 (live-verified): OpenCLI job-detail returns EMPTY for
+        # in.linkedin.com / query-param URLs — every row then failed with
+        # `enrich_error: job-detail failed`, 0 candidates became AI-eligible,
+        # and AI re-scoring never ran (flat heuristic 47.5% wall). The URL
+        # must be canonicalized to www.linkedin.com/jobs/view/<id> first.
+        with CONSENT:
+            detail.return_value = {"description": "Full description..."}
+            job = _linkedin_job(
+                url=(
+                    "https://in.linkedin.com/jobs/view/devops-ii-at-x-4441190126"
+                    "?position=4&pageNum=0"
+                )
+            )
+            self.assertTrue(enrich_job(job, config={}))
+        detail.assert_called_once()
+        called_url = detail.call_args.args[0]
+        self.assertEqual(called_url, "https://www.linkedin.com/jobs/view/4441190126")
+
 
 class TestEnrichIndeed(unittest.TestCase):
     @mock.patch("matcha.sources.enrichment.opencli_status", return_value=READY)

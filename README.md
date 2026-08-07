@@ -453,6 +453,7 @@ filters:
   remote: false           # remote-only mode
   min_salary: 0           # LPA floor (0 = off)
   drop_unknown_salary: false  # drop jobs without a parseable salary
+  strict_location: false  # drop jobs with no parseable location instead of tagging [loc?]
 ranking:
   normalize_scores: false # stretch a flat score distribution onto [5, 100]
 sources:
@@ -467,15 +468,21 @@ run through a **central filter pipeline** in a fixed order — quality → age �
 must-skills → location → salary — each reporting exactly how many jobs it
 cut. The TUI shows the filter summary before results
 (`Filtered: 96 kept (age −142 · must −21 · loc −33 …)`) and tags uncertain
-provenance (`[age?]` / `[salary?]`). The quality gate also drops
+provenance (`[age?]` / `[salary?]` / `[loc?]`). The quality gate also drops
 listing-page/nav noise leaked by snippet fallbacks ("Link to naukri.com",
 "It Jobs", "Developer Tcs Jobs" — titles ending in "Jobs" or matching
 boilerplate), and when the location stage excludes remote jobs it prints an
 actionable hint (`set filters.remote: true or remote_preference: remote`).
-Must-have skills, a salary floor, and a remote preference can be set in
-`~/.matcha/profile.json` (`must_have_skills`, `min_salary`,
-`remote_preference`) or via `filters:` above; `matcha --days N` overrides
-the age window for one run.
+
+The **location preference may be a multi-city string** — e.g.
+`Location: Hyderabad, Pune, Bengaluru` — and every city in it is matched
+(any-city, with per-city region fallback), so a three-city preference
+returns jobs from all three. Jobs whose location is unparseable are kept
+but tagged `[loc?]` so they are visibly unverified, or dropped entirely
+with `filters.strict_location: true`. Must-have skills, a salary floor, and
+a remote preference can be set in `~/.matcha/profile.json`
+(`must_have_skills`, `min_salary`, `remote_preference`) or via `filters:`
+above; `matcha --days N` overrides the age window for one run.
 
 **Ranking** (Phase 4): the heuristic scorer is now **confidence-weighted** —
 the skills/keyword dimensions scale by data richness (`data_quality`:

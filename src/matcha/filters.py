@@ -14,11 +14,20 @@ via ``settings.yaml`` under ``filters:`` (§7.6):
       remote: false            # remote-only mode
       min_salary: 0            # LPA floor (0 = off)
       drop_unknown_salary: false
+      strict_location: false   # drop unknown-location jobs instead of tagging [loc?]
 
 Each stage returns ``(kept_jobs, FilterReport)`` so the UI can show exactly
 why results were cut ("96 kept (age −142 · must −21 · loc −33 …)"). Unknown-age
-jobs are tagged ``age: "unknown"`` and unknown-salary jobs are tagged
-``salary_tag: "unknown"`` so the UI can render ``[age?]`` / ``[salary?]``.
+jobs are tagged ``age: "unknown"``, unknown-salary jobs are tagged
+``salary_tag: "unknown"`` and unknown-location jobs are tagged
+``loc_tag: "unknown"`` so the UI can render ``[age?]`` / ``[salary?]`` /
+``[loc?]``.
+
+The location preference may be a multi-city string ("Hyderabad, Pune,
+Bengaluru") — it is split on separators and matched against ANY of the
+preferred cities/regions (Session 25: the previous single-city
+``normalize_city`` call resolved multi-city strings to an arbitrary one,
+silently dropping the user's other cities).
 """
 
 import re
@@ -80,8 +89,37 @@ _JUNK_TITLE_RE = re.compile(
 )
 
 
+#: Role words that make a long comma-heavy title look like a REAL posting
+#: ("Senior DevOps Engineer (Jenkins, Terraform, Kubernetes)"). Fragments
+#: scraped from descriptions ("AWS Cloud, EKS, Terraform, Gitlab CI/CD, ...")
+#: name skills, never the role — so they are dropped (Session 26). The scan
+#: covers the WHOLE title so role words past char 60 ("Remote Senior — AWS,
+#: Terraform, ..., CI/CD Engineer") never false-positive.
+_FRAGMENT_ROLE_RE = re.compile(
+    r"\b(engineer|developer|architect|sre|devops|analyst|manager|lead|specialist|"
+    r"administrator|consultant|director|principal|head|staff|scientist|designer|"
+    r"intern|trainee|associate|technician|operator|coordinator)\b",
+    re.IGNORECASE,
+)
+
+
+#: URL-as-title leaks (workday / intranet listing pages parsed as titles).
+_URL_TITLE_RE = re.compile(r"https?://|www\.|\.com/|\.jobs?/", re.IGNORECASE)
+
+
 def _is_junk_title(title: str) -> bool:
-    return bool(_JUNK_TITLE_RE.search(title.strip().lower()))
+    t = str(title).strip()
+    low = t.lower()
+    if _JUNK_TITLE_RE.search(low):
+        return True
+    # A URL is never a job title (scraped listing-page leaks).
+    if _URL_TITLE_RE.search(low):
+        return True
+    # Skill-list fragment: 3+ comma-separated items with no role word
+    # anywhere — a scraped description fragment presented as a title.
+    if low.count(",") >= 3 and not _FRAGMENT_ROLE_RE.search(t):
+        return True
+    return False
 
 
 def _filter_quality(
@@ -216,6 +254,24 @@ def _filter_must_skills(
 # ---------------------------------------------------------------------------
 
 
+_LOCATION_SEP = re.compile(r"[,;/&|]|\b(?:and|or)\b", re.IGNORECASE)
+
+
+def _profile_cities(location: str) -> set[str]:
+    """Canonical city names for a (possibly multi-city) location preference.
+
+    ``"Hyderabad, Pune, Bengaluru"`` → ``{"Hyderabad", "Pune", "Bengaluru"}``.
+    Empty results are discarded so a preference without a parseable city
+    behaves like no preference.
+    """
+    return {c for c in (normalize_city(p) for p in _LOCATION_SEP.split(location)) if c}
+
+
+def _profile_regions(location: str) -> set[str]:
+    """Coarse regions for every city in a (possibly multi-city) preference."""
+    return {r for r in (normalize_region(p) for p in _LOCATION_SEP.split(location)) if r}
+
+
 def _filter_location(
     jobs: list[dict[str, Any]],
     profile: dict[str, Any],
@@ -224,12 +280,27 @@ def _filter_location(
     force_remote = bool(cfg.get("remote", False))
     profile_loc = str(profile.get("location") or "").strip()
     preference = str(profile.get("remote_preference") or "").strip().lower()
-    remote_acceptable = preference in {"remote", "hybrid"} or not profile_loc
-    profile_city = normalize_city(profile_loc)
-    profile_region = normalize_region(profile_loc)
+    # Session 25: multi-city support — every city in the preference string is
+    # a valid target (single-city ``normalize_city`` resolved "Hyderabad, Pune,
+    # Bengaluru" to an arbitrary one and silently dropped the other two).
+    profile_cities = _profile_cities(profile_loc)
+    profile_regions = _profile_regions(profile_loc)
+    # Country-level preference ("India" / "Pan India"): the old normalize_city
+    # returned "India" for every Indian city string, so this matched all of
+    # them. The new city-aware normalize_city returns the real city, so a
+    # country-level profile must accept ANY job with a known city (reviewer-
+    # caught regression — Session 25).
+    country_level = "India" in profile_cities
+    # Explicit "remote" location (or a remote/hybrid preference) makes remote
+    # jobs acceptable; a concrete city preference does not.
+    remote_acceptable = (
+        preference in {"remote", "hybrid"} or not profile_cities or "Remote" in profile_cities
+    )
+    strict_location = bool(cfg.get("strict_location", False))
 
     kept: list[dict[str, Any]] = []
     remote_dropped = 0
+    unknown_dropped = 0
     for job in jobs:
         remote = bool(job.get("remote_ok"))
         if force_remote:
@@ -242,23 +313,43 @@ def _filter_location(
             else:
                 remote_dropped += 1
             continue  # remote job, but the user wants on-site only
-        city = normalize_city(str(job.get("location") or ""))
-        region = normalize_region(str(job.get("location") or ""))
-        if not profile_city:
+        job_loc = str(job.get("location") or "")
+        city = normalize_city(job_loc)
+        region = normalize_region(job_loc)
+        if not profile_cities:
             kept.append(job)  # no location preference
-        elif city == profile_city:
-            kept.append(job)  # exact city match
-        elif city and region and region == profile_region:
-            kept.append(job)  # region fallback
+        elif country_level and city:
+            kept.append(job)  # "India" preference accepts any known Indian city
+        elif city in profile_cities:
+            kept.append(job)  # exact match on ANY preferred city
+        elif city and region and region in profile_regions:
+            kept.append(job)  # region fallback for any preferred city
         elif not city:
-            kept.append(job)  # unknown location — kept (ranked lower later)
+            # Unknown location — tagged [loc?] so the row is honest; strict
+            # mode drops it (a pinned location preference usually means the
+            # user does not want unverifiable listings at all).
+            job["loc_tag"] = "unknown"
+            if strict_location:
+                unknown_dropped += 1
+            else:
+                kept.append(job)
     report = FilterReport("location", len(kept), len(jobs) - len(kept))
-    # Silent mass-remote drops confuse users (a DevOps search often IS remote).
+    # Silent mass-remote drops confuse users (a DevOps search often IS remote),
+    # and strict-location drops deserve the same visibility. Combine both
+    # notes when they co-occur (reviewer-caught — Session 25).
+    notes: list[str] = []
     if remote_dropped and not force_remote:
-        report.reason = (
+        notes.append(
             f"{remote_dropped} remote job(s) excluded — set filters.remote: true "
             "or profile remote_preference: remote/hybrid to include them"
         )
+    if unknown_dropped:
+        notes.append(
+            f"{unknown_dropped} unknown-location job(s) dropped "
+            "(strict_location) — unset filters.strict_location to keep them tagged [loc?]"
+        )
+    if notes:
+        report.reason = " | ".join(notes)
     return kept, report
 
 
@@ -382,4 +473,6 @@ def provenance_tags(job: dict[str, Any]) -> list[str]:
         tags.append("age?")
     if job.get("salary_tag") == "unknown":
         tags.append("salary?")
+    if job.get("loc_tag") == "unknown":
+        tags.append("loc?")
     return tags
