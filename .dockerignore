@@ -8,6 +8,9 @@ __pycache__
 .env
 .gitattributes
 *.md
+# README.md must stay in the build context: pyproject.toml's readme field
+# (and the Dockerfile's COPY) requires the file to exist during the build.
+!README.md
 tests/
 revamp/
 .kilo/
