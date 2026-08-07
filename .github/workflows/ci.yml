@@ -15,6 +15,9 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     strategy:
+      # fail-fast: false — one failing Python version must not cancel the
+      # others (a single failure used to hide all downstream breakage).
+      fail-fast: false
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]  # F-03: dev venv is 3.14
 
@@ -37,15 +40,23 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install ruff bandit pre-commit
+          # Pin lint tools to the same versions as the local venv and the
+          # .pre-commit-config.yaml revs (Session 24). An unpinned `pip install
+          # ruff` drifted to 0.16.1, whose formatter rewrites Python code fences
+          # inside markdown docs (kilo.md, revamp/*.md) — CI failed while the
+          # pinned 0.15.16 passed locally. bandit/pre-commit are pinned for the
+          # same reproducibility reason.
+          pip install ruff==0.15.16 bandit==1.9.4 pre-commit==4.6.0
           pip install -r requirements.txt
           pip install -e .
 
       - name: Lint
-        run: ruff check .
+        # Scoped to the actual codebase: formatting markdown code fences in
+        # planning docs is not part of the gate (and drifts across ruff revs).
+        run: ruff check src tests
 
       - name: Format check
-        run: ruff format --diff .
+        run: ruff format --diff src tests
 
       - name: Static analysis
         run: bandit -c pyproject.toml -r src/matcha -lll
@@ -59,7 +70,7 @@ jobs:
 
       - name: Coverage gate (>=80%)
         run: |
-          pip install pytest-cov
+          pip install pytest-cov==7.1.0  # pinned: reproducible coverage
           python -m pytest tests -q --cov=src/matcha --cov-report=term
           python -m coverage report --fail-under=80
 
@@ -77,7 +88,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller
+          pip install pyinstaller==6.20.0  # pinned: reproducible builds
           pip install -r requirements.txt
           pip install -e .
 
