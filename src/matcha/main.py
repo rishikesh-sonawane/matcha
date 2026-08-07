@@ -592,6 +592,13 @@ def run_search(
 
                 extra_scrapers["RSS"] = search_rss_jobs
                 extra_scraper_kwargs["RSS"] = {"feeds": rss_feeds}
+    # Phase 1 opt-in: 200+ employer career boards via DDGS. Off by default so
+    # zero-config runs stay fast; doctor reports `off` until enabled.
+    scrapers_cfg = settings.get("scrapers")
+    if isinstance(scrapers_cfg, dict) and scrapers_cfg.get("career_sites", False):
+        from matcha.sources.career_sites import search_career_sites_jobs
+
+        extra_scrapers["Career Sites"] = search_career_sites_jobs
 
     jobs, source_counts, source_errors = search_jobs(
         queries,

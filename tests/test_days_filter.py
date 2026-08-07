@@ -19,7 +19,9 @@ class TestIndeedDaysFilter(unittest.TestCase):
     def test_fromage_passed_when_days_given(self, mock_fetch):
         mock_fetch.return_value.status_code = 200
         mock_fetch.return_value.text = "<html></html>"
-        search_indeed_jobs("platform engineer", "pune", days=3)
+        # backend="html" keeps this hermetic: the consented OpenCLI route
+        # (machine state) would never touch _fetch_indeed_page.
+        search_indeed_jobs("platform engineer", "pune", days=3, backend="html")
         args, kwargs = mock_fetch.call_args
         self.assertEqual(args[1].get("fromage"), "3")
 
@@ -27,7 +29,7 @@ class TestIndeedDaysFilter(unittest.TestCase):
     def test_fromage_omitted_when_no_days(self, mock_fetch):
         mock_fetch.return_value.status_code = 200
         mock_fetch.return_value.text = "<html></html>"
-        search_indeed_jobs("platform engineer", "pune")
+        search_indeed_jobs("platform engineer", "pune", backend="html")
         args, kwargs = mock_fetch.call_args
         self.assertNotIn("fromage", args[1])
 

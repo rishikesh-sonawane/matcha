@@ -35,6 +35,7 @@ _DEFAULTS: dict[str, Any] = {
     "scrapers": {
         "serpapi": False,
         "indeed_domain": "in.indeed.com",
+        "career_sites": False,
     },
     "enrichment": {
         "enabled": True,

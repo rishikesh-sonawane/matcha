@@ -113,6 +113,8 @@ class AIConfig(BaseModel):
 class ScraperConfig(BaseModel):
     serpapi: bool = False
     indeed_domain: str = "in.indeed.com"
+    #: 200+ employer career boards via DDGS (default off; opt-in).
+    career_sites: bool = False
 
 
 class EnrichmentConfig(BaseModel):

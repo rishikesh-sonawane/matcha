@@ -51,6 +51,17 @@ class TestLoadSettings(unittest.TestCase):
             s = settings_mod.load_settings(config_path=str(cfg))
         self.assertFalse(s["ai"]["enabled"])
 
+    def test_career_sites_flag_survives_validation(self):
+        """Regression: `scrapers.career_sites` was silently dropped by the
+        pydantic round-trip, so the doctor's "enable via ..." hint was a
+        dead end. The flag must survive load_settings."""
+        with tempfile.TemporaryDirectory() as d:
+            cfg = Path(d) / "custom.yaml"
+            cfg.write_text("scrapers:\n  career_sites: true\n", encoding="utf-8")
+            s = settings_mod.load_settings(config_path=str(cfg))
+        self.assertTrue(s["scrapers"]["career_sites"])
+        self.assertEqual(s["scrapers"]["indeed_domain"], "in.indeed.com")  # default intact
+
 
 if __name__ == "__main__":
     unittest.main()

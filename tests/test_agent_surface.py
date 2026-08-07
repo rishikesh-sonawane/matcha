@@ -146,7 +146,10 @@ class TestRunSearch(unittest.TestCase):
     def test_quiet_pipeline_with_fake_scraper(self):
         from matcha.main import SCRAPER_DEFS, run_search
 
-        with mock.patch.dict(SCRAPER_DEFS, {"Fake": _fake_scraper_factory()}, clear=True):
+        with (
+            mock.patch.dict(SCRAPER_DEFS, {"Fake": _fake_scraper_factory()}, clear=True),
+            mock.patch("matcha.main.check_serpapi_available", return_value=False),
+        ):
             result = run_search(
                 _profile(),
                 "platform",
@@ -174,6 +177,7 @@ class TestRunSearch(unittest.TestCase):
         with (
             mock.patch.dict(SCRAPER_DEFS, {"Fake": _fake_scraper_factory()}, clear=True),
             mock.patch("matcha.sources.enrichment.enrich_top_n", return_value=(2, [])) as enrich,
+            mock.patch("matcha.main.check_serpapi_available", return_value=False),
         ):
             result = run_search(
                 _profile(),
@@ -195,6 +199,7 @@ class TestRunSearch(unittest.TestCase):
         with (
             mock.patch.dict(SCRAPER_DEFS, {"Fake": _fake_scraper_factory()}, clear=True),
             mock.patch("matcha.sources.enrichment.enrich_top_n", return_value=(2, [])) as enrich,
+            mock.patch("matcha.main.check_serpapi_available", return_value=False),
         ):
             result = run_search(
                 _profile(),
@@ -209,6 +214,57 @@ class TestRunSearch(unittest.TestCase):
             )
             enrich.assert_not_called()
             self.assertEqual(result["enriched_count"], 0)
+
+    def test_career_sites_wired_when_enabled(self):
+        """`scrapers.career_sites: true` must add the Career Sites source to
+        the search dispatch (previously the flag only flipped doctor status)."""
+        from matcha.main import SCRAPER_DEFS, run_search
+        from matcha.models import ScraperResult
+
+        settings = _settings(enrichment=False)
+        settings["scrapers"]["career_sites"] = True
+        with (
+            mock.patch.dict(SCRAPER_DEFS, {"Fake": _fake_scraper_factory()}, clear=True),
+            mock.patch(
+                "matcha.sources.career_sites.search_career_sites_jobs",
+                return_value=ScraperResult(jobs=[], source="Career Sites", backend="ddgs"),
+            ) as career_search,
+            mock.patch("matcha.main.check_serpapi_available", return_value=False),
+        ):
+            result = run_search(
+                _profile(),
+                "platform",
+                "Pune",
+                7,
+                settings,
+                {},
+                ai_enabled=False,
+                quiet=True,
+            )
+        career_search.assert_called_once()
+        self.assertEqual(result["found_count"], 2)  # Fake's 2 jobs still flow
+
+    def test_career_sites_skipped_when_disabled(self):
+        from matcha.main import SCRAPER_DEFS, run_search
+
+        with (
+            mock.patch.dict(SCRAPER_DEFS, {"Fake": _fake_scraper_factory()}, clear=True),
+            mock.patch(
+                "matcha.sources.career_sites.search_career_sites_jobs",
+            ) as career_search,
+            mock.patch("matcha.main.check_serpapi_available", return_value=False),
+        ):
+            run_search(
+                _profile(),
+                "platform",
+                "Pune",
+                7,
+                _settings(enrichment=False),
+                {},
+                ai_enabled=False,
+                quiet=True,
+            )
+        career_search.assert_not_called()
 
 
 class TestVerdictPass(unittest.TestCase):
@@ -241,6 +297,7 @@ class TestVerdictPass(unittest.TestCase):
             mock.patch("matcha.main.ai_verdict", side_effect=fake_verdict),
             mock.patch("matcha.main.ai_generate_queries", return_value=None),
             mock.patch("matcha.main.compute_relevance_ai", return_value=None),
+            mock.patch("matcha.main.check_serpapi_available", return_value=False),
         ):
             return run_search(
                 _profile(),
@@ -273,6 +330,7 @@ class TestVerdictPass(unittest.TestCase):
             mock.patch("matcha.main.ai_verdict") as verdict,
             mock.patch("matcha.main.ai_generate_queries", return_value=None),
             mock.patch("matcha.main.compute_relevance_ai", return_value=None),
+            mock.patch("matcha.main.check_serpapi_available", return_value=False),
         ):
             result = run_search(
                 _profile(),
@@ -317,6 +375,7 @@ class TestAiRescoreAfterEnrichment(unittest.TestCase):
             mock.patch("matcha.main.compute_relevance_ai", side_effect=fake_ai),
             mock.patch("matcha.main.ai_generate_queries", return_value=None),
             mock.patch("matcha.main.ai_verdict", return_value=None),
+            mock.patch("matcha.main.check_serpapi_available", return_value=False),
         ):
             result = run_search(
                 _profile(),
@@ -374,6 +433,7 @@ class TestWatch(unittest.TestCase):
             mock.patch("matcha.main.load_profile", return_value=_profile()),
             mock.patch("matcha.main.load_config", return_value={}),
             mock.patch("matcha.main.check_ai_available", return_value=False),
+            mock.patch("matcha.main.check_serpapi_available", return_value=False),
             mock.patch("matcha.main.console"),
             redirect_stdout(buf),
         ):
@@ -400,6 +460,7 @@ class TestWatch(unittest.TestCase):
             mock.patch("matcha.main.load_profile", return_value=_profile()),
             mock.patch("matcha.main.load_config", return_value={}),
             mock.patch("matcha.main.check_ai_available", return_value=False),
+            mock.patch("matcha.main.check_serpapi_available", return_value=False),
             mock.patch("matcha.main.console"),
             redirect_stdout(buf),
         ):
@@ -477,6 +538,7 @@ class TestCmdSearch(unittest.TestCase):
             mock.patch("matcha.main.load_profile", return_value=_profile()),
             mock.patch("matcha.main.load_config", return_value={}),
             mock.patch("matcha.main.check_ai_available", return_value=False),
+            mock.patch("matcha.main.check_serpapi_available", return_value=False),
             mock.patch("matcha.main.console"),
             redirect_stdout(buf),
         ):

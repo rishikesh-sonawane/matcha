@@ -435,6 +435,7 @@ ai:
 scrapers:
   serpapi: false          # Google Jobs — the key itself is set via `matcha --configure`
   indeed_domain: in.indeed.com
+  career_sites: false     # 200+ employer career boards via DDGS (opt-in)
   linkedin_backend: guest # optional: force a source backend (see env vars)
 enrichment:
   enabled: true           # top-N detail enrichment after ranking
@@ -524,8 +525,12 @@ sources:
   rss:
     feeds:
       - https://careers.example.com/jobs.rss
-      - https://remoteok.com/remote-jobs.rss
+      - https://weworkremotely.com/categories/remote-devops-sysadmin-jobs.rss
 ```
+
+**Career sites** — `scrapers.career_sites: true` adds the 200+ employer-board
+source (DDGS `site:` discovery) to searches. Off by default so zero-config
+runs stay fast; `matcha doctor` reports `off` until you enable it.
 
 **Private-file discipline** — all config/profile/secret writes are atomic +
 owner-only (0600 files, 0700 dirs), reads refuse symlinks component-wise and
@@ -606,6 +611,7 @@ trim the pipeline for fast scripted runs.
 | **Web Search** | Exa semantic search (via mcporter, when configured) ▸ `ddgs` API with targeted `site:` queries | 10–30 listings | mcporter (optional) |
 | **RSS** | `feedparser` over your configured company/job-board feeds | feed-dependent | Nothing (add feeds in settings) |
 | **Google Jobs** | SerpAPI `google_jobs` engine (optional) | Rich listings | SerpAPI key |
+| **Career Sites** | DDGS `site:` discovery over 200+ employer career boards | variable | Nothing (opt-in: `scrapers.career_sites: true`) |
 
 ---
 

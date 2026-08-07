@@ -458,6 +458,13 @@ class TestVerdict(unittest.TestCase):
         from matcha.ai import reset_budget
 
         reset_budget(0)
+        # Hermetic: never consult the real AI disk cache (a hit would skip
+        # _call_ai and break the budget/call assertions).
+        self._settings_patch = mock.patch(
+            "matcha.ai._ai_settings", return_value={"ai": {"cache_ttl": 0}}
+        )
+        self._settings_patch.start()
+        self.addCleanup(self._settings_patch.stop)
 
     def tearDown(self):
         from matcha.ai import reset_budget

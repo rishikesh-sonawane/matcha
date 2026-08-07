@@ -89,6 +89,15 @@ class TestAIEmptyContent(unittest.TestCase):
 
 
 class TestMaxTokens(unittest.TestCase):
+    def setUp(self):
+        # Hermetic: the machine may have ai.cache_ttl > 0 and a real cache
+        # file; a hit would skip the mocked _call_ai and break these asserts.
+        self._settings_patch = mock.patch(
+            "matcha.ai._ai_settings", return_value={"ai": {"cache_ttl": 0}}
+        )
+        self._settings_patch.start()
+        self.addCleanup(self._settings_patch.stop)
+
     def test_scoring_uses_16384(self):
         from matcha.ai import ai_score_job
 

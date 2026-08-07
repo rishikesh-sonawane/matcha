@@ -648,7 +648,9 @@ class TestLinkedIn(unittest.TestCase):
             "matcha.sources.linkedin._search_linkedin_guest_api",
             return_value=ScraperResult(jobs=[], source="LinkedIn", backend="guest-api"),
         ):
-            result = search_linkedin_jobs("engineer")
+            # backend override keeps this hermetic: the machine's OpenCLI
+            # consent would otherwise route to the browser bridge.
+            result = search_linkedin_jobs("engineer", backend="guest-api")
         self.assertEqual(result.backend, "guest-api")
 
 
