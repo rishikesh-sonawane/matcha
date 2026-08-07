@@ -2,6 +2,17 @@
 
 ## Current Focus
 
+**Session 24 (2026-08-07): CI pipeline fixed on branch `fix/ci-reliability`
+(PR #4) — main untouched.** CI failed on every push since 07:38: the
+validate job ran unpinned `pip install ruff` → drifted to 0.16.1 while
+local + pre-commit pin 0.15.16; ruff 0.16 reformats Python code fences in
+markdown docs → `ruff format --diff .` failed in CI only, and the default
+fail-fast matrix canceled the other 4 versions, hiding all downstream
+breakage. Fixes: pinned ruff/bandit/pre-commit/pyinstaller/pytest-cov,
+ruff scoped to `src tests`, fail-fast false, `bandit[toml]` (3.10 lacks
+tomllib), de-raced two order-asserting tests, `!README.md` docker
+allowlist. **CI green 6/6 jobs (validate 3.10–3.14 + build).**
+
 **Session 23 (2026-08-07): Web Search (DDGS) flakiness fixed at the root.**
 Root cause: the shared `duckduckgo.com` rate bucket was **6 rpm** (1 req/10s)
 while Web Search fires ~15 DDGS calls/run + Naukri + Indeed through it —
@@ -385,7 +396,16 @@ Next: fresh spec or further polish — do NOT start a new phase without one.
 
 ## Immediate Next Steps
 
-1. **Session 23 landed + pushed (2026-08-07, user-driven, `a806a0b`)**: Web
+1. **Session 24 — CI fixed on `fix/ci-reliability` (2026-08-07, user-driven;
+   PR #4 open, `main` untouched)**: 3 commits — (a) `ci.yml`: pin
+   ruff==0.15.16 bandit==1.9.4 pre-commit==4.6.0 pyinstaller==6.20.0
+   pytest-cov==7.1.0 + ruff scoped to `src tests` + `fail-fast: false`;
+   (b) matrix legs exposed by fail-fast false: `bandit[toml]` for Python
+   3.10, two order-asserting tests de-raced (sort); (c) docker build
+   `!README.md` allowlist (.dockerignore `*.md` was excluding the COPYed
+   README). CI green: validate 3.10/3.11/3.12/3.13/3.14 + build = 6/6.
+   Next: user merges PR #4 (or says merge).
+2. **Session 23 landed + pushed (2026-08-07, user-driven, `a806a0b`)**: Web
    Search (DDGS) flakiness fixed at the root — the shared `duckduckgo.com`
    rate bucket was 6 rpm vs ~19 DDGS calls/run → ~190s pacing against the
    75s batch timeout ⇒ batch died, Web Search contributed 0 every run.
@@ -394,14 +414,14 @@ Next: fresh spec or further polish — do NOT start a new phase without one.
    through web_search/career_sites/naukri/indeed, main.py timeout message
    45s→75s. Live: two runs, `errors: {}` both, all 8 sources contributing
    (Web Search 27–32 found), zero batch timeouts. 694/694 tests.
-2. **Session 22 landed + pushed (2026-08-07, user-driven, `a13afde`)**: no
+3. **Session 22 landed + pushed (2026-08-07, user-driven, `a13afde`)**: no
    fake US jobs (headless `_headless_credentials` now stamps
    `profile["location"]` from -l — location filter was a no-op on the
    agent surface), no Google `[age?]` noise (SerpAPI posted_at parsed;
    date-less rows get an honest window stamp gated on
    `_window_guarantees_age`), no source-error spam (OpenCLI→HTML fallback
    clears only HTTP-status noise). Live: 207 found/26 kept, errors {}.
-3. **Session 21 landed + pushed (2026-08-07, user-driven, `54eb272`)**: "i
+4. **Session 21 landed + pushed (2026-08-07, user-driven, `54eb272`)**: "i
    dont want jobs cached… results are kinda the same… operate on the other
    sources" — root-caused and fixed: (a) the Session 20 all-seen fallback
    was re-showing the same list → now a clear **"No new jobs"** state
@@ -413,7 +433,7 @@ Next: fresh spec or further polish — do NOT start a new phase without one.
    under `apply_options`) → 38 kept; (f) Career Sites/Web Search starved
    under the 45s batch timeout → query   caps + 75s timeout → Career Sites 32 kept. Live: 230 found/140 kept,
    0 junk.
-4. **Session 20 landed (2026-08-07, user-driven)**: live link audit proved
+5. **Session 20 landed (2026-08-07, user-driven)**: live link audit proved
    the "wrong links" complaint — LinkedIn `/job-apply/` apply links 404
    while stable `jobs/view` URLs work; `stable_apply_url()` now normalizes
    at both ingest points (search parse + enrichment). Same-jobs UX: the
@@ -421,7 +441,7 @@ Next: fresh spec or further polish — do NOT start a new phase without one.
    toggles, `[seen]` marker, saving retires a job). Pre-existing bug
    fixed: provenance tags (`[full]/[age?]`) were swallowed by rich markup
    — now visible.
-5. **Session 19 landed (2026-08-07, user-driven)**: config-wipe root cause
+6. **Session 19 landed (2026-08-07, user-driven)**: config-wipe root cause
    fixed (`save_config` merge semantics — the (AI) banner was showing while
    ZERO AI calls fired because `ai_provider` was wiped on every interactive
    run); Naukri aggregate listing pages gated out at discovery
@@ -429,14 +449,14 @@ Next: fresh spec or further polish — do NOT start a new phase without one.
    **fernet-only** (keyring removed per user preference — no macOS keychain
    prompts); machine restored (kilo + key, consents, SerpAPI) and
    live-verified: AI on, top 85.0%, 5 verdicts, Naukri junk 0.
-6. **Optional follow-ups the user may want**: `matcha doctor` should now
+7. **Optional follow-ups the user may want**: `matcha doctor` should now
    show **8/8 sources + AI ok**; a devtools-MCP integration is NOT needed
    — the OpenCLI browser bridge already is the Chrome access for
    LinkedIn/Indeed; consider `filters.remote: true` or
    `remote_preference` if the Hyderabad search's remote-exclusion note
    matters.
-7. **Do NOT start a new phase without a fresh spec.**
-8. OpenCLI bridge is CONNECTED on this machine (v1.8.4, consents True) —
+8. **Do NOT start a new phase without a fresh spec.**
+9. OpenCLI bridge is CONNECTED on this machine (v1.8.4, consents True) —
    live LinkedIn/Indeed enrichment verified; mcporter and agent-reach not
    installed (unchanged).
 

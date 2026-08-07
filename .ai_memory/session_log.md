@@ -979,3 +979,18 @@ why would I see it again tomorrow."
 - **Docs:** README env table `MATCHA_HTTP_CACHE_TTL` (0 = off) + "No new
   jobs" state note.
 - **Next:** fresh spec or polish — do NOT start a new phase without one.
+
+---
+
+### 2026-08-07 — Session 24: CI fixed (ruff drift, matrix hidden failures, docker) — branch fix/ci-reliability
+
+**Goal:** user: "now switch branches and on the new branch fix the broken ci ... do not modify main." CI had failed on EVERY push since 07:38 (8 runs) — all died at the same step.
+
+- **Root cause:** the validate job ran unpinned `pip install ruff` → drifted to 0.16.1 while the local venv and .pre-commit-config.yaml pin **0.15.16**. Ruff 0.16's formatter rewrites Python code fences inside markdown docs (kilo.md, revamp/blueprint.md, docs/...), so `ruff format --diff .` failed in CI while passing locally. Default fail-fast matrix then canceled the other 4 Python versions — hiding all downstream breakage.
+- **Fixes (3 commits on fix/ci-reliability, PR #4):**
+  1. `ci.yml`: pin ruff==0.15.16 / bandit==1.9.4 / pre-commit==4.6.0 / pyinstaller==6.20.0 / pytest-cov==7.1.0; scope ruff check/format to `src tests` (planning-doc markdown churn can never break the gate again); **fail-fast: false** so one version can't cancel the others.
+  2. Matrix legs the cancelling run had hidden: Python 3.10 needed **bandit[toml]** (no stdlib tomllib pre-3.11 → "toml parser not available" exit 2); `test_search_jobs_query_caps` + `test_search_jobs_indeed_recovery_only_first_query` asserted racy ThreadPoolExecutor completion ORDER → now sort (order-free); verified stable across 15 repeat runs.
+  3. **Docker build** (`/README.md: not found` — the Dockerfile COPYs README.md but .dockerignore `*.md` excluded it; never reached before because validate always failed) → `!README.md` allowlist (comment on its own line — docker has no inline comments). Verified locally: `docker build .` exits 0.
+- **Validation:** 694/694 tests ×2 locally; ruff check/format clean; mypy 0; bandit 0; pre-commit green; coverage 81% (≥80). **CI green on the PR: validate 3.10/3.11/3.12/3.13/3.14 + build (pyinstaller + docker image) — 6/6 jobs ✓.**
+- **main untouched:** still at 9cd76d2 (Session 23 memory sync); branch is 3 commits ahead; PR #4 open for review.
+- **Next:** merge PR #4 to main (user decides) — then fresh spec or polish.

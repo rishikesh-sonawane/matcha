@@ -1,6 +1,6 @@
 # Current System State — Matcha
 
-> Last verified: 2026-08-07 (Session 23 — Web Search/DDGS flakiness fixed at the root).
+> Last verified: 2026-08-07 (Session 24 — CI pipeline fixed; branch fix/ci-reliability, PR #4).
 > If any checkbox below conflicts with the actual code, **the code wins** —
 > update this file.
 
@@ -280,15 +280,20 @@ one.
 - Makefile targets: `run` / `test` / `test-coverage` / `lint` / `format` /
   `static-analysis` / `pre-commit` / `check`.
 
-## Git State (2026-08-07, post-Session-23)
+## Git State (2026-08-07, Session 24)
 
-- Branch `main`, **in sync with `origin/main`** (nothing uncommitted, nothing
-  unpushed). HEAD: `a806a0b` (Session 23 — Web Search/DDGS flakiness fixed
-  at the root). Recent history: `a13afde` (Session 22 — no fake US jobs, no
-  [age?] noise, no source error spam), `54eb272` (Session 21 — no HTTP
-  caching, no-repeat result lists, all sources alive), plus the earlier
-  Session 16–20 commits and Phase 0–7 work. Sessions 16–23 are all
-  committed and pushed.
+- Working branch: `fix/ci-reliability` (Session 24 CI fixes — 3 commits ahead
+  of `main`; PR #4 open). **`main` is untouched** at `9cd76d2` (Session 23
+  memory sync), in sync with `origin/main`.
+- **CI was broken on every push since 07:38** (unpinned `pip install ruff`
+  drifted 0.15.16 → 0.16.1; ruff 0.16 reformats markdown code fences, and
+  the default fail-fast matrix canceled the other 4 Python versions, hiding
+  all downstream breakage). Session 24 fixed it: pinned tools, ruff scoped
+  to `src tests`, fail-fast false, `bandit[toml]` for 3.10, de-raced two
+  order-asserting tests, `!README.md` docker allowlist.
+- **CI fully green on the PR: validate 3.10/3.11/3.12/3.13/3.14 + build
+  (pyinstaller + docker) — 6/6 jobs.** 694/694 tests, ruff/mypy/bandit
+  clean, coverage 81%.
 
 ## Matcha 2.0 Roadmap (from revamp/matcha-2.0-strategy.md §18)
 
