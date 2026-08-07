@@ -13,7 +13,11 @@ except ImportError:
     DDGS = None  # type: ignore[assignment, misc]
 
 from matcha.models import ScraperResult
-from matcha.sources.backends.opencli import _opencli_should_run, run_opencli
+from matcha.sources.backends.opencli import (
+    _opencli_should_run,
+    indeed_job_detail,
+    run_opencli,
+)
 from matcha.sources.base import Source, probe_url
 
 from .utils import limiter, resilient_get
@@ -98,7 +102,41 @@ def _search_indeed_opencli(
         logger.warning("OpenCLI Indeed search failed: %s", result["error"])
         return None
 
-    jobs = _parse_indeed_rows(result["rows"], location)
+    rows = result["rows"]
+    jobs = _parse_indeed_rows(rows, location)
+
+    # Session 21 (user-driven): OpenCLI's Indeed adapter now returns rows with
+    # EMPTY ``title`` fields (Indeed DOM change, verified live) — the parser
+    # drops every row and the source silently yields nothing. The job-detail
+    # endpoint DOES return titles (+ salary/description), so recover the first
+    # few missing titles for the primary query only (bounded cost, ~8 calls).
+    if kwargs.get("recover_titles", False) and rows:
+        missing = [r for r in rows if not str(r.get("title") or "").strip()]
+        if missing:
+            recovered = 0
+            for row in missing[:8]:
+                detail = indeed_job_detail(str(row.get("id") or ""), timeout=15)
+                if detail and str(detail.get("title") or "").strip():
+                    row["title"] = str(detail["title"]).strip()
+                    for k in ("salary", "description", "job_type", "location"):
+                        if detail.get(k) and not row.get(k):
+                            row[k] = detail[k]
+                    recovered += 1
+            jobs = _parse_indeed_rows(rows, location)
+            if recovered:
+                logger.info(
+                    "OpenCLI Indeed: recovered %d/%d titles via job-detail",
+                    recovered,
+                    len(missing),
+                )
+
+    if not jobs:
+        if kwargs.get("recover_titles", False):
+            # Primary query: give the HTML/DDGS fallback a last chance.
+            return None
+        # Variant queries reuse the same US index — returning empty (instead
+        # of falling back to the anti-bot HTML path) avoids 403 error spam.
+        return ScraperResult(jobs=[], source="Indeed", backend="opencli", data_quality="snippet")
     return ScraperResult(jobs=jobs, source="Indeed", backend="opencli", data_quality="partial")
 
 

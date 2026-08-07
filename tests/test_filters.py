@@ -94,6 +94,12 @@ class TestQualityFilter(unittest.TestCase):
             "Walkin Drives",
             "Walk-in Drive",
             "Walk In Interview",
+            # Session 21: Naukri masked/placeholder postings + RemoteOK
+            # placeholder titles leaked into results (user-reported)
+            "Job Listings 040826031923",
+            "Job Listings",
+            "Join Our Team",
+            "Join Our Team at Acme",
         ):
             kept, reports = apply_filters([_job(title=title)], {})
             self.assertEqual(len(kept), 0, f"junk title {title!r} should be dropped")

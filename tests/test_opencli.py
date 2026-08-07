@@ -437,6 +437,71 @@ class TestIndeedOpenCLISearch(unittest.TestCase):
         run.return_value = {"ok": False, "rows": [], "error": "no browser"}
         self.assertIsNone(_search_indeed_opencli("engineer"))
 
+    @mock.patch("matcha.sources.indeed.indeed_job_detail")
+    @mock.patch("matcha.sources.indeed.run_opencli")
+    def test_recovers_empty_titles_via_job_detail(self, run, detail):
+        # Session 21: OpenCLI's Indeed adapter returns rows with EMPTY titles
+        # (Indeed DOM change) — the job-detail endpoint recovers them.
+        run.return_value = {
+            "ok": True,
+            "rows": [
+                {
+                    "id": "abc123",
+                    "title": "",
+                    "company": "Acme",
+                    "location": "Pune",
+                    "url": "https://www.indeed.com/viewjob?jk=abc123",
+                },
+                {
+                    "id": "def456",
+                    "title": "",
+                    "company": "Globex",
+                    "location": "Mumbai",
+                    "url": "https://www.indeed.com/viewjob?jk=def456",
+                },
+            ],
+        }
+        detail.side_effect = [
+            {
+                "id": "abc123",
+                "title": "DevOps Engineer",
+                "salary": "₹20L",
+                "job_type": "Full-time",
+                "description": "desc",
+                "location": "Pune",
+            },
+            {
+                "id": "def456",
+                "title": "SRE",
+                "salary": "₹25L",
+                "job_type": "Full-time",
+                "description": "desc2",
+                "location": "Mumbai",
+            },
+        ]
+        result = _search_indeed_opencli("devops", "Pune", recover_titles=True)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.jobs[0]["title"], "DevOps Engineer")
+        self.assertEqual(result.jobs[1]["title"], "SRE")
+        self.assertEqual(result.jobs[0]["salary"], "₹20L")
+        self.assertEqual(detail.call_count, 2)
+
+    @mock.patch("matcha.sources.indeed.indeed_job_detail")
+    @mock.patch("matcha.sources.indeed.run_opencli")
+    def test_no_recovery_without_flag_returns_empty(self, run, detail):
+        # Session 21: variant queries skip the detail pass and return an empty
+        # result instead of None — falling back to the anti-bot HTML path for
+        # every variant just spams 403 errors (the primary query recovered
+        # the same US-index rows already).
+        run.return_value = {
+            "ok": True,
+            "rows": [{"id": "x", "title": "", "company": "C", "url": "u"}],
+        }
+        result = _search_indeed_opencli("devops", "Pune", recover_titles=False)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.jobs, [])
+        detail.assert_not_called()
+
     def test_fromage_flag_mapping(self):
         self.assertEqual(indeed_fromage(1), 1)
         self.assertEqual(indeed_fromage(3), 3)

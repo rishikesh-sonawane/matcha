@@ -293,6 +293,7 @@ def search_jobs(
     quiet: bool = False,
     extra_scrapers: dict[str, Any] | None = None,
     extra_scraper_kwargs: dict[str, dict[str, Any]] | None = None,
+    query_caps: dict[str, int] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, int], dict[str, list[str]]]:
     if isinstance(queries, str):
         queries = [queries]
@@ -380,15 +381,26 @@ def search_jobs(
             futures = {}
             for name, func in scrapers.items():
                 extra = scraper_kwargs.get(name, {})
-                for q in queries:
+                qs = queries
+                if query_caps:
+                    cap = query_caps.get(name)
+                    if cap is not None and cap < len(qs):
+                        qs = queries[:cap]
+                for qi, q in enumerate(qs):
+                    per_q = dict(extra)
+                    if name == "Indeed":
+                        # Session 21: only the primary query pays for the
+                        # job-detail title-recovery pass (bounded, ~8 calls);
+                        # variant queries reuse the same US-index rows.
+                        per_q["recover_titles"] = qi == 0
                     f = executor.submit(
-                        run_scraper, f"{name}({q})", func, q, location, days, max_pages, **extra
+                        run_scraper, f"{name}({q})", func, q, location, days, max_pages, **per_q
                     )
                     futures[f] = name
 
             _last_state: tuple[bytes, ...] | None = None
             try:
-                for future in as_completed(futures, timeout=45):
+                for future in as_completed(futures, timeout=75):
                     source_name = futures[future]
                     _, result = future.result()
                     pending[source_name] = False
@@ -609,6 +621,9 @@ def run_search(
         quiet=quiet,
         extra_scrapers=extra_scrapers or None,
         extra_scraper_kwargs=extra_scraper_kwargs or None,
+        # Session 21: cap the DDGS-heavy sources so the 6 AI queries don't
+        # explode into 40+ slow searches that starve under the batch timeout.
+        query_caps={"Career Sites": 2, "Web Search": 3, "Naukri": 3},
     )
     found_count = len(jobs)
 
@@ -1200,14 +1215,17 @@ def prompt_loop(
         return max(1, (len(_visible()) + page_size - 1) // page_size)
 
     hidden_count = len(ranked) - len(_visible_ranked(ranked, seen_ids, False))
-    # All-seen: don't claim rows are "hidden" when the fallback below is
-    # about to show them anyway, and don't let `h` blank the table.
     all_seen = bool(ranked) and hidden_count == len(ranked)
     if hidden_count and not all_seen:
         console.print(f"  [dim]{hidden_count} already seen — hidden ([bold]h[/bold] to show)[/dim]")
     if all_seen:
-        st.show_seen = True
-        console.print("  [dim]Nothing new — showing all previously seen jobs[/dim]")
+        # Session 21 (user-driven): never re-show the same list — the user
+        # asked for fresh jobs, not a replay. The empty state guides the
+        # next step; `h` reveals the previously-seen rows on demand.
+        console.print(
+            "  [yellow]No new jobs — all results were already shown in a previous run.[/yellow] "
+            "([bold]h[/bold] view them, [bold]r[/bold] search again, [bold]q[/bold] quit)"
+        )
 
     help_text = (
         "[dim]\u2191\u2193[/dim] navigate  [dim]Enter[/dim] detail  "
@@ -1265,18 +1283,26 @@ def prompt_loop(
                         )
                     console.print(t)
             else:
-                console.print(
-                    build_results_table(
-                        _visible(),
-                        st.page,
-                        page_size,
-                        _total_pages(),
-                        ai_enabled,
-                        saved_ids,
-                        highlight=st.selected,
-                        seen_ids=seen_ids,
+                visible = _visible()
+                if not visible:
+                    console.print(
+                        "[yellow]No new jobs.[/yellow] All results were already shown in a "
+                        "previous run — press [bold]h[/bold] to view them anyway, "
+                        "[bold]r[/bold] to search again, or [bold]q[/bold] to quit."
                     )
-                )
+                else:
+                    console.print(
+                        build_results_table(
+                            visible,
+                            st.page,
+                            page_size,
+                            _total_pages(),
+                            ai_enabled,
+                            saved_ids,
+                            highlight=st.selected,
+                            seen_ids=seen_ids,
+                        )
+                    )
         return cap.get()
 
     def _render_help():
@@ -1351,7 +1377,7 @@ def prompt_loop(
     @kb.add("h")
     @kb.add("H")
     def _toggle_seen(event):
-        if st.mode == "list" and not all_seen:
+        if st.mode == "list":
             st.show_seen = not st.show_seen
             st.page = 0
             st.selected = 0

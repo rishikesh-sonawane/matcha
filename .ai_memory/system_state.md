@@ -1,6 +1,6 @@
 # Current System State — Matcha
 
-> Last verified: 2026-08-07 (Session 20 — stable apply links, TUI seen-hiding, provenance tags visible).
+> Last verified: 2026-08-07 (Session 21 — no HTTP caching, all-seen "no new jobs" state, all 8 sources alive).
 > If any checkbox below conflicts with the actual code, **the code wins** —
 > update this file.
 
@@ -219,13 +219,26 @@ one.
   escaped + Match column widened so `[full]/[age?]` finally render. 675/675
   tests; ruff/mypy clean; coverage 81%.
 
+- [x] **Session 21 — no caching + all sources alive (DONE 2026-08-07):**
+  HTTP cache OFF by default (`MATCHA_HTTP_CACHE_TTL=0`, plain session, stale
+  53MB cache purged); all-seen runs show a "No new jobs" state instead of
+  replaying the same list; junk gate + "Job Listings"/"Join Our Team";
+  Indeed empty-title recovery via job-detail (primary query ≤8); SerpAPI
+  apply_options URLs (was dropping 43/43); per-source query caps + batch
+  timeout 45→75s. Live: 230 found/140 kept, Indeed 92%, Google 95%, Career
+  Sites 85%, 0 junk, 0 ephemeral links. 680/680 tests; ruff/mypy clean;
+  coverage 81%.
+
 ## Test Baseline (2026-08-07)
 
-- **675/675 tests pass** (`unittest discover tests` AND `pytest tests/`).
-  666 at end of Session 19; +9 from Session 20 (LinkedIn stable apply-url
-  normalization ×4, `_visible_ranked` seen-hiding + table `[seen]` marker,
-  escaped provenance-tag rendering, prompt_loop partial-seen + all-seen
-  fallback notes) + the utils.py `import os` crash fix.
+- **680/680 tests pass** (`unittest discover tests` AND `pytest tests/`).
+  675 at end of Session 20; +5 from Session 21 (Indeed empty-title recovery
+  ×2, per-source query caps, per-query Indeed recovery flag, SerpAPI
+  apply_options/source_link URL fallback).
+  675/675 at end of Session 20: +9 (LinkedIn stable apply-url normalization
+  ×4, `_visible_ranked` seen-hiding + table `[seen]` marker, escaped
+  provenance-tag rendering, prompt_loop partial-seen + all-seen notes) +
+  the utils.py `import os` crash fix.
   666/666 at end of Session 19: +4 (config partial-save preserves
   ai_provider/consents ×2, Naukri aggregate-URL drop at discovery, beyond-cap
   rows stay honest snippet) + junk-title case additions + 1 test renamed

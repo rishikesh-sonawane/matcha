@@ -839,3 +839,47 @@ why would I see it again tomorrow."
 - **Docs:** README interactive-features note (seen-hiding + `h`), track.py
   docstring (TUI now consumes seen_urls).
 - **Next:** fresh spec or polish — do NOT start a new phase without one.
+
+---
+
+### 2026-08-07 — Session 21: no caching, no repeat lists, all sources alive (user-driven)
+
+**Goal:** user: "i dont want jobs cached… results are kinda the same… we need
+ to operate on the other sources as well." The 2nd TUI run showed the same 14
+ jobs — the Session 20 **all-seen fallback was re-showing everything** (its
+ note sat outside the user's paste), which reads exactly like caching.
+
+- **Fix — all-seen UX:** an all-seen run now shows a **"No new jobs"** state
+  (h view them, r search again, q quit) instead of re-playing the list;
+  partial-seen runs keep the "N already seen — hidden (h)" note.
+- **Fix — HTTP cache OFF by default:** `MATCHA_HTTP_CACHE_TTL=0` → plain
+  `requests.Session`, no cache (opt-in via the env). The 5-min cache was
+  replaying identical pages AND a stale cached SerpAPI "no results"
+  response; the stale 53MB `http_cache.sqlite` was purged.
+- **Fix — junk rows:** Naukri "Job Listings <id>" placeholders + RemoteOK
+  "Join Our Team" added to the junk-title gate (were leaking in at 0%).
+- **Fix — Indeed was silently dead:** OpenCLI's Indeed adapter returns rows
+  with EMPTY titles (Indeed DOM change, verified live) → parser dropped every
+  row → 0 jobs. Now the primary query recovers titles (≤8) via
+  `opencli indeed job <jk>` (which returns title+salary+description); variant
+  queries return empty instead of 403-spamming the HTML fallback. Live: 8
+  Indeed jobs kept, top 92% ("DevOps Engineer @ Booz Allen").
+- **Fix — Google Jobs was silently dead:** current google_jobs responses put
+  the apply URL under `apply_options` (`related_links` is null) — every row
+  lost its URL and the quality gate dropped 43/43. Fixed → **38 kept**, top
+  95% (Capgemini/Infosys/Techdome Hyderabad roles).
+- **Fix — slow sources starved:** 6 AI queries × (career-sites 8 / web-search
+  5) DDGS calls each blew past the 45s batch timeout → Career Sites + Web
+  Search = 0. Per-source **query caps** (Career 2, Web 3, Naukri 3) + batch
+  timeout 45→75s. Live: Career Sites 32 kept (top 85%), Web Search still 0
+  kept (its rows are remote/unspecified → correctly excluded by the location
+  filter; DDGS also flaky today).
+- **Live result (DevOps / Hyderabad / 3d):** 230 found → 140 kept — LinkedIn
+  150, RSS 238, RemoteOK 111, Google 43, Career 43, Indeed 8, Naukri 2;
+  AI on, 17 enriched, 0 junk rows, 0 ephemeral /job-apply/ links.
+- **Validation:** 680/680 tests (+5: Indeed title recovery ×2, query caps,
+  per-query recovery flag, SerpAPI apply_options/source_link); ruff/format/
+  mypy clean; coverage 81% (gate ≥80%).
+- **Docs:** README env table `MATCHA_HTTP_CACHE_TTL` (0 = off) + "No new
+  jobs" state note.
+- **Next:** fresh spec or polish — do NOT start a new phase without one.

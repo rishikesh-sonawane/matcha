@@ -442,7 +442,7 @@ class TestTableBuilders(unittest.TestCase):
         prints = [str(c.args[0]) for c in console.print.call_args_list]
         self.assertTrue(any("already seen" in p for p in prints), prints)
 
-    def test_prompt_loop_all_seen_falls_back_to_show_all(self):
+    def test_prompt_loop_all_seen_shows_no_new_jobs_state(self):
         import matcha.main as main
 
         seen_job = {"title": "A", "company": "C", "url": "u1", "source": "X"}
@@ -456,9 +456,58 @@ class TestTableBuilders(unittest.TestCase):
             result = main.prompt_loop(ranked, {"X": 1}, {}, False, seen_ids={id(seen_job)})
         self.assertIsNone(result)
         prints = [str(c.args[0]) for c in console.print.call_args_list]
-        # "Nothing new" fallback shown; no contradictory "hidden" note
-        self.assertTrue(any("Nothing new" in p for p in prints), prints)
+        # Session 21: an all-seen run must NOT re-show the same list — the
+        # "No new jobs" state guides the user instead (h reveals on demand).
+        self.assertTrue(any("No new jobs" in p for p in prints), prints)
         self.assertFalse(any("hidden" in p for p in prints), prints)
+
+    def test_search_jobs_query_caps(self):
+        import matcha.main as main
+
+        calls: list[tuple[str, str]] = []
+
+        def _fake(label):
+            def _f(q, loc="", **kw):
+                calls.append((label, q))
+                return []
+
+            return _f
+
+        scrapers = {"A": _fake("A"), "B": _fake("B")}
+        with (
+            mock.patch.object(main, "SCRAPER_DEFS", {}),
+            mock.patch("matcha.main.check_serpapi_available", return_value=False),
+        ):
+            main.search_jobs(
+                ["q1", "q2", "q3"],
+                "loc",
+                quiet=True,
+                extra_scrapers=scrapers,
+                query_caps={"A": 2, "B": 3},
+            )
+        self.assertEqual([q for n, q in calls if n == "A"], ["q1", "q2"])
+        self.assertEqual([q for n, q in calls if n == "B"], ["q1", "q2", "q3"])
+
+    def test_search_jobs_indeed_recovery_only_first_query(self):
+        import matcha.main as main
+
+        seen: list[tuple[str, str]] = []
+
+        def _fake_indeed(q, loc="", **kw):
+            seen.append((q, str(kw.get("recover_titles"))))
+            return []
+
+        with (
+            mock.patch.object(main, "SCRAPER_DEFS", {}),
+            mock.patch("matcha.main.check_serpapi_available", return_value=False),
+        ):
+            main.search_jobs(
+                ["q1", "q2"],
+                "loc",
+                quiet=True,
+                extra_scrapers={"Indeed": _fake_indeed},
+            )
+        self.assertEqual(seen, [("q1", "True"), ("q2", "False")])
 
     def test_show_job_detail(self):
         import matcha.main as main

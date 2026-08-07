@@ -8,6 +8,7 @@ from threading import Lock
 from typing import Any
 from urllib.parse import urlparse
 
+import requests
 import requests_cache
 from requests import Response
 from requests.exceptions import ConnectionError, Timeout
@@ -19,17 +20,21 @@ RETRYABLE_STATUSES: set[int] = {429, 502, 503, 504}
 CACHE_DIR: Path = Path.home() / ".matcha"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-#: HTTP cache TTL in seconds — default 300 (5 min) so same-day re-runs see
-#: fresh postings instead of re-playing an identical 30-min-old snapshot.
-#: Override via MATCHA_HTTP_CACHE_TTL (0 = fully disable the cache).
-_HTTP_CACHE_TTL = int(os.environ.get("MATCHA_HTTP_CACHE_TTL", "300"))
+#: HTTP cache TTL in seconds — default 0 (OFF). Session 21: the user wants
+#: fresh postings on every run, not replayed snapshots of the same pages
+#: ("i dont want jobs cached"). Set MATCHA_HTTP_CACHE_TTL (e.g. 300) to
+#: re-enable a bounded cache when repeat runs hammer a source.
+_HTTP_CACHE_TTL = int(os.environ.get("MATCHA_HTTP_CACHE_TTL", "0"))
 
-_session: requests_cache.CachedSession = requests_cache.CachedSession(
-    cache_name=str(CACHE_DIR / "http_cache"),
-    backend="sqlite",
-    expire_after=_HTTP_CACHE_TTL,
-    allowable_codes=(200,),
-)
+if _HTTP_CACHE_TTL > 0:
+    _session: requests.Session = requests_cache.CachedSession(
+        cache_name=str(CACHE_DIR / "http_cache"),
+        backend="sqlite",
+        expire_after=_HTTP_CACHE_TTL,
+        allowable_codes=(200,),
+    )
+else:
+    _session = requests.Session()
 
 
 class TokenBucket:
@@ -91,7 +96,7 @@ def _get_domain(url: str) -> str:
 
 def resilient_get(
     url: str,
-    session: requests_cache.CachedSession | None = None,
+    session: requests.Session | None = None,
     **kwargs: Any,
 ) -> Response:
     limiter.acquire(_get_domain(url))

@@ -352,15 +352,26 @@ Next: fresh spec or further polish — do NOT start a new phase without one.
 
 ## Immediate Next Steps
 
-1. **Session 20 landed (2026-08-07, user-driven)**: live link audit proved the
+1. **Session 21 landed (2026-08-07, user-driven)**: "i dont want jobs
+   cached… results are kinda the same… operate on the other sources" —
+   root-caused and fixed: (a) the Session 20 all-seen fallback was re-showing
+   the same list → now a clear **"No new jobs"** state (h/r/q); (b) HTTP
+   cache **OFF by default** (`MATCHA_HTTP_CACHE_TTL=0`; stale 53MB cache
+   purged); (c) junk gate catches Naukri "Job Listings"/RemoteOK "Join Our
+   Team"; (d) **Indeed** was dead (OpenCLI rows have empty titles) → title
+   recovery via job-detail, primary query ≤8 → 8 jobs kept; (e) **Google
+   Jobs** was dropping 43/43 (URLs live under `apply_options`) → 38 kept;
+   (f) Career Sites/Web Search starved under the 45s batch timeout → query
+   caps + 75s timeout → Career Sites 32 kept. Live: 230 found/140 kept,
+   0 junk. Uncommitted: 10 files ready to commit.
+2. **Session 20 landed (2026-08-07, user-driven)**: live link audit proved the
    "wrong links" complaint — LinkedIn `/job-apply/` apply links 404 while
    stable `jobs/view` URLs work; `stable_apply_url()` now normalizes at both
-   ingest points (search parse + enrichment). "Same jobs every run" fixed:
-   HTTP cache TTL 5 min (`MATCHA_HTTP_CACHE_TTL`) + the TUI now marks shown
-   jobs seen and hides already-seen rows by default (`h` toggles, `[seen]`
-   marker, saving retires a job). Pre-existing bug fixed: provenance tags
-   (`[full]/[age?]`) were swallowed by rich markup — now visible. Uncommitted:
-   8 files ready to commit.
+   ingest points (search parse + enrichment). Same-jobs UX: the TUI marks
+   shown jobs seen and hides already-seen rows by default (`h` toggles,
+   `[seen]` marker, saving retires a job). Pre-existing bug fixed:
+   provenance tags (`[full]/[age?]`) were swallowed by rich markup — now
+   visible.
 2. **Session 19 landed (2026-08-07, user-driven)**: config-wipe root cause
    fixed (`save_config` merge semantics — the (AI) banner was showing while
    ZERO AI calls fired because `ai_provider` was wiped on every interactive

@@ -330,6 +330,9 @@ class TestSerpapi(unittest.TestCase):
         self.assertTrue(any("invalid key" in e for e in result.errors))
 
     def test_search_application_link_fallback(self):
+        # Session 21: google_jobs now puts apply URLs under ``apply_options``
+        # (``related_links`` is null) — without this every row lost its URL
+        # and the quality gate dropped the whole source.
         from matcha.sources.serpapi_jobs import search_serpapi_jobs
 
         payload = {
@@ -339,7 +342,10 @@ class TestSerpapi(unittest.TestCase):
                     "company_name": "Acme",
                     "location": "Remote",
                     "description": "d",
-                    "related_links": [{"type": "application", "link": "https://apply/x"}],
+                    "apply_options": [
+                        {"title": "Google", "link": "https://www.google.com/search?q=apply"},
+                        {"title": "Acme", "link": "https://apply/x"},
+                    ],
                 }
             ]
         }
@@ -352,6 +358,30 @@ class TestSerpapi(unittest.TestCase):
         ):
             result = search_serpapi_jobs("engineer")
         self.assertEqual(result.jobs[0]["url"], "https://apply/x")
+
+    def test_search_source_link_fallback_when_no_apply_options(self):
+        from matcha.sources.serpapi_jobs import search_serpapi_jobs
+
+        payload = {
+            "jobs_results": [
+                {
+                    "title": "Engineer",
+                    "company_name": "Acme",
+                    "location": "Remote",
+                    "description": "d",
+                    "source_link": "https://ats.example/123",
+                }
+            ]
+        }
+        with (
+            mock.patch(
+                "matcha.sources.serpapi_jobs.get_serpapi_config",
+                return_value={"serpapi_key": "k"},
+            ),
+            mock.patch("matcha.sources.serpapi_jobs.resilient_get", return_value=_Resp(payload)),
+        ):
+            result = search_serpapi_jobs("engineer")
+        self.assertEqual(result.jobs[0]["url"], "https://ats.example/123")
 
     def test_source_check_and_search(self):
         from matcha.sources.serpapi_jobs import SerpapiSource

@@ -272,6 +272,7 @@ override the wizard, which overrides YAML, which overrides the default.
 | `<SOURCE>_BACKEND` | Force a backend for one source — e.g. `LINKEDIN_BACKEND=guest`, `INDEED_BACKEND=ddgs`, `NAUKRI_BACKEND=job-page`. Valid values are that source's backend names (see `matcha doctor`); unknown values are ignored so a stale override can never hide working backends. Equivalent YAML: `scrapers.<source>_backend` | ordered fallback list |
 | `MCPORTER_CONFIG` | mcporter config path for the Exa web-search backend | auto-discovered |
 | `MATCHA_AI_CACHE` | Path for the AI disk-cache SQLite file | `~/.matcha/ai_cache.sqlite` |
+| `MATCHA_HTTP_CACHE_TTL` | HTTP response-cache TTL in seconds — **0 = off**, every run fetches fresh pages (set e.g. `300` if repeat runs hammer a source) | `0` (off) |
 
 Example (any shell):
 
@@ -404,7 +405,7 @@ Jobs are searched across all configured sources in parallel using the base query
 
 Interactive features:
 - **Paginated browsing** — `↑↓` navigate, `n/p` page, `Enter` for details
-- **Already-seen hiding** — every run records what it showed; next run hides those jobs by default (`h` toggles all), and saving a job (`s`) retires it from future lists — no more replaying the same results
+- **Already-seen hiding** — every run records what it showed; next run hides those jobs by default (`h` toggles all), and saving a job (`s`) retires it from future lists. When everything was already seen, you get a clear **"No new jobs"** state (`h` to view them anyway, `r` to search again) instead of the same list replayed — no more caching-like repeat results
 - **Job details** — Full URL, match reasons, and description
 - **Save jobs** — Press `s` to save/unsave; `l` to view saved. Saved rows persist the enriched/normalized fields (salary, apply_url, workplace, company_url, posted date) via an idempotent SQLite migration, and the Saved screen shows Salary + Posted columns
 - **Open in browser** — Press `o` to open job URL

@@ -85,19 +85,24 @@ def search_serpapi_jobs(
                     company = item.get("company_name") or ""
                     location_text = item.get("location") or "Remote"
                     description = item.get("description") or ""
-                    related_links = item.get("related_links", []) or []
 
+                    # Session 21: current google_jobs responses carry the apply
+                    # URL under ``apply_options`` (``related_links`` is null) —
+                    # without it every row lost its URL and the quality gate
+                    # silently dropped the whole source.
                     url = ""
-                    for link in related_links:
-                        if link.get("link"):
-                            url = link["link"]
+                    for link in item.get("apply_options", []) or []:
+                        candidate = link.get("link") or ""
+                        if candidate and "google.com/search" not in candidate:
+                            url = candidate
                             break
-
                     if not url:
-                        for link in related_links:
-                            if link.get("type") == "application" and link.get("link"):
-                                url = link["link"]
-                                break
+                        url = item.get("source_link") or ""
+                    if not url or "google.com/search" in url:
+                        # last resort: a share link is a google search page, not
+                        # a posting — only use it when nothing better exists.
+                        share = item.get("share_link") or ""
+                        url = share if not url else url
 
                     jobs.append(
                         {
