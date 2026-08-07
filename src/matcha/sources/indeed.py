@@ -24,6 +24,10 @@ from .utils import limiter, resilient_get
 
 logger = logging.getLogger(__name__)
 
+#: Anti-bot HTTP status noise ("Page 1: HTTP 403") — expected when the HTML
+#: fallback runs, NOT a source failure (Session 22). Parse errors stay.
+_HTTP_STATUS_ERROR = re.compile(r"HTTP \d{3}")
+
 
 def resolve_indeed_url(url: str, domain: str = "in.indeed.com") -> str:
     parsed = urlparse(url)
@@ -74,6 +78,15 @@ def search_indeed_jobs(
         if result is not None:
             return result
         logger.info("OpenCLI Indeed unavailable at search time; falling back to HTML")
+        result = _search_indeed_html(query, location, domain=domain, **kwargs)
+        # Session 22 (user-driven): OpenCLI is the consented, healthy backend;
+        # when it flakes at call time the HTML fallback is a bonus, and its
+        # anti-bot HTTP-status errors are EXPECTED noise — not a source
+        # failure. Log them (above) but don't record them, or the TUI shows
+        # `E…` on a healthy source and the circuit breaker trips for the wrong
+        # reason. Genuine parse failures are KEPT (they signal selector rot).
+        result.errors = [e for e in result.errors if not _HTTP_STATUS_ERROR.search(e)]
+        return result
     return _search_indeed_html(query, location, domain=domain, **kwargs)
 
 

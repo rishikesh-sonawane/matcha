@@ -302,6 +302,42 @@ class TestCmdMcp(unittest.TestCase):
         run.assert_called_once()
 
 
+class TestHeadlessCredentials(unittest.TestCase):
+    def test_location_stamped_on_profile_for_filtering(self):
+        # Session 22: the interactive TUI sets profile["location"] from the
+        # prompt; headless search/watch/MCP must do the same or the location
+        # filter silently becomes a no-op (profile location is often empty)
+        # and every job survives — US Indeed rows included.
+        import matcha.main as main
+
+        args = mock.Mock(location="Hyderabad", query="devops", days=3)
+        settings = {}
+        with (
+            mock.patch("matcha.main.load_profile", return_value={"name": "x"}),
+            mock.patch("matcha.main.load_config", return_value={}),
+            mock.patch("matcha.main.check_ai_available", return_value=False),
+        ):
+            profile, _, _, location, days, _ = main._headless_credentials(args, settings)
+        self.assertEqual(profile["location"], "Hyderabad")
+        self.assertEqual(location, "Hyderabad")
+        self.assertEqual(days, 3)
+
+    def test_no_location_keeps_profile_untouched(self):
+        import matcha.main as main
+
+        args = mock.Mock(location=None, query="devops", days=None)
+        with (
+            mock.patch("matcha.main.load_profile", return_value={"name": "x"}),
+            mock.patch("matcha.main.load_config", return_value={}),
+            mock.patch("matcha.main.check_ai_available", return_value=False),
+        ):
+            profile, _, _, location, days, _ = main._headless_credentials(args, {})
+        self.assertNotIn("location", profile)
+        self.assertEqual(location, "")
+        # no --days and no saved value -> settings default of 7
+        self.assertEqual(days, 7)
+
+
 class TestPromptLoop(unittest.TestCase):
     def test_returns_none_when_no_jobs(self):
         import matcha.main as main

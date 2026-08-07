@@ -641,6 +641,57 @@ session also fixed the underlying quality issues.
 
 ---
 
+### 2026-08-07 — Session 22: no fake US jobs, no [age?] noise, no source error spam (DONE)
+
+**Goal:** user's run showed US Indeed jobs ranked above local matches
+(``[partial][age?]``), Google Jobs with an `E…` state, and every top Indeed
+row tagged ``[age?]``.
+
+- **Root cause #1 — headless location filter was a no-op.** The interactive
+  TUI sets ``profile["location"]`` from the prompt; ``_headless_credentials``
+  (search/watch/MCP) never did, and the saved profile had ``location: None``
+  ⇒ ``_filter_location``'s profile_city was empty ⇒ every job kept (US Indeed
+  rows included). Fix: ``_headless_credentials`` stamps ``profile["location"]``
+  from `-l`/config (defensive ``if location and profile``). Live-verified:
+  headless runs now drop US/other-city Indeed rows.
+- **Root cause #2 — Google Jobs rows carried [age?].** SerpAPI reports the
+  date under ``detected_extensions.posted_at`` ("3 days ago") but omits it on
+  some rows; the parser never extracted it, so every Google row skipped the
+  age filter and showed ``[age?]``. Fix: extract ``posted_at`` + fall back to
+  the ``extensions[]`` array's first element when it is a relative date; when
+  the row has NO date at all, stamp the server-side ``date_posted`` window
+  truthfully (``listed="within 3days"`` + worst-case ``listed_epoch`` — the
+  row IS within the window because SerpAPI filters server-side). This killed
+  the misleading ``[age?]`` and let the age filter judge honestly.
+- **Boundary race caught in live verification:** ``_window_epoch`` stamped
+  ``now - 3d`` at parse time, but the age filter computes its cutoff seconds
+  later ⇒ window rows landed just *before* the cutoff and were wrongly
+  dropped (Google kept 13→4). Fixed with a 120s grace (the window was
+  guaranteed at request time, so boundary rows must survive pipeline drift).
+  Live: Google kept 13/13 dated, 0 age? tags.
+- **Root cause #3 — `E…` on healthy sources.** When the consented OpenCLI
+  backend flakes at call time ("no browser"/"opencli exited 1"), the HTML
+  fallback 403 is anti-bot NOISE — but it was recorded as a source error ⇒
+  TUI showed `E…` and the circuit breaker recorded failures for a healthy
+  source. Fix: the opencli→html fallback path clears errors (log stays);
+  HTML-only users still get real errors. Live: errors: {} on the run.
+- **Reviewer-caught fixes (same session):** (a) days=4/5/6 silently dropped
+  undated Google rows (date_map sends days≤7 to date_posted=week ⇒ window
+  stamp now−7d vs central filter cutoff now−5d) — window stamping is now
+  gated on `_window_guarantees_age` (server window ≤ requested days);
+  (b) `result.errors = []` on the opencli→html fallback was too broad — now
+  only `HTTP \d{3}` anti-bot noise is dropped, genuine parse errors stay.
+- **Validation:** 688/688 tests (unittest + pytest) — +8 new (headless
+  location stamping ×2, SerpAPI posted_at parse, window stamp, window epoch
+  bounds, loose-window keeps age-tag, opencli-fallback 403 suppression ×2);
+  ruff/format/mypy (0 errors) clean; coverage 81% (gate ≥80%). Live run:
+  207 found → 26 kept, ai on, top 96/96/95, `errors: {}`, zero Google age?
+  tags (13/13 listed).
+- **Docs:** memory bank synced (this entry).
+- **Next:** fresh spec or further polish — do NOT start a new phase without one.
+
+---
+
 ### 2026-08-06 — Session 17: AI live + results-quality round 2 (user-reported)
 
 **Goal:** user: "results are pathetic… why so low match rate… why can't you

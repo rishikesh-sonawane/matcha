@@ -874,6 +874,12 @@ def _headless_credentials(
     if not query:
         console.print("[red]No query. Use --query or set `search.query` in the YAML config.[/red]")
         sys.exit(1)
+    # Session 22 (user-driven): the interactive TUI sets profile["location"]
+    # from the prompt so the location filter is active; headless runs must do
+    # the same or `search -l`/watch/MCP silently skip the location stage
+    # (profile location is often empty -> every job kept, US jobs included).
+    if location and profile:
+        profile["location"] = location
     ai_enabled = check_ai_available() and settings.get("ai", {}).get("enabled", True)
     return profile, config, query, location, days, ai_enabled
 

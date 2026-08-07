@@ -405,6 +405,43 @@ class TestIndeedDispatch(unittest.TestCase):
             result = search_indeed_jobs("engineer", "pune")
         self.assertEqual(result.backend, "html")
 
+    @mock.patch("matcha.sources.indeed._search_indeed_opencli")
+    def test_opencli_fallback_suppresses_html_403_noise(self, opencli_search):
+        # Session 22: when OpenCLI (the consented, healthy backend) flakes at
+        # call time, the HTML fallback's anti-bot 403 is EXPECTED noise — not a
+        # source failure. It must not surface as an error (TUI `E…` state) or
+        # trip the circuit breaker for a source that is actually working.
+        self.mock_should.return_value = True
+        opencli_search.return_value = None
+        with mock.patch("matcha.sources.indeed._search_indeed_html") as html:
+            html.return_value = ScraperResult(
+                source="Indeed",
+                backend="html",
+                errors=["Page 1: HTTP 403", "Page 2: HTTP 429"],
+            )
+            result = search_indeed_jobs("engineer", "pune")
+        self.assertEqual(result.backend, "html")
+        self.assertEqual(result.errors, [])
+
+    @mock.patch("matcha.sources.indeed._search_indeed_opencli")
+    def test_opencli_fallback_keeps_genuine_parse_errors(self, opencli_search):
+        # Reviewer-caught (Session 22): only anti-bot HTTP status noise is
+        # suppressed on the fallback — a REAL parse failure (selector rot)
+        # must still surface as an error.
+        self.mock_should.return_value = True
+        opencli_search.return_value = None
+        with mock.patch("matcha.sources.indeed._search_indeed_html") as html:
+            html.return_value = ScraperResult(
+                source="Indeed",
+                backend="html",
+                errors=[
+                    "Page 1: HTTP 403",
+                    "Failed to parse Indeed HTML page 1: no cards",
+                ],
+            )
+            result = search_indeed_jobs("engineer", "pune")
+        self.assertEqual(result.errors, ["Failed to parse Indeed HTML page 1: no cards"])
+
 
 class TestIndeedOpenCLISearch(unittest.TestCase):
     @mock.patch("matcha.sources.indeed.run_opencli")

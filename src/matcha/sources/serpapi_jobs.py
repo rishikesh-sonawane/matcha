@@ -1,4 +1,6 @@
 import logging
+import re
+import time
 from typing import Any
 
 import requests
@@ -11,6 +13,49 @@ from .utils import resilient_get
 logger = logging.getLogger(__name__)
 
 SERPAPI_BASE: str = "https://serpapi.com/search.json"
+
+#: "3 days ago", "2026-08-01", "Aug 1, 2026" — used to pick the date out of
+#: the ``extensions[]`` array when ``detected_extensions`` is absent.
+_DATE_LIKE = re.compile(r"(\d+\s+(second|minute|hour|day|week|month|year)s?\s+ago)", re.I)
+
+
+def _is_relative_date(text: str) -> bool:
+    return bool(_DATE_LIKE.search(text))
+
+
+#: date_posted label -> worst-case window seconds (the row is no OLDER than
+#: this bound because SerpAPI filtered server-side).
+_WINDOW_DAYS = {"today": 1, "3days": 3, "week": 7, "month": 30}
+
+
+def _window_guarantees_age(date_posted: str, days: int | None) -> bool:
+    """True when the server-side window is no looser than the requested days.
+
+    Stamp a window only when it can't mislead the central age filter: a
+    ``week`` window (7 days) vs a user-requested 5 days means a row could be
+    6 days old — stamping it "within week" would then be dropped by the 5-day
+    filter (or, worse, appear fresh). In that case keep the honest ``[age?]``
+    tag instead. ``days=None`` means the central filter's default of 7.
+    """
+    window_days = _WINDOW_DAYS.get(date_posted)
+    if window_days is None:
+        return False
+    return window_days <= (days or 7)
+
+
+def _window_epoch(date_posted: str) -> int:
+    """Worst-case epoch for a server-side date_posted window.
+
+    ``date_posted=3days`` returns only rows posted within 3 days, so a row
+    missing an explicit date is at most 3 days old — stamp that bound (not
+    ``now``, which would lie about recency) so the central age filter can
+    still judge the row honestly. A 2-minute grace covers the search-to-
+    filter pipeline latency: SerpAPI guaranteed the window at REQUEST time
+    (seconds before the age filter computes its cutoff), so a boundary row
+    must not be dropped as "too old" by that drift.
+    """
+    days = _WINDOW_DAYS.get(date_posted, 7)
+    return int(time.time() - days * 86400 + 120)
 
 
 def search_serpapi_jobs(
@@ -70,8 +115,13 @@ def search_serpapi_jobs(
             data = resp.json()
             error = data.get("error")
             if error:
-                logger.warning("SerpAPI error: %s", error)
-                errors.append(str(error))
+                if "hasn't returned any results" in str(error):
+                    # Soft "no results" for this query — not a failure; log
+                    # it and move on instead of surfacing an error state.
+                    logger.info("Google Jobs: no results for query")
+                else:
+                    logger.warning("SerpAPI error: %s", error)
+                    errors.append(str(error))
                 break
 
             jobs_results = data.get("jobs_results", [])
@@ -104,16 +154,39 @@ def search_serpapi_jobs(
                         share = item.get("share_link") or ""
                         url = share if not url else url
 
-                    jobs.append(
-                        {
-                            "title": title,
-                            "company": company,
-                            "location": location_text,
-                            "description": description[:2000],
-                            "url": url,
-                            "source": "Google Jobs",
-                        }
-                    )
+                    job: dict[str, Any] = {
+                        "title": title,
+                        "company": company,
+                        "location": location_text,
+                        "description": description[:2000],
+                        "url": url,
+                        "source": "Google Jobs",
+                    }
+                    # Session 22: google_jobs reports the posting date under
+                    # detected_extensions.posted_at ("3 days ago") — without it
+                    # every row carried [age?] and skipped the age filter. Some
+                    # responses omit detected_extensions entirely, so fall back
+                    # to the extensions[] array (first element = the date).
+                    posted = (item.get("detected_extensions") or {}).get("posted_at")
+                    if not posted:
+                        ext = item.get("extensions") or []
+                        if ext and _is_relative_date(str(ext[0])):
+                            posted = ext[0]
+                    if posted:
+                        job["listed"] = str(posted)
+                    elif _window_guarantees_age(date_posted, days):
+                        # Session 22: SerpAPI omits the date on some rows, but
+                        # the ``date_posted`` param is applied SERVER-SIDE — a
+                        # row returned under date_posted=3days IS within 3 days.
+                        # Don't tag it [age?] (misleading — the source already
+                        # guaranteed freshness); stamp the window truthfully and
+                        # give the central age filter a worst-case epoch. Only
+                        # when the window is no looser than the requested days
+                        # (else the stamp would lie about a wider window and the
+                        # central filter would silently drop the row).
+                        job["listed"] = f"within {date_posted}"
+                        job["listed_epoch"] = _window_epoch(date_posted)
+                    jobs.append(job)
                 except Exception as e:
                     logger.warning("Failed to parse SerpAPI result: %s", e)
                     continue

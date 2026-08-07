@@ -1,6 +1,6 @@
 # Current System State — Matcha
 
-> Last verified: 2026-08-07 (Session 21 — no HTTP caching, all-seen "no new jobs" state, all 8 sources alive).
+> Last verified: 2026-08-07 (Session 22 — no fake US jobs, no [age?] noise, no source error spam).
 > If any checkbox below conflicts with the actual code, **the code wins** —
 > update this file.
 
@@ -231,8 +231,11 @@ one.
 
 ## Test Baseline (2026-08-07)
 
-- **680/680 tests pass** (`unittest discover tests` AND `pytest tests/`).
-  675 at end of Session 20; +5 from Session 21 (Indeed empty-title recovery
+- **688/688 tests pass** (`unittest discover tests` AND `pytest tests/`).
+  680 at end of Session 21; +8 from Session 22 (headless location stamping
+  ×2, SerpAPI posted_at parse, no-date window stamp, window-epoch bounds,
+  loose-window keeps age-tag, opencli-fallback 403 suppression ×2).
+  680 at end of Session 21: +5 (Indeed empty-title recovery
   ×2, per-source query caps, per-query Indeed recovery flag, SerpAPI
   apply_options/source_link URL fallback).
   675/675 at end of Session 20: +9 (LinkedIn stable apply-url normalization
@@ -299,6 +302,7 @@ one.
 - [x] **Phase 3-adjacent polish + results quality (DONE 2026-08-06):** saved-jobs persist enriched/normalized fields (`actions.py` `ENRICHED_COLUMNS` + idempotent `_migrate` + UPSERT `save_job` + `job_entry`; Saved view Salary/Posted); §9.5 AI verdict pass (`ai.py` `ai_verdict`, `settings.ai.verdict_k` default 5, detail-panel + JSON `verdict`); junk listing-page titles dropped by the quality gate (`_is_junk_title`); matcher calibration (skill-ratio saturation `_SKILL_RATIO_CAP=10` + job-title-coverage title dimension) — live-verified 24.7→67 for an enriched DevOps Engineer; `filter_notes` remote-exclusion hint; track/actions sqlite ResourceWarnings fixed (py3.14 context managers never close); comprehensive test hermeticity vs live breaker state. 646/646 tests; ruff/format/mypy/bandit clean; coverage 81%.
 - [x] **Session 17 — AI live + results quality round 2 (DONE 2026-08-06):** diagnosed + fixed the real reason "AI can't make smart decisions": the user's stored Kilo key (`MINIMAX` env, 67-char `sk-`) was never wired (`ai_provider` empty ⇒ `check_ai_available()=False`) → `configure_provider('kilo')`, live-verified end-to-end. AI re-scoring moved to AFTER enrichment (`_ai_rescore` + shared `_apply_flatline_guard`) so the judge scores real descriptions (live: top jobs 85.0, verdicts "Your 4 years of AWS/Terraform expertise…", 36/60 AI calls). Naukri dead postings (expired → search-page redirect) now DROPPED (`_EXPIRED` sentinel; URLs logged). Junk-title gate extended (`top companies hiring for …`). 650/650 tests; ruff/format/mypy/bandit clean.
 - [x] **Session 18 — docs overhaul + doctor AI status + MCP AI surface (DONE 2026-08-07):** README rewritten + verified against source (full env-var reference + AI resolution order, exact AI preset models, corrected SerpAPI YAML sample — key is a `--configure` secret, CLI command reference, config precedence, `~/.matcha` layout, Docker/Makefile) + QUICKSTART.md (5 commands). `ai.py ai_status()` + doctor `ai` entry (ok/off/warn/error, scrubbed URL, key never leaks, "AI matching" section in the text report); MCP `matcha_status` surfaces the same `ai` entry (docstrings + hermetic test). 659/659 tests; ruff/format/mypy clean.
+- [x] **Session 22 — no fake US jobs, no [age?] noise, no source error spam (DONE 2026-08-07):** headless `_headless_credentials` now stamps `profile["location"]` from `-l`/config (the TUI did; search/watch/MCP didn't ⇒ location filter was a no-op ⇒ US Indeed rows ranked above Hyderabad matches). SerpAPI date extraction: `detected_extensions.posted_at` + `extensions[]` fallback; rows with NO date get the honest server-side window stamp (`"within 3days"` + worst-case `listed_epoch`, 120s grace for search→filter latency) **gated on `_window_guarantees_age`** (server window ≤ requested days — days=5/7 loose-window rows keep the honest `[age?]` instead of a misleading stamp that the central filter would silently drop). Google `[age?]` tags 9/13 → 0. OpenCLI→HTML fallback clears only `HTTP \d{3}` anti-bot noise (was showing `E…` on healthy sources + tripping breakers); genuine parse errors stay. Live: 207 found/26 kept, errors {}, Google 13/13 dated, top 96/96/95. 688/688 tests; ruff/mypy clean; coverage 81%.
 
 **Design pillars:** multi-backend richest-first routing · doctor-first observability ·
 filters as a central pipeline stage · enrichment over volume · graceful degradation ·

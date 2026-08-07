@@ -359,6 +359,106 @@ class TestSerpapi(unittest.TestCase):
             result = search_serpapi_jobs("engineer")
         self.assertEqual(result.jobs[0]["url"], "https://apply/x")
 
+    def test_search_parses_detected_extensions_posted_at(self):
+        # Session 22: google_jobs reports the posting date under
+        # detected_extensions.posted_at ("3 days ago") — without it every row
+        # carried [age?] and skipped the age filter entirely.
+        from matcha.sources.serpapi_jobs import search_serpapi_jobs
+
+        payload = {
+            "jobs_results": [
+                {
+                    "title": "Engineer",
+                    "company_name": "Acme",
+                    "location": "Hyderabad",
+                    "description": "d",
+                    "apply_options": [{"title": "Acme", "link": "https://apply/x"}],
+                    "detected_extensions": {"posted_at": "3 days ago"},
+                }
+            ]
+        }
+        with (
+            mock.patch(
+                "matcha.sources.serpapi_jobs.get_serpapi_config",
+                return_value={"serpapi_key": "k"},
+            ),
+            mock.patch("matcha.sources.serpapi_jobs.resilient_get", return_value=_Resp(payload)),
+        ):
+            result = search_serpapi_jobs("engineer")
+        self.assertEqual(result.jobs[0]["listed"], "3 days ago")
+        # age pipeline can then parse it into a listed_epoch
+        from matcha.normalization import normalize_jobs
+
+        normalize_jobs(result.jobs)
+        self.assertIsNotNone(result.jobs[0]["listed_epoch"])
+
+    def test_search_no_posted_at_stamps_window(self):
+        # Session 22: SerpAPI omits the date on some rows but applies
+        # ``date_posted`` SERVER-SIDE — a row returned under a window IS within
+        # it. Stamp the window truthfully ("within week") + a worst-case
+        # listed_epoch so the age filter can judge it instead of [age?].
+        from matcha.sources.serpapi_jobs import search_serpapi_jobs
+
+        payload = {
+            "jobs_results": [
+                {
+                    "title": "Engineer",
+                    "company_name": "Acme",
+                    "location": "Hyderabad",
+                    "description": "d",
+                    "apply_options": [{"title": "Acme", "link": "https://apply/x"}],
+                }
+            ]
+        }
+        with (
+            mock.patch(
+                "matcha.sources.serpapi_jobs.get_serpapi_config",
+                return_value={"serpapi_key": "k"},
+            ),
+            mock.patch("matcha.sources.serpapi_jobs.resilient_get", return_value=_Resp(payload)),
+        ):
+            result = search_serpapi_jobs("engineer", days=3)
+        self.assertEqual(result.jobs[0]["listed"], "within 3days")
+        self.assertIsNotNone(result.jobs[0]["listed_epoch"])
+
+    def test_search_no_posted_at_loose_window_keeps_age_tag(self):
+        # Reviewer-caught (Session 22): days=5 maps to date_posted="week" — a
+        # 7-day window is LOOSER than the requested 5 days, so a window stamp
+        # would lie (row could be 6 days old) and the central 5-day filter
+        # would then silently drop it. Keep the honest [age?] tag instead.
+        from matcha.sources.serpapi_jobs import search_serpapi_jobs
+
+        payload = {
+            "jobs_results": [
+                {
+                    "title": "Engineer",
+                    "company_name": "Acme",
+                    "location": "Hyderabad",
+                    "description": "d",
+                    "apply_options": [{"title": "Acme", "link": "https://apply/x"}],
+                }
+            ]
+        }
+        with (
+            mock.patch(
+                "matcha.sources.serpapi_jobs.get_serpapi_config",
+                return_value={"serpapi_key": "k"},
+            ),
+            mock.patch("matcha.sources.serpapi_jobs.resilient_get", return_value=_Resp(payload)),
+        ):
+            result = search_serpapi_jobs("engineer", days=5)
+        self.assertNotIn("listed", result.jobs[0])
+        self.assertNotIn("listed_epoch", result.jobs[0])
+
+    def test_search_window_epoch_bounds(self):
+        # Worst-case epoch: a "within 3days" row must not be older than 3 days.
+        import time
+
+        from matcha.sources.serpapi_jobs import _window_epoch
+
+        self.assertLessEqual(time.time() - _window_epoch("3days"), 3 * 86400 + 60)
+        self.assertGreater(time.time() - _window_epoch("3days"), 2 * 86400)
+
     def test_search_source_link_fallback_when_no_apply_options(self):
         from matcha.sources.serpapi_jobs import search_serpapi_jobs
 

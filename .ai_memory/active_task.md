@@ -2,6 +2,25 @@
 
 ## Current Focus
 
+**Session 22 (2026-08-07): no fake US jobs, no [age?] noise, no source
+error spam.** Three user-visible defects fixed at the root: (1) headless
+runs (search/watch/MCP) never stamped `profile["location"]` from `-l` ⇒ the
+location filter was a no-op for the agent surface ⇒ US Indeed rows ranked
+above Hyderabad matches — `_headless_credentials` now copies the location
+onto the profile; (2) Google Jobs rows carried `[age?]` because SerpAPI's
+`detected_extensions.posted_at` was never parsed, and rows without ANY date
+(still server-side age-guaranteed via `date_posted`) are now stamped
+honestly (`"within 3days"` + worst-case `listed_epoch` with a 120s latency
+grace — a boundary race in live verify was dropping window rows as "too
+old"; stamping gated on `_window_guarantees_age` so loose windows keep the
+honest `[age?]` instead of a misleading stamp the central filter would drop);
+(3) when the consented OpenCLI backend flakes at call time, the HTML
+fallback's anti-bot 403 was recorded as a source error ⇒ `E…` on healthy
+sources + breaker failures — the opencli→html fallback now clears only
+`HTTP \d{3}` noise (genuine parse errors stay). Live: 207 found/26 kept,
+`errors: {}`, Google 13/13 dated, 0 age? tags, top 96/96/95.
+**688/688 tests · ruff/mypy clean · coverage 81%.**
+
 **Phases 1, 2, 4, 5, 6, 7 AND the Phase 3-adjacent polish are COMPLETE.**
 The pipeline is now: profile → queries → search → dedup → normalize →
 central filters → **confidence-weighted rank** → enrich top N → optional
