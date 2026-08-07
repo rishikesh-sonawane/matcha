@@ -521,8 +521,11 @@ class TestTableBuilders(unittest.TestCase):
                 extra_scrapers=scrapers,
                 query_caps={"A": 2, "B": 3},
             )
-        self.assertEqual([q for n, q in calls if n == "A"], ["q1", "q2"])
-        self.assertEqual([q for n, q in calls if n == "B"], ["q1", "q2", "q3"])
+        # search_jobs runs each query on its own thread (ThreadPoolExecutor +
+        # as_completed) — completion ORDER is non-deterministic, so assert the
+        # caps as unordered sets (Session 24: this test flaked in CI).
+        self.assertEqual(sorted(q for n, q in calls if n == "A"), ["q1", "q2"])
+        self.assertEqual(sorted(q for n, q in calls if n == "B"), ["q1", "q2", "q3"])
 
     def test_search_jobs_indeed_recovery_only_first_query(self):
         import matcha.main as main
@@ -543,7 +546,9 @@ class TestTableBuilders(unittest.TestCase):
                 quiet=True,
                 extra_scrapers={"Indeed": _fake_indeed},
             )
-        self.assertEqual(seen, [("q1", "True"), ("q2", "False")])
+        # Same thread-completion race as test_search_jobs_query_caps: sort the
+        # recorded calls so the recover_titles flag is asserted order-free.
+        self.assertEqual(sorted(seen), [("q1", "True"), ("q2", "False")])
 
     def test_show_job_detail(self):
         import matcha.main as main

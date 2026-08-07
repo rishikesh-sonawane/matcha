@@ -46,7 +46,10 @@ jobs:
           # inside markdown docs (kilo.md, revamp/*.md) — CI failed while the
           # pinned 0.15.16 passed locally. bandit/pre-commit are pinned for the
           # same reproducibility reason.
-          pip install ruff==0.15.16 bandit==1.9.4 pre-commit==4.6.0
+          # bandit[toml]: the `toml` extra is required to read pyproject.toml
+          # on Python 3.10 (pre-3.11 has no stdlib tomllib) — without it
+          # bandit exits 2 with "toml parser not available" on 3.10 only.
+          pip install ruff==0.15.16 "bandit[toml]==1.9.4" pre-commit==4.6.0
           pip install -r requirements.txt
           pip install -e .
 
