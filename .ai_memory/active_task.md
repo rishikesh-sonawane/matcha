@@ -38,6 +38,20 @@ QUICKSTART.md (5 commands); **`matcha doctor` now reports AI availability in
 one place** — an `ai` entry (provider / best+fast models / `key_set` /
 `available`; never the key) rendered as an "AI matching" line, surfaced
 identically via `doctor --json` and the MCP `matcha_status` tool.
+**Session 19 (2026-08-07): the two user-reported failures fixed at the
+ROOT** — (1) the interactive TUI's partial `save_config` silently wiped
+`ai_provider` + the OpenCLI consents + deleted the stored SerpAPI key on
+every run, so the (AI) banner showed while ZERO AI calls fired (flat ~54%
+heuristic ceiling, no verdicts); `save_config` now MERGES over the persisted
+file and only touches secrets the caller passed; (2) Naukri discovery
+admitted SEARCH/careers listing pages as jobs and stamped un-enriched rows
+"full" — discovery now gates on `/job-listings-*` (the exact predicate the
+job-page backend enriches) with per-row `snippet` provenance until a real
+page merge. **Secrets are now fernet-only** — `keyring` removed from deps
+(user preference: no macOS keychain prompts); keys live encrypted in
+`~/.matcha/*.enc` (0600). Machine restored: `ai_provider=kilo` + key
+(fernet), OpenCLI consents True, SerpAPI re-stored; live search: AI on (35
+calls, 5 verdicts, top 85.0%), Naukri aggregate rows 0. **666/666 tests.**
 Next: fresh spec or further polish — do NOT start a new phase without one.
 
 > 2026-08-06 session 1: full repo audit + `.ai_memory/` rewrite.
@@ -338,19 +352,22 @@ Next: fresh spec or further polish — do NOT start a new phase without one.
 
 ## Immediate Next Steps
 
-1. **Session 18 landed (2026-08-07, user-driven)**: README + QUICKSTART
-   updated (verified against source); `matcha doctor` reports AI
-   availability (`ai` entry: provider / best+fast models / `key_set` /
-   `available` — never the key; "AI matching" line in the text report); the
-   MCP `matcha_status` tool surfaces the same entry. Setup is now
-   verifiable in one place: `matcha doctor` → `ok` on the AI matching line.
-2. **Optional follow-ups the user may want**: connect the OpenCLI browser
-   bridge (Chrome + extension) for real LinkedIn/Indeed enrichment
-   (`matcha --configure` → consent); set `settings ai.cache_ttl: 86400` in
-   `~/.matcha/settings.yaml` so repeat searches skip AI spend.
+1. **Session 19 landed (2026-08-07, user-driven)**: config-wipe root cause
+   fixed (`save_config` merge semantics — the (AI) banner was showing while
+   ZERO AI calls fired because `ai_provider` was wiped on every interactive
+   run); Naukri aggregate listing pages gated out at discovery
+   (`/job-listings-*` only) with honest per-row provenance; secrets are now
+   **fernet-only** (keyring removed per user preference — no macOS keychain
+   prompts); machine restored (kilo + key, consents, SerpAPI) and
+   live-verified: AI on, top 85.0%, 5 verdicts, Naukri junk 0.
+2. **Optional follow-ups the user may want**: `matcha doctor` should now show
+   **8/8 sources + AI ok**; uncommitted changes (13 files) ready to commit;
+   consider `filters.remote: true` or `remote_preference` if the Hyderabad
+   search's remote-exclusion note matters.
 3. **Do NOT start a new phase without a fresh spec.**
-4. OpenCLI extension still disconnected on this machine; mcporter and
-   agent-reach not installed (unchanged).
+4. OpenCLI bridge is CONNECTED on this machine (v1.8.4, consents True) —
+   live LinkedIn/Indeed enrichment verified; mcporter and agent-reach not
+   installed (unchanged).
 
 ## Blockers / Notes
 

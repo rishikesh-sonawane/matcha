@@ -414,7 +414,7 @@ class TestConfigureProvider(unittest.TestCase):
 
         saved: dict = {}
 
-        def fake_save(config):
+        def fake_save(config, remove_keys=None):
             saved.update(config)
 
         with (

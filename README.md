@@ -181,9 +181,9 @@ these once, in order:
    export MINIMAX="your-api-key"
    venv/bin/matcha        # AI is on — the results banner shows "(AI)"
    ```
-   …or run the interactive wizard, which stores the key in your OS keyring
-   (never plaintext) and walks through provider selection plus optional
-   SerpAPI / OpenCLI setup:
+   …or run the interactive wizard, which stores the key encrypted at rest
+   (fernet, `~/.matcha/*.enc` — no OS keychain prompts) and walks through
+   provider selection plus optional SerpAPI / OpenCLI setup:
    ```bash
    venv/bin/matcha --configure
    ```
@@ -231,7 +231,7 @@ directory you run from):
 | `~/.matcha/profile.json` | Your profile (skills, title, experience, `must_have_skills`, …) |
 | `~/.matcha/config.json` | Non-secret config + `last_query` / `last_location` / `last_days` |
 | `~/.matcha/settings.yaml` | Optional YAML overrides (see the Config File section) |
-| `~/.matcha/fernet.key` + `.ai_key.enc` / `.serpapi_key.enc` | Secrets encrypted at rest — used only when no OS keyring is available |
+| `~/.matcha/fernet.key` + `.ai_key.enc` / `.serpapi_key.enc` | Secrets encrypted at rest — the secret store (no OS keychain dependency) |
 | `~/.matcha/source_state.json` | Per-source circuit-breaker state |
 | `~/.matcha/jobs.db` | Saved jobs + `seen_urls` (the new-vs-seen store for `matcha watch`) |
 | `~/.matcha/ai_cache.sqlite` | Opt-in AI disk cache |
@@ -284,10 +284,11 @@ venv/bin/matcha
 Notes:
 
 - `MINIMAX` is read **in addition to** a key stored via `matcha --configure`
-  (keyring/fernet) — the env var wins when both exist.
+  (the encrypted fernet store, `~/.matcha/*.enc`) — the env var wins when
+  both exist.
 - **SerpAPI** and **OpenCLI** have **no env vars** — both are configured
   interactively via `matcha --configure` (the SerpAPI key is stored as a
-  secret in config.json via keyring/fernet, never in YAML).
+  secret via the encrypted fernet store, never in YAML).
 - `AI_PROVIDER=local` (Ollama / LM Studio) needs **no API key** — just set
   `AI_PROVIDER=local` and optionally `AI_API_URL` / `AI_MODEL`.
 - There is **no `.env` file support** — `python-dotenv` is a dependency but
@@ -652,7 +653,8 @@ Matcha's AI brain is a **provider-agnostic OpenAI-compatible REST client**
 provider preset, or set env vars directly (see the [Environment
 Variables](#environment-variables) table: `MINIMAX` key · `AI_API_URL` ·
 `AI_MODEL` best-tier · `AI_MODEL_FAST` fast-tier · `AI_PROVIDER`). Keys are
-stored via keyring/fernet, never plaintext.
+stored encrypted at rest via fernet (`~/.matcha/*.enc`), never plaintext
+and never in the OS keychain.
 
 | Preset | Default base URL | Default best / fast model |
 |---|---|---|

@@ -287,25 +287,35 @@ def configure_provider(provider: str, key: str = "", url: str = "", model: str =
     """Persist a provider preset choice (+ optional overrides).
 
     ``provider`` must be a ``PROVIDERS`` key (or "" to clear). When an
-    override is empty, any previously stored url/model is cleared so the
-    preset (or env/settings) owns that slot — switching providers must not
-    keep another provider's endpoint.
+    override is empty, the stored slot is REMOVED (``remove_keys``) so the
+    preset / env / settings owns it — switching providers must not keep
+    another provider's endpoint. A stored key is never deleted here: an
+    empty key leaves the keyring/env credential untouched (save_config only
+    deletes secrets the caller explicitly passes).
     """
     if provider and provider not in PROVIDERS:
         raise ValueError(f"Unknown AI provider: {provider!r}")
     config = load_config()
     config[CONFIG_PROVIDER_KEY] = provider
+    remove: set[str] = set()
     if key:
         config[CONFIG_KEY] = key
+    else:
+        config.pop(CONFIG_KEY, None)
+        remove.add(CONFIG_KEY)
     if url:
         config[CONFIG_URL_KEY] = url
     else:
         config.pop(CONFIG_URL_KEY, None)
+        remove.add(CONFIG_URL_KEY)
     if model:
         config[CONFIG_MODEL_KEY] = model
     else:
         config.pop(CONFIG_MODEL_KEY, None)
-    save_config(config)
+        remove.add(CONFIG_MODEL_KEY)
+    # remove_keys clears any persisted copy too — the caller dict is already
+    # clean; save_config's merge would otherwise resurrect the stale slot.
+    save_config(config, remove_keys=remove)
 
 
 # ── transport ──────────────────────────────────────────────────────────

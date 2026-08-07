@@ -1,6 +1,6 @@
 # Current System State — Matcha
 
-> Last verified: 2026-08-07 (Session 18 — docs overhaul + doctor AI status + MCP AI surface).
+> Last verified: 2026-08-07 (Session 19 — config-wipe root-cause fix, fernet-only secrets, Naukri aggregate gate).
 > If any checkbox below conflicts with the actual code, **the code wins** —
 > update this file.
 
@@ -16,11 +16,23 @@ enriched columns, §9.5 AI verdict pass) + results-quality fixes (junk-title
 gate, matcher dilution calibration, remote hint) + Session 17 (AI enabled on
 this machine, AI re-scoring moved post-enrichment, Naukri dead listings
 dropped, junk-title gate extended) + Session 18 (docs overhaul + doctor AI
-status + MCP AI surface) are DONE.** All 659 tests pass; mypy clean;
-coverage gate ≥80% (81%+). **AI is LIVE on this machine**
-(`ai_provider=kilo`; `check_ai_available()=True`; live-verified: query
-expansion → 4 variants, AI re-scoring → top jobs 85, 5 verdicts, 36 AI
-calls/run within the 60-call budget). **`matcha doctor` now verifies AI
+status + MCP AI surface) + Session 19 (config-wipe root-cause fix, fernet-only
+secret storage, Naukri aggregate-URL gate) are DONE.** All 666 tests pass;
+mypy clean; coverage gate ≥80% (81%+). **AI is LIVE on this machine**
+(`ai_provider=kilo`; key stored via the fernet file store — no OS keychain;
+`check_ai_available()=True`; live-verified: query expansion, AI re-scoring →
+top jobs 85.0, 5 verdicts, 35 AI calls/run within the 60-call budget).
+**Session 19 fixed the two user-reported failures at the root:** (1) the
+interactive TUI's partial `save_config` silently wiped `ai_provider` + the
+OpenCLI consents + deleted the stored SerpAPI key on every run — the (AI)
+banner showed while ZERO AI calls fired (hence the flat ~54% ceiling);
+`save_config` now merges over the persisted file and never touches secrets
+the caller didn't pass; (2) Naukri discovery admitted SEARCH/careers listing
+pages as jobs and labeled un-enriched rows "full" — discovery now gates on
+`/job-listings-*` (the same predicate the job-page backend enriches) and
+per-row provenance stays honest `snippet` until a real page merge. Secrets
+are now **fernet-only** (`keyring` removed from deps per user preference —
+no macOS keychain prompts). **`matcha doctor` now verifies AI
 setup in one place** — an `ai` report entry (provider, best/fast models,
 `key_set`, `available`; never the key) rendered as an "AI matching" line,
 surfaced identically through `matcha doctor --json` and the MCP
@@ -199,10 +211,14 @@ one.
   **AI `ok` — Kilo Gateway (default) · best/fast kilo-auto/small · key set**.
   Status: 4/7 sources ready + AI ready.
 
-## Test Baseline (2026-08-06)
+## Test Baseline (2026-08-07)
 
-- **659/659 tests pass** (`unittest discover tests` AND `pytest tests/`).
-  650 at end of Session 17; +8 doctor AI tests from Session 18 (ai_status
+- **666/666 tests pass** (`unittest discover tests` AND `pytest tests/`).
+  662 at end of Session 18; +4 from Session 19 (config partial-save preserves
+  ai_provider/consents ×2, Naukri aggregate-URL drop at discovery, beyond-cap
+  rows stay honest snippet) + junk-title case additions + 1 test renamed
+  (aggregate drop).
+  659 at end of Session 18 (docs overhaul); +8 doctor AI tests from Session 18 (ai_status
   snapshot resolution, ok/off/warn/unknown-provider/error status mapping,
   URL credential scrub, key-leak guard, format + JSON `ai` entry) +1 MCP
   `matcha_status` AI-entry test.

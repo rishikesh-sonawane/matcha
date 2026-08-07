@@ -44,8 +44,8 @@ export MINIMAX="your-api-key"     # put this in your shell profile (~/.zshrc)
 venv/bin/matcha
 ```
 
-…or run the interactive wizard (stores the key in your OS keyring, never
-plaintext):
+…or run the interactive wizard (stores the key encrypted on disk via
+fernet — no OS keychain prompts):
 
 ```bash
 venv/bin/matcha --configure

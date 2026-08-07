@@ -71,7 +71,9 @@ _JUNK_TITLE_RE = re.compile(
     r"|(^|\s)(jobs? in|jobs? at|jobs? for|apply for)\b"
     r"|^top companies? (hiring|hiring for)\b"
     r"|(^|\s)companies? hiring for\b"
-    r"|([\w-]+)\s+jobs?$",
+    r"|([\w-]+)\s+jobs?$"
+    r"|([\w-]+)\s+careers?$"
+    r"|^walk[ -]?in\s+(drive|drives|interview)s?\b",
     re.IGNORECASE,
 )
 

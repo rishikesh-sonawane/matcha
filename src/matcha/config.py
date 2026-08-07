@@ -185,19 +185,40 @@ def load_config() -> dict[str, Any]:
     return raw
 
 
-def save_config(config: dict[str, Any]) -> None:
+def save_config(config: dict[str, Any], remove_keys: set[str] | None = None) -> None:
+    """Persist config atomically, merging over the current file.
+
+    Merge semantics: partial updates (e.g. the TUI persisting only
+    ``last_query``/``last_days``) must never drop keys owned by another
+    section — a full-file replace here silently wiped ``ai_provider`` and the
+    OpenCLI consents on every interactive run (Session 19 regression).
+    Secrets are stored in keyring/fernet, never in config.json, and only the
+    secrets THIS caller passed are touched (a partial save never deletes
+    another section's stored credential). ``remove_keys`` deletes persisted
+    keys — used by ``ai.configure_provider`` when it clears a slot back to
+    the provider preset / env default.
+    """
     config = dict(config)
-    secrets = {k: config.pop(k, "") for k in _SECRET_CONFIG_KEYS}
-    other_secrets = {k: config.pop(k, "") for k in _KEYRING_KEYS - _SECRET_CONFIG_KEYS}
+    secrets = {k: config.pop(k) for k in _SECRET_CONFIG_KEYS if k in config}
+    other_secrets = {k: config.pop(k) for k in (_KEYRING_KEYS - _SECRET_CONFIG_KEYS) if k in config}
+    merged = _load_config_raw()
+    merged.update(config)
+    for key in remove_keys or ():
+        merged.pop(key, None)
+    # Drop empty credential slots so a cleared provider never leaves stale
+    # empty keys behind (falsy values would resolve fine, but clutter the file).
+    for key in _KEYRING_KEYS | {"ai_provider"}:
+        if not merged.get(key):
+            merged.pop(key, None)
     try:
-        validated = ConfigSchema(**config)
-        serializable = validated.model_dump()
-        unknown_keys = {k: v for k, v in config.items() if k not in ConfigSchema.model_fields}
+        ConfigSchema(**merged)  # validate the merged state; raises on corruption
+        serializable = {k: v for k, v in merged.items() if k in ConfigSchema.model_fields}
+        unknown_keys = {k: v for k, v in merged.items() if k not in ConfigSchema.model_fields}
         serializable.update(unknown_keys)
         payload = json.dumps(serializable, indent=2)
     except Exception as e:
         logger.warning("Failed to save config JSON: %s", e)
-        payload = json.dumps(config, indent=2)
+        payload = json.dumps(merged, indent=2)
     # Phase 7 (§17): atomic, owner-only (0600), symlink-rejected.
     try:
         atomic_write_text(CONFIG_FILE, payload)

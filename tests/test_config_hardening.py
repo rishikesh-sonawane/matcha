@@ -167,6 +167,32 @@ class TestConfigEdgePaths(_RedirectedConfig):
         loaded = config.load_config()
         self.assertEqual(loaded["custom_field"], 42)
 
+    def test_partial_save_preserves_other_keys(self):
+        # Session 19 regression: the TUI persists only last_query/last_days —
+        # save_config must MERGE over the file, not replace it, or ai_provider
+        # + the OpenCLI consents get wiped to schema defaults on every run
+        # (which silently disabled AI and the browser backends).
+        config.save_config(
+            {"ai_provider": "kilo", "linkedin_consent": True, "indeed_consent": True}
+        )
+        config.save_config({"last_query": "new", "last_days": 3})
+        loaded = config.load_config()
+        self.assertEqual(loaded["ai_provider"], "kilo")
+        self.assertTrue(loaded["linkedin_consent"])
+        self.assertTrue(loaded["indeed_consent"])
+        self.assertEqual(loaded["last_query"], "new")
+        self.assertEqual(loaded["last_days"], 3)
+        # The merge is persisted, not just in-memory.
+        raw = config._load_config_raw()
+        self.assertEqual(raw["ai_provider"], "kilo")
+        self.assertTrue(raw["linkedin_consent"])
+
+    def test_partial_save_does_not_delete_other_secret(self):
+        # A partial save (no ai_key passed) must not delete the stored AI key.
+        config.save_config({"ai_key": "sk-keep"})
+        config.save_config({"last_query": "x"})
+        self.assertEqual(config.load_config()["ai_key"], "sk-keep")
+
     def test_save_profile_oserror_logged(self):
         with mock.patch.object(config, "atomic_write_text", side_effect=OSError("disk full")):
             config.save_profile({"name": "n"})

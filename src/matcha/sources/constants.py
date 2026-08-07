@@ -193,6 +193,13 @@ NAUKRI_NON_JOB_PATHS: list[str] = [
     "/interview-",
     "/cloudgateway",
     "companies.naukri.com",
+    # Session 19: DDGS frequently indexes Naukri SEARCH/careers listing pages
+    # (``<query>-jobs-in-<city>``, ``<company>-jobs-careers-<id>``,
+    # ``walkin-drives-jobs-in-<city>``) — aggregates that are never postings.
+    # Real postings live at ``/job-listings-*`` and never contain these markers.
+    "-jobs-in-",
+    "-jobs-careers-",
+    "walkin-drives-jobs",
 ]
 
 INDIVIDUAL_JOB_PATTERNS: list[re.Pattern] = [

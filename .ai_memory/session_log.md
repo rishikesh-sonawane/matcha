@@ -740,3 +740,60 @@ availability, surface it in MCP status, sync the memory bank."
   test_skill 5/5). QUICKSTART.md gained the reverse link — a new "Agents"
   section pointing at `matcha skill --install` and the MCP server. No code
   changes.
+
+---
+
+### 2026-08-07 — Session 19: AI "not working" (54% ceiling) + Naukri junk — root cause: config wipe (DONE)
+
+**User report:** "maximum match found is 54% which is very very low and the
+naukri jobs are expired ones" — the (AI) banner showed but no AI actually ran,
+and Naukri top rows looked stale.
+
+- **Root cause #1 — `save_config` WIPED config on every partial save.** The
+  TUI persists only `{last_query, last_location, last_days}`; old
+  `save_config` ran the partial dict through `ConfigSchema.model_dump()` which
+  filled EVERY schema field with its default → `ai_provider`→"" (no provider ⇒
+  no preset ⇒ no URL/model ⇒ `check_ai_available()=False` ⇒ the (AI) banner
+  showed but ZERO AI calls fired — heuristic-only flat scores, no verdicts),
+  `linkedin_consent`/`indeed_consent`→False (LinkedIn/Indeed degraded to
+  guest-api/html), and the stored **SerpAPI key was DELETED** from the secret
+  store (partial saves deleted every secret not passed). The first interactive
+  run after any config silently broke everything downstream. **Fixed:**
+  `save_config` now MERGES over the persisted file, touches only secrets the
+  caller passed, and takes `remove_keys` for explicit clears (used by
+  `configure_provider` so clearing url/model still works under merge
+  semantics). Regression tests: partial save preserves ai_provider/consents
+  and other stored secrets.
+- **Root cause #2 — Naukri "jobs" were never postings.** DDGS discovery
+  admitted Naukri SEARCH/careers/homepage URLs (`<q>-jobs-in-<city>`,
+  `<company>-jobs-careers-<id>`, `<q>-jobs`, `?lnch=1`) as jobs. Worse, the
+  result-level stamping in `main.search_jobs`
+  (`job.setdefault("data_quality", result.data_quality)`) labeled every
+  un-enriched row "full" whenever ANY row in the batch enriched → junk rows
+  ranked at the top with full confidence and even qualified for AI scoring.
+  **Fixed:** discovery gates on `_is_job_url` (`/job-listings-*` — the SAME
+  predicate the job-page backend enriches on), `NAUKRI_NON_JOB_PATHS` +=
+  `-jobs-in-` / `-jobs-careers-` / `walkin-drives-jobs`, and every discovery
+  row is stamped per-row `data_quality=snippet` / `backend=ddgs` (upgraded
+  only by a real page merge). Junk-title gate += "X Careers" and walk-in
+  drive listing titles.
+- **Keychain incident:** restoring the AI/SerpAPI keys surfaced the macOS
+  keychain prompt (config.py `keyring` path). User chose **no keychain at
+  all**: removed `keyring` from requirements.txt + pyproject.toml + the venv
+  (the fernet fallback is now the ONLY secret store — `~/.matcha/*.enc`,
+  0600); no keychain items existed for service `matcha` (keyring's macOS
+  backend was never persisting on this machine); re-stored both keys via
+  fernet; README/QUICKSTART wording updated. Verified:
+  `_KEYRING_AVAILABLE=False`, keys resolve with `MINIMAX` cleared from the
+  environment, `config.json` contains zero secrets.
+- **Machine restore:** `ai_provider=kilo` + key (fernet), OpenCLI consents
+  True, SerpAPI key re-stored. Live search (AWS DevOps Engineer / Hyderabad /
+  3d): **ai_used True · 35 AI calls · 16 enriched · 5 verdicts · top 85.0%**
+  with real verdict lines; Naukri aggregate rows **0** after the gate (that
+  query's DDGS results were all aggregate pages — all filtered).
+- **Validation:** 666/666 tests (pytest + unittest) — +4 new (config
+  partial-save preserves keys ×2, Naukri aggregate-URL drop + beyond-cap
+  snippet honesty), junk-title additions, 1 test renamed; ruff/format/mypy (0
+  errors)/bandit clean; coverage 81% (gate ≥80%).
+- **Docs:** README/QUICKSTART keyring→fernet wording; memory bank synced.
+- **Next:** fresh spec or polish — do NOT start a new phase without one.

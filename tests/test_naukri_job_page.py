@@ -340,15 +340,31 @@ class TestJobPageDispatch(unittest.TestCase):
         self.assertEqual(result.backend, "ddgs")
         self.assertEqual(result.data_quality, "snippet")
 
-    def test_non_job_urls_not_fetched(self):
+    def test_aggregate_urls_dropped_at_discovery(self):
+        # Session 19: Naukri search/careers/homepage URLs are aggregates, never
+        # postings — dropped outright (previously kept as misleading snippets).
         urls = [
-            {"href": "https://www.naukri.com/it-jobs?src=gnbjobs", "title": "IT jobs", "body": ""}
+            {
+                "href": "https://www.naukri.com/it-jobs?src=gnbjobs",
+                "title": "IT jobs",
+                "body": "",
+            },
+            {
+                "href": "https://www.naukri.com/?lnch=1",
+                "title": "?Lnch=1",
+                "body": "",
+            },
+            {
+                "href": "https://www.naukri.com/cloud-support-engineer-jobs",
+                "title": "Cloud Support Engineer",
+                "body": "",
+            },
         ]
         ddgs, _ = _patch_ddgs(urls)
         self.addCleanup(ddgs.stop)
         with mock.patch("matcha.sources.naukri._fetch_job_page") as fetch:
             result = search_naukri_jobs("python")
-        self.assertEqual(len(result.jobs), 1)  # kept as snippet
+        self.assertEqual(len(result.jobs), 0)
         fetch.assert_not_called()
         self.assertEqual(result.backend, "ddgs")
 
@@ -382,6 +398,73 @@ class TestJobPageDispatch(unittest.TestCase):
         self.assertTrue(all(j.get("data_quality") == "full" for j in result.jobs))
         self.assertEqual(result.backend, "job-page")
         self.assertEqual(result.data_quality, "full")
+
+    def test_search_listing_urls_dropped_at_discovery(self):
+        # Session 19: DDGS frequently returns Naukri SEARCH/careers listing
+        # pages (aggregates, never postings) — they must be dropped, not
+        # surfaced as jobs. Only real ``/job-listings-*`` URLs survive.
+        urls = [
+            {
+                "href": "https://www.naukri.com/aws-devops-engineer-jobs-in-india?expJD=true",
+                "title": "Aws Devops Engineer",
+                "body": "AWS DevOps Engineer",
+            },
+            {
+                "href": "https://www.naukri.com/aws-jobs-in-hyderabad-secunderabad",
+                "title": "Aws",
+                "body": "AWS jobs",
+            },
+            {
+                "href": "https://www.naukri.com/techblocks-jobs-careers-2864034",
+                "title": "Techblocks Careers",
+                "body": "Techblocks careers",
+            },
+            {
+                "href": "https://www.naukri.com/tata-consultancy-services-jobs-careers-in-hyderabad-gid-223346",
+                "title": "Tata Consultancy Services",
+                "body": "TCS careers",
+            },
+            {
+                "href": "https://www.naukri.com/walkin-drives-jobs-in-bangalore",
+                "title": "Walkin Drives",
+                "body": "Walkin drives",
+            },
+        ] + _search_ok()  # a real posting must survive
+        ddgs, _ = _patch_ddgs(urls)
+        self.addCleanup(ddgs.stop)
+        with mock.patch(
+            "matcha.sources.naukri._fetch_job_page", return_value=LIVE_MARKDOWN
+        ) as fetch:
+            result = search_naukri_jobs("aws devops engineer")
+        self.assertEqual(len(result.jobs), 1)
+        self.assertEqual(result.jobs[0]["url"], JOB_URL)
+        fetch.assert_called_once()
+
+    def test_beyond_cap_rows_stay_honest_snippet(self):
+        # Session 19: rows beyond the page-fetch cap are NOT enriched — their
+        # per-row provenance must stay snippet (never inherit the batch's
+        # result-level "full" which inflated their rank + AI eligibility).
+        urls = [
+            {
+                "href": JOB_URL.replace("100326009734", f"100326000{i:03d}"),
+                "title": f"Python Developer {i}",
+                "body": "Python Developer",
+            }
+            for i in range(_JOB_PAGE_MAX + 2)
+        ]
+        ddgs, _ = _patch_ddgs(urls)
+        self.addCleanup(ddgs.stop)
+        with mock.patch(
+            "matcha.sources.naukri._fetch_job_page", return_value=LIVE_MARKDOWN
+        ) as fetch:
+            result = search_naukri_jobs("python")
+        enriched = [j for j in result.jobs if j.get("data_quality") == "full"]
+        self.assertEqual(len(enriched), _JOB_PAGE_MAX)
+        self.assertEqual(fetch.call_count, _JOB_PAGE_MAX)
+        beyond = result.jobs[_JOB_PAGE_MAX:]
+        self.assertEqual(len(beyond), 2)
+        self.assertTrue(all(j.get("data_quality") == "snippet" for j in beyond))
+        self.assertTrue(all(j.get("backend") == "ddgs" for j in beyond))
 
     def test_fetch_cap_respected(self):
         urls = [

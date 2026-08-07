@@ -23,7 +23,6 @@ dependencies = [
     "feedparser>=6.0.0",
     "rapidfuzz>=3.0.0",
     "prompt_toolkit>=3.0.0",
-    "keyring>=24.0.0",
     "cryptography>=42.0.0",
 ]
 

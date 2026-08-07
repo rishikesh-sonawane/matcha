@@ -88,6 +88,12 @@ class TestQualityFilter(unittest.TestCase):
             "Careers",
             "Top companies hiring for aws devops engineer",
             "Companies hiring for devops engineers",
+            # Session 19: Naukri aggregate listing pages surfaced as jobs
+            "Techblocks Careers",
+            "Acme Careers",
+            "Walkin Drives",
+            "Walk-in Drive",
+            "Walk In Interview",
         ):
             kept, reports = apply_filters([_job(title=title)], {})
             self.assertEqual(len(kept), 0, f"junk title {title!r} should be dropped")

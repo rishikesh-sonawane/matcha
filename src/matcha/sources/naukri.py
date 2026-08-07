@@ -349,6 +349,13 @@ def _search_naukri_ddgs(
                 continue
             if any(p in url for p in NAUKRI_NON_JOB_PATHS):
                 continue
+            # Session 19: DDGS indexes Naukri SEARCH/aggregate pages by the
+            # dozen (<query>-jobs, -jobs-in-<city>, <company>-jobs-careers-<id>,
+            # even the homepage ?lnch=1). Only real ``/job-listings-*`` posting
+            # URLs are jobs — gate discovery on the SAME predicate the job-page
+            # backend uses to enrich, so aggregates can never surface as rows.
+            if not _is_job_url(url):
+                continue
             if any(re.search(p, title) for p in NON_JOB_TITLE_PATTERNS):
                 continue
             if url in seen_urls:
@@ -493,6 +500,7 @@ def _merge_job_fields(job: dict[str, Any], fields: dict[str, Any]) -> None:
     else:
         job["data_quality"] = "partial"
     job["enrich_source"] = "job-page"
+    job["backend"] = "job-page"
 
 
 #
@@ -996,6 +1004,12 @@ def _build_job(
         "description": snippet[:1000],
         "url": url,
         "source": "Naukri",
+        # Provenance: discovery rows are snippet-level UNTIL the job-page
+        # backend merges real page data (Session 19 — the result-level
+        # stamping in main.search_jobs used to label un-enriched rows "full"
+        # whenever ANY row in the batch enriched, inflating their rank).
+        "data_quality": "snippet",
+        "backend": "ddgs",
     }
 
 
