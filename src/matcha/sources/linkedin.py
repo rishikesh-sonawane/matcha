@@ -1,4 +1,5 @@
 import logging
+import re
 from typing import Any
 from urllib.parse import quote
 
@@ -24,6 +25,28 @@ HEADERS: dict[str, str] = {
 }
 
 SECONDS_PER_DAY: int = 86400
+
+#: Ephemeral LinkedIn apply-session links (``/job-apply/<id>``) 404 for
+#: everyone except the browser inside a live apply flow (verified live in
+#: Session 20). Matcha always applies via the stable job page instead.
+_JOB_APPLY_RE = re.compile(r"/job-apply/(\d+)")
+
+
+def stable_apply_url(url: str, apply_url: str = "") -> str:
+    """Return a stable LinkedIn apply URL.
+
+    OpenCLI returns a canonical ``/jobs/view/<id>`` URL plus an ephemeral
+    ``/job-apply/<id>`` apply link. The job page is the real apply
+    destination, so ephemeral job-apply links are replaced with the
+    canonical jobs/view URL; any other apply link passes through untouched.
+    """
+    candidate = (apply_url or url or "").strip()
+    m = _JOB_APPLY_RE.search(candidate)
+    if not m:
+        return candidate
+    if url:
+        return url
+    return f"https://www.linkedin.com/jobs/view/{m.group(1)}"
 
 
 def search_linkedin_jobs(
@@ -121,6 +144,11 @@ def _parse_linkedin_rows(rows: list[dict[str, Any]], default_location: str) -> l
         for extra in ("salary", "listed", "apply_url", "workplace_type", "job_type", "applicants"):
             if row.get(extra):
                 job[extra] = str(row[extra]).strip()
+        # Session 20: OpenCLI search rows can carry an ephemeral job-apply
+        # link that 404s outside a live session — always keep the stable
+        # jobs/view URL as the apply destination (and label it apply_url so
+        # the detail panel + `o` open the real posting).
+        job["apply_url"] = stable_apply_url(job.get("url", ""), job.get("apply_url", ""))
         jobs.append(job)
     return jobs
 

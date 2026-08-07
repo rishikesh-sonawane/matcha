@@ -371,6 +371,95 @@ class TestTableBuilders(unittest.TestCase):
         )
         self.assertIsNotNone(table)
 
+    def test_build_results_table_marks_seen(self):
+        import io
+
+        from rich.console import Console
+
+        import matcha.main as main
+
+        job = {"title": "A", "company": "B", "url": "u", "source": "X"}
+        ranked = [(90.0, job, [])]
+        table = main.build_results_table(
+            ranked, 0, 10, 1, ai_enabled=False, saved_ids={}, seen_ids={id(job)}
+        )
+        buf = io.StringIO()
+        Console(file=buf, force_terminal=False, no_color=True).print(table)
+        self.assertIn("[seen]", buf.getvalue())
+
+    def test_build_results_table_renders_provenance_tags(self):
+        """Session 20: provenance tags were swallowed by rich markup parsing
+        (unescaped ``[full]`` was read as a style) and never displayed — the
+        escaped markup must render them as literal text."""
+        import io
+
+        from rich.console import Console
+
+        import matcha.main as main
+
+        job = {
+            "title": "A",
+            "company": "B",
+            "url": "u",
+            "source": "X",
+            "data_quality": "full",
+            "age": "unknown",
+        }
+        ranked = [(90.0, job, [])]
+        table = main.build_results_table(ranked, 0, 10, 1, ai_enabled=False, saved_ids={})
+        buf = io.StringIO()
+        Console(file=buf, force_terminal=False, no_color=True).print(table)
+        rendered = buf.getvalue()
+        self.assertIn("[full]", rendered)
+        self.assertIn("[age?]", rendered)
+
+    def test_visible_ranked_hides_seen_by_default(self):
+        import matcha.main as main
+
+        seen_job = {"title": "A", "url": "u1"}
+        fresh_job = {"title": "B", "url": "u2"}
+        ranked = [(90.0, seen_job, []), (80.0, fresh_job, [])]
+        seen_ids = {id(seen_job)}
+        self.assertEqual(main._visible_ranked(ranked, seen_ids, False), [(80.0, fresh_job, [])])
+        self.assertEqual(main._visible_ranked(ranked, seen_ids, True), ranked)
+        self.assertEqual(len(main._visible_ranked(ranked, set(), False)), 2)
+
+    def test_prompt_loop_hides_seen_with_h_toggle(self):
+        import matcha.main as main
+
+        seen_job = {"title": "A", "company": "C", "url": "u1", "source": "X"}
+        fresh_job = {"title": "B", "company": "C", "url": "u2", "source": "X"}
+        ranked = [(90.0, seen_job, []), (70.0, fresh_job, [])]
+        app = mock.MagicMock()
+        with (
+            mock.patch("matcha.main.Application", return_value=app),
+            mock.patch("matcha.main.load_saved_jobs", return_value={}),
+            mock.patch("matcha.main.console") as console,
+        ):
+            result = main.prompt_loop(ranked, {"X": 1}, {}, False, seen_ids={id(seen_job)})
+        self.assertIsNone(result)
+        # the "already seen — hidden" note must be surfaced
+        prints = [str(c.args[0]) for c in console.print.call_args_list]
+        self.assertTrue(any("already seen" in p for p in prints), prints)
+
+    def test_prompt_loop_all_seen_falls_back_to_show_all(self):
+        import matcha.main as main
+
+        seen_job = {"title": "A", "company": "C", "url": "u1", "source": "X"}
+        ranked = [(90.0, seen_job, [])]
+        app = mock.MagicMock()
+        with (
+            mock.patch("matcha.main.Application", return_value=app),
+            mock.patch("matcha.main.load_saved_jobs", return_value={}),
+            mock.patch("matcha.main.console") as console,
+        ):
+            result = main.prompt_loop(ranked, {"X": 1}, {}, False, seen_ids={id(seen_job)})
+        self.assertIsNone(result)
+        prints = [str(c.args[0]) for c in console.print.call_args_list]
+        # "Nothing new" fallback shown; no contradictory "hidden" note
+        self.assertTrue(any("Nothing new" in p for p in prints), prints)
+        self.assertFalse(any("hidden" in p for p in prints), prints)
+
     def test_show_job_detail(self):
         import matcha.main as main
 

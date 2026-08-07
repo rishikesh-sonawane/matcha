@@ -1,6 +1,6 @@
 # Current System State — Matcha
 
-> Last verified: 2026-08-07 (Session 19 — config-wipe root-cause fix, fernet-only secrets, Naukri aggregate gate).
+> Last verified: 2026-08-07 (Session 20 — stable apply links, TUI seen-hiding, provenance tags visible).
 > If any checkbox below conflicts with the actual code, **the code wins** —
 > update this file.
 
@@ -211,10 +211,22 @@ one.
   **AI `ok` — Kilo Gateway (default) · best/fast kilo-auto/small · key set**.
   Status: 4/7 sources ready + AI ready.
 
+- [x] **Session 20 — working links + no repeat results (DONE 2026-08-07):**
+  live link audit proved LinkedIn `/job-apply/` links 404 while `jobs/view`
+  URLs are stable → `stable_apply_url()` normalizes at parse + enrichment;
+  HTTP cache TTL 5 min (env-tunable, `import os` fixed); TUI joins
+  `seen_urls` (hide-seen default, `h` toggle, save retires); provenance tags
+  escaped + Match column widened so `[full]/[age?]` finally render. 675/675
+  tests; ruff/mypy clean; coverage 81%.
+
 ## Test Baseline (2026-08-07)
 
-- **666/666 tests pass** (`unittest discover tests` AND `pytest tests/`).
-  662 at end of Session 18; +4 from Session 19 (config partial-save preserves
+- **675/675 tests pass** (`unittest discover tests` AND `pytest tests/`).
+  666 at end of Session 19; +9 from Session 20 (LinkedIn stable apply-url
+  normalization ×4, `_visible_ranked` seen-hiding + table `[seen]` marker,
+  escaped provenance-tag rendering, prompt_loop partial-seen + all-seen
+  fallback notes) + the utils.py `import os` crash fix.
+  666/666 at end of Session 19: +4 (config partial-save preserves
   ai_provider/consents ×2, Naukri aggregate-URL drop at discovery, beyond-cap
   rows stay honest snippet) + junk-title case additions + 1 test renamed
   (aggregate drop).

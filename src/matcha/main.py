@@ -802,7 +802,7 @@ def _print_human_summary(
     shown = ranked[:top]
     console.print(f"  [bold]Top {len(shown)} of {len(ranked)}:[/bold]")
     for i, (score, job, _reasons) in enumerate(shown, 1):
-        tags = "".join(f"[dim][{t}][/dim]" for t in provenance_tags(job))
+        tags = "".join(f"[dim]\\[{t}][/dim]" for t in provenance_tags(job))
         console.print(
             f"  {i:>3}. {job.get('title', 'N/A')} @ {job.get('company', 'N/A')} — "
             f"{job.get('source', '?')} — [{score:.1f}%]{tags}"
@@ -994,6 +994,7 @@ def build_results_table(
     ai_enabled: bool,
     saved_ids: dict[str, Any],
     highlight: int | None = None,
+    seen_ids: set[int] | None = None,
 ) -> Table:
     start = page * page_size
     end = min(start + page_size, len(ranked))
@@ -1012,7 +1013,7 @@ def build_results_table(
     table.add_column("Title", style="bold", width=22, overflow="ellipsis")
     table.add_column("Company", width=14, overflow="ellipsis")
     table.add_column("Source", width=8, no_wrap=True)
-    table.add_column("Match", justify="right", width=6, no_wrap=True)
+    table.add_column("Match", justify="right", width=20, no_wrap=True)
 
     for i, (score, job, reasons) in enumerate(ranked[start:end], start + 1):
         if score >= 60:
@@ -1026,13 +1027,17 @@ def build_results_table(
         url = job.get("url", "")
         saved_mark = " [yellow]\u2605[/yellow]" if url and is_job_saved(url, saved_ids) else ""
         # Provenance tags (strategy §9.6): [full]/[partial]/[snippet] + [age?]/[salary?].
-        tags = "".join(f"[dim][{t}][/dim]" for t in provenance_tags(job))
+        # Session 20: tag text must be rich-escaped (\[..\]) or rich treats
+        # [full]/[snippet] as unknown styles and renders nothing — the tags
+        # were invisible in every table before this fix.
+        tags = "".join(f"[dim]\\[{t}][/dim]" for t in provenance_tags(job))
+        seen_mark = " [dim]\\[seen][/dim]" if seen_ids and id(job) in seen_ids else ""
         row_style = (
             "reverse bold" if highlight is not None and (i - 1) == (start + highlight) else None
         )
         table.add_row(
             str(i),
-            job.get("title", "N/A") + saved_mark,
+            job.get("title", "N/A") + saved_mark + seen_mark,
             job.get("company", "N/A"),
             job.get("source", "N/A"),
             f"[{score_color}]{score}%[/{score_color}]{tags}",
@@ -1127,6 +1132,20 @@ def _validate_queries(queries: list[str]) -> list[str]:
     return valid
 
 
+def _visible_ranked(
+    ranked: list[RankedJob], seen_ids: set[int], show_seen: bool
+) -> list[RankedJob]:
+    """The rows to render: all when ``show_seen``, else un-seen jobs only.
+
+    Session 20: the interactive TUI hides jobs the user has already seen
+    (recorded in ``seen_urls``) by default so re-runs surface new postings
+    instead of replaying the same list; ``h`` flips ``show_seen``.
+    """
+    if show_seen or not seen_ids:
+        return ranked
+    return [r for r in ranked if id(r[1]) not in seen_ids]
+
+
 def prompt_loop(
     ranked: list[RankedJob],
     source_counts: dict[str, int],
@@ -1134,6 +1153,7 @@ def prompt_loop(
     ai_enabled: bool,
     filter_summary: str = "",
     filter_notes: list[str] | None = None,
+    seen_ids: set[int] | None = None,
 ) -> str | None:
     if not ranked:
         console.print("[yellow]No jobs found. Try different search terms.[/yellow]")
@@ -1160,7 +1180,6 @@ def prompt_loop(
         console.print("  [bold]Errors:[/bold] " + " | ".join(error_parts))
 
     page_size = 10
-    total_pages = max(1, (len(ranked) + page_size - 1) // page_size)
     saved_ids = load_saved_jobs()
 
     class State:
@@ -1169,13 +1188,32 @@ def prompt_loop(
         mode: str = "list"
         detail_idx: int = 0
         re_run: bool = False
+        show_seen: bool = False
 
     st = State()
+    seen_ids = seen_ids or set()
+
+    def _visible() -> list[RankedJob]:
+        return _visible_ranked(ranked, seen_ids, st.show_seen)
+
+    def _total_pages() -> int:
+        return max(1, (len(_visible()) + page_size - 1) // page_size)
+
+    hidden_count = len(ranked) - len(_visible_ranked(ranked, seen_ids, False))
+    # All-seen: don't claim rows are "hidden" when the fallback below is
+    # about to show them anyway, and don't let `h` blank the table.
+    all_seen = bool(ranked) and hidden_count == len(ranked)
+    if hidden_count and not all_seen:
+        console.print(f"  [dim]{hidden_count} already seen — hidden ([bold]h[/bold] to show)[/dim]")
+    if all_seen:
+        st.show_seen = True
+        console.print("  [dim]Nothing new — showing all previously seen jobs[/dim]")
 
     help_text = (
         "[dim]\u2191\u2193[/dim] navigate  [dim]Enter[/dim] detail  "
         "[dim]s[/dim] save/unsave  [dim]o[/dim] open  "
-        "[dim]n[/dim]/[dim]p[/dim] page  [dim]l[/dim] saved  [dim]r[/dim] re-run  [dim]q[/dim] quit"
+        "[dim]n[/dim]/[dim]p[/dim] page  [dim]h[/dim] seen  "
+        "[dim]l[/dim] saved  [dim]r[/dim] re-run  [dim]q[/dim] quit"
     )
     saved_help = "[dim]Press any key to go back...[/dim]"
     detail_help = (
@@ -1194,11 +1232,14 @@ def prompt_loop(
             # Mirror the persisted enriched row into the live view so the
             # Saved screen shows salary/posted immediately (strategy §8).
             saved_ids[url] = job_entry(job)
+            # Session 20: a saved (applied-to) job must not resurface in the
+            # next run — retire it from the seen table now.
+            mark_seen([job])
 
     def _render_content():
         with console.capture() as cap:
             if st.mode == "detail":
-                score, job, reasons = ranked[st.detail_idx]
+                score, job, reasons = _visible()[st.detail_idx]
                 show_job_detail(job, score, reasons)
             elif st.mode == "saved":
                 if not saved_ids:
@@ -1226,13 +1267,14 @@ def prompt_loop(
             else:
                 console.print(
                     build_results_table(
-                        ranked,
+                        _visible(),
                         st.page,
                         page_size,
-                        total_pages,
+                        _total_pages(),
                         ai_enabled,
                         saved_ids,
                         highlight=st.selected,
+                        seen_ids=seen_ids,
                     )
                 )
         return cap.get()
@@ -1257,7 +1299,7 @@ def prompt_loop(
             st.selected -= 1
         elif st.page > 0:
             st.page -= 1
-            pc = min(page_size, len(ranked) - st.page * page_size)
+            pc = min(page_size, len(_visible()) - st.page * page_size)
             st.selected = pc - 1
         event.app.invalidate()
 
@@ -1266,10 +1308,10 @@ def prompt_loop(
         if st.mode != "list":
             return
         ps = st.page * page_size
-        pe = min(ps + page_size, len(ranked))
+        pe = min(ps + page_size, len(_visible()))
         if st.selected < pe - ps - 1:
             st.selected += 1
-        elif st.page + 1 < total_pages:
+        elif st.page + 1 < _total_pages():
             st.page += 1
             st.selected = 0
         event.app.invalidate()
@@ -1280,7 +1322,7 @@ def prompt_loop(
             st.mode = "list"
         else:
             idx = st.page * page_size + st.selected
-            if 0 <= idx < len(ranked):
+            if 0 <= idx < len(_visible()):
                 st.mode = "detail"
                 st.detail_idx = idx
         event.app.invalidate()
@@ -1293,7 +1335,7 @@ def prompt_loop(
     @kb.add("n")
     @kb.add("N")
     def _next(event):
-        if st.mode == "list" and st.page + 1 < total_pages:
+        if st.mode == "list" and st.page + 1 < _total_pages():
             st.page += 1
             st.selected = 0
             event.app.invalidate()
@@ -1306,6 +1348,15 @@ def prompt_loop(
             st.selected = 0
             event.app.invalidate()
 
+    @kb.add("h")
+    @kb.add("H")
+    def _toggle_seen(event):
+        if st.mode == "list" and not all_seen:
+            st.show_seen = not st.show_seen
+            st.page = 0
+            st.selected = 0
+            event.app.invalidate()
+
     @kb.add("s")
     @kb.add("S")
     def _save(event):
@@ -1315,8 +1366,8 @@ def prompt_loop(
             idx = st.detail_idx
         else:
             return
-        if 0 <= idx < len(ranked):
-            _do_save(ranked[idx][1])
+        if 0 <= idx < len(_visible()):
+            _do_save(_visible()[idx][1])
         event.app.invalidate()
 
     @kb.add("o")
@@ -1327,8 +1378,8 @@ def prompt_loop(
             idx = st.page * page_size + st.selected
         elif st.mode == "detail":
             idx = st.detail_idx
-        if 0 <= idx < len(ranked):
-            job = ranked[idx][1]
+        if 0 <= idx < len(_visible()):
+            job = _visible()[idx][1]
             # Enriched jobs carry an apply_url (strategy §8) — prefer it.
             url = job.get("apply_url") or job.get("url", "")
             if url:
@@ -1603,6 +1654,10 @@ def run() -> None:
                 f"[dim]AI budget: {ai_calls}/{max_calls} calls used ({remaining} left)[/dim]"
             )
 
+        jobs_all = [job for _score, job, _reasons in ranked]
+        _, seen_jobs = partition_new(jobs_all)
+        seen_ids = {id(j) for j in seen_jobs}
+
         loop_result = prompt_loop(
             ranked,
             source_counts,
@@ -1610,7 +1665,13 @@ def run() -> None:
             ai_enabled=use_ai,
             filter_summary=filter_summary,
             filter_notes=run_result.get("filter_notes", []),
+            seen_ids=seen_ids,
         )
+
+        # Session 20: interactive runs record what was shown so the next run
+        # hides already-seen jobs instead of replaying the same list (watch
+        # already did this; the TUI now joins it).
+        mark_seen(jobs_all)
 
         if loop_result != "re_run":
             break

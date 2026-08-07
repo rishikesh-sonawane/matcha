@@ -404,6 +404,7 @@ Jobs are searched across all configured sources in parallel using the base query
 
 Interactive features:
 - **Paginated browsing** — `↑↓` navigate, `n/p` page, `Enter` for details
+- **Already-seen hiding** — every run records what it showed; next run hides those jobs by default (`h` toggles all), and saving a job (`s`) retires it from future lists — no more replaying the same results
 - **Job details** — Full URL, match reasons, and description
 - **Save jobs** — Press `s` to save/unsave; `l` to view saved. Saved rows persist the enriched/normalized fields (salary, apply_url, workplace, company_url, posted date) via an idempotent SQLite migration, and the Saved screen shows Salary + Posted columns
 - **Open in browser** — Press `o` to open job URL

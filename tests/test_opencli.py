@@ -39,6 +39,7 @@ from matcha.sources.linkedin import (
     _parse_linkedin_rows,
     _search_linkedin_opencli,
     search_linkedin_jobs,
+    stable_apply_url,
 )
 
 
@@ -334,6 +335,38 @@ class TestLinkedInRowMapping(unittest.TestCase):
         self.assertEqual(jobs[0]["salary"], "10")
         self.assertEqual(jobs[0]["listed"], "d")
         self.assertEqual(jobs[0]["apply_url"], "a")
+
+    def test_ephemeral_job_apply_rewritten_to_stable_url(self):
+        # Session 20: /job-apply/ links 404 outside a live apply session —
+        # the stable /jobs/view/ URL must be the apply destination.
+        rows = [
+            {
+                "title": "Dev",
+                "url": "https://www.linkedin.com/jobs/view/4448432902",
+                "apply_url": "https://www.linkedin.com/job-apply/4448432902",
+            }
+        ]
+        jobs = _parse_linkedin_rows(rows, "India")
+        self.assertEqual(jobs[0]["apply_url"], "https://www.linkedin.com/jobs/view/4448432902")
+
+    def test_job_apply_rebuilt_from_id_when_no_stable_url(self):
+        rows = [{"title": "Dev", "url": "", "apply_url": "https://www.linkedin.com/job-apply/555"}]
+        jobs = _parse_linkedin_rows(rows, "India")
+        self.assertEqual(jobs[0]["apply_url"], "https://www.linkedin.com/jobs/view/555")
+
+    def test_stable_urls_pass_through_untouched(self):
+        stable = "https://www.linkedin.com/jobs/view/777"
+        self.assertEqual(stable_apply_url(stable, stable), stable)
+        # non-LinkedIn apply links (external ATS) are never rewritten
+        self.assertEqual(
+            stable_apply_url("https://x/job", "https://ats.example/apply/9"),
+            "https://ats.example/apply/9",
+        )
+
+    def test_apply_url_defaults_to_stable_url(self):
+        rows = [{"title": "Dev", "url": "https://www.linkedin.com/jobs/view/999"}]
+        jobs = _parse_linkedin_rows(rows, "India")
+        self.assertEqual(jobs[0]["apply_url"], "https://www.linkedin.com/jobs/view/999")
 
     def test_date_posted_flag(self):
         self.assertEqual(_date_posted_flag(7), "week")

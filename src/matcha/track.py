@@ -10,8 +10,11 @@ jobs not already seen. Design:
 - URLs without a ``url`` key can't be tracked and are always treated as new
   (and never marked).
 
-Only ``watch`` consumes this table: interactive TUI runs don't pollute the
-newness signal.
+Consumed by ``watch`` (surfaces only new jobs) and, since Session 20, the
+interactive TUI: every TUI run marks the shown jobs as seen and hides
+already-seen rows by default (``h`` toggles), so re-runs surface new
+postings instead of replaying the same list. Saving a job also retires it
+from future lists.
 """
 
 import sqlite3

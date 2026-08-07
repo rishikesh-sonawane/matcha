@@ -38,6 +38,7 @@ from matcha.sources.backends.opencli import (
     linkedin_job_detail,
     opencli_status,
 )
+from matcha.sources.linkedin import stable_apply_url
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +155,10 @@ def _enrich_linkedin(
         for key in _LINKEDIN_MERGE_KEYS:
             if detail.get(key):
                 job[key] = detail[key]
+        # Session 20: job-detail can return an ephemeral job-apply link that
+        # 404s outside a live session — keep the stable jobs/view URL.
+        if job.get("apply_url"):
+            job["apply_url"] = stable_apply_url(str(job.get("url") or ""), str(job["apply_url"]))
         job["data_quality"] = "full"
         job["enrich_source"] = "opencli"
         return True

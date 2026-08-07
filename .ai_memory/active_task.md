@@ -352,7 +352,16 @@ Next: fresh spec or further polish — do NOT start a new phase without one.
 
 ## Immediate Next Steps
 
-1. **Session 19 landed (2026-08-07, user-driven)**: config-wipe root cause
+1. **Session 20 landed (2026-08-07, user-driven)**: live link audit proved the
+   "wrong links" complaint — LinkedIn `/job-apply/` apply links 404 while
+   stable `jobs/view` URLs work; `stable_apply_url()` now normalizes at both
+   ingest points (search parse + enrichment). "Same jobs every run" fixed:
+   HTTP cache TTL 5 min (`MATCHA_HTTP_CACHE_TTL`) + the TUI now marks shown
+   jobs seen and hides already-seen rows by default (`h` toggles, `[seen]`
+   marker, saving retires a job). Pre-existing bug fixed: provenance tags
+   (`[full]/[age?]`) were swallowed by rich markup — now visible. Uncommitted:
+   8 files ready to commit.
+2. **Session 19 landed (2026-08-07, user-driven)**: config-wipe root cause
    fixed (`save_config` merge semantics — the (AI) banner was showing while
    ZERO AI calls fired because `ai_provider` was wiped on every interactive
    run); Naukri aggregate listing pages gated out at discovery
@@ -360,8 +369,9 @@ Next: fresh spec or further polish — do NOT start a new phase without one.
    **fernet-only** (keyring removed per user preference — no macOS keychain
    prompts); machine restored (kilo + key, consents, SerpAPI) and
    live-verified: AI on, top 85.0%, 5 verdicts, Naukri junk 0.
-2. **Optional follow-ups the user may want**: `matcha doctor` should now show
-   **8/8 sources + AI ok**; uncommitted changes (13 files) ready to commit;
+3. **Optional follow-ups the user may want**: `matcha doctor` should now show
+   **8/8 sources + AI ok**; a devtools-MCP integration is NOT needed — the
+   OpenCLI browser bridge already is the Chrome access for LinkedIn/Indeed;
    consider `filters.remote: true` or `remote_preference` if the Hyderabad
    search's remote-exclusion note matters.
 3. **Do NOT start a new phase without a fresh spec.**

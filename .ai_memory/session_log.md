@@ -797,3 +797,45 @@ and Naukri top rows looked stale.
   errors)/bandit clean; coverage 81% (gate ≥80%).
 - **Docs:** README/QUICKSTART keyring→fernet wording; memory bank synced.
 - **Next:** fresh spec or polish — do NOT start a new phase without one.
+
+---
+
+### 2026-08-07 — Session 20: working links + no repeat results (user-driven)
+
+**Goal:** user: "links are either wrong or the jobs are expired… can you open
+links and confirm… why do I get the same jobs every run… if I apply to a job
+why would I see it again tomorrow."
+
+- **Links verified live (9 top rows from a real run):** 3/3 LinkedIn "native
+  apply" links (`/job-apply/<id>`) returned **HTTP 404** — they are ephemeral
+  apply-session URLs — while the same rows' stable `jobs/view/<id>` URLs all
+  returned 200 with correct titles; one Oracle ATS row redirected to a
+  generic careers home. Root cause: Matcha was opening/offering the wrong
+  (ephemeral) link.
+- **Fix — `stable_apply_url()` (linkedin.py):** `/job-apply/<id>` is rewritten
+  to the canonical `jobs/view/<id>` (or rebuilt from the id) at BOTH ingest
+  points — OpenCLI search-row parse and enrichment job-detail merge
+  (enrichment.py). Non-LinkedIn ATS apply links pass through untouched.
+  Live-verified: re-run has **0** `/job-apply/` links; LinkedIn rows apply via
+  stable jobs/view URLs; external ATS links (LPL/Infor) kept.
+- **Fix — "same jobs every run":** (1) HTTP cache TTL 1800→300s
+  (`MATCHA_HTTP_CACHE_TTL` env, default 5 min) so same-day re-runs fetch
+  fresh pages (also fixed the missing `import os` that edit had introduced);
+  (2) the **interactive TUI now joins `seen_urls` tracking**: every run marks
+  the jobs it showed, hides already-seen rows by default (clear note + `h`
+  toggle + `[seen]` marker), and saving a job (`s`) retires it from future
+  lists — applied jobs never resurface. All-seen fallback shows everything
+  (no blank screen; `h` no-ops there). `watch` behavior unchanged.
+- **Bonus fix — provenance tags were invisible:** `[full]/[partial]/[snippet]/`
+  `[age?]/[salary?]` were swallowed by rich markup (unescaped `[full]` parsed
+  as a style → rendered as empty) — now escaped (`\[`) and the Match column
+  widened so tags actually display in the TUI and human summary.
+- **Chrome/devtools-MCP question:** OpenCLI browser bridge is already the
+  Chrome access (LinkedIn/Indeed via logged-in Chrome, consents restored in
+  Session 19); devtools-mcp would duplicate it — not added.
+- **Validation:** 675/675 tests (+9: 4 LinkedIn apply-url + 5 main-surface
+  seen/provenance incl. all-seen fallback); ruff/format/mypy clean; coverage
+  81% (gate ≥80%); live search: AI on, 15 enriched, 0 ephemeral apply links.
+- **Docs:** README interactive-features note (seen-hiding + `h`), track.py
+  docstring (TUI now consumes seen_urls).
+- **Next:** fresh spec or polish — do NOT start a new phase without one.

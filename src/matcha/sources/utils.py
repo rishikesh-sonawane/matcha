@@ -1,4 +1,5 @@
 import logging
+import os
 import random
 import time
 from collections import defaultdict
@@ -18,10 +19,15 @@ RETRYABLE_STATUSES: set[int] = {429, 502, 503, 504}
 CACHE_DIR: Path = Path.home() / ".matcha"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
+#: HTTP cache TTL in seconds — default 300 (5 min) so same-day re-runs see
+#: fresh postings instead of re-playing an identical 30-min-old snapshot.
+#: Override via MATCHA_HTTP_CACHE_TTL (0 = fully disable the cache).
+_HTTP_CACHE_TTL = int(os.environ.get("MATCHA_HTTP_CACHE_TTL", "300"))
+
 _session: requests_cache.CachedSession = requests_cache.CachedSession(
     cache_name=str(CACHE_DIR / "http_cache"),
     backend="sqlite",
-    expire_after=1800,
+    expire_after=_HTTP_CACHE_TTL,
     allowable_codes=(200,),
 )
 
