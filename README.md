@@ -8,6 +8,9 @@
 [![Rich TUI](https://img.shields.io/badge/built%20with-Rich-ffd700)]()
 [![AI Matching](https://img.shields.io/badge/feature-AI%20Scoring-8a2be2)]()
 
+> **New here?** Start with the [**5-Command Quickstart**](QUICKSTART.md) —
+> install, run, AI, doctor, and headless search in under two minutes.
+
 ---
 
 ## Why This Exists
@@ -119,6 +122,22 @@ venv/bin/matcha
 
 > **Note:** A virtual environment is required — it avoids urllib3 v2 + macOS LibreSSL segfaults on Homebrew Python, and ensures dependencies install into the correct location. If you see `Defaulting to user installation because normal site-packages is not writeable`, the venv is not activated or the symlinks are broken — recreate it with `rm -rf venv && python3 -m venv venv`.
 
+> **Tip:** `make venv` bootstraps the venv, dependencies, and dev tooling
+> (ruff, bandit, pre-commit) in one step; `make run` then starts Matcha.
+
+### Docker (optional)
+
+A container image is provided — note it runs the interactive TUI, so use `-it`:
+
+```bash
+docker build -t matcha:latest .
+docker run -it --rm -v "$HOME/.matcha:/home/app/.matcha" matcha:latest
+```
+
+The image runs as a non-root `app` user and keeps all state in
+`/home/app/.matcha` — mount that volume to persist your profile/config across
+runs.
+
 ### Dependencies
 
 | Package | Purpose |
@@ -134,12 +153,172 @@ venv/bin/matcha
 | `rapidfuzz` | Fuzzy string matching for deduplication |
 | `pydantic` | Data models for profile, jobs, and settings |
 | `pyyaml` | YAML config file support |
-| `python-dotenv` | Environment variable management |
+| `python-dotenv` | Installed but not loaded — export env vars in your shell |
 | `urllib3<2` | Pinned to v1 to prevent LibreSSL segfault on macOS |
 
 ---
 
+## Before You Run — Exact Setup Steps
+
+**No environment variables are required** — every source works out of the box
+and AI is an optional enhancement (zero config = heuristic-only ranking). Do
+these once, in order:
+
+1. **Install** (Python 3.10+, venv required on macOS):
+   ```bash
+   python3 -m venv venv
+   venv/bin/pip install -r requirements.txt
+   venv/bin/pip install -e .
+   ```
+2. **Create your profile** — the first `matcha` run asks how (PDF resume,
+   LinkedIn URL, or manual entry). Your profile is saved to
+   `~/.matcha/profile.json` and reused on later runs:
+   ```bash
+   venv/bin/matcha
+   ```
+3. **Enable AI matching (recommended)** — set the key directly (fastest):
+   ```bash
+   export MINIMAX="your-api-key"
+   venv/bin/matcha        # AI is on — the results banner shows "(AI)"
+   ```
+   …or run the interactive wizard, which stores the key in your OS keyring
+   (never plaintext) and walks through provider selection plus optional
+   SerpAPI / OpenCLI setup:
+   ```bash
+   venv/bin/matcha --configure
+   ```
+   The wizard auto-skips any step already configured (e.g. if `MINIMAX` is
+   exported). With no key/provider the tool still works — it just runs
+   heuristic-only. See [Environment Variables](#environment-variables) for
+   every knob (`AI_PROVIDER`, `AI_API_URL`, `AI_MODEL`, `AI_MODEL_FAST`).
+4. **(Optional) Google Jobs** — add a SerpAPI key via `matcha --configure`
+   (free tier: 100 searches/month).
+5. **(Optional) Richer LinkedIn/Indeed** — connect OpenCLI so searches run
+   through your logged-in Chrome and return real descriptions, salaries and
+   posting dates:
+   ```bash
+   npm install -g @jackwener/opencli
+   # enable the OpenCLI Chrome extension, then:
+   venv/bin/matcha --configure    # answer yes to the OpenCLI consent prompts
+   ```
+6. **(Optional) GitHub skill suggestions** — `matcha github enrich` (needs
+   `gh` installed + authenticated, or `GH_TOKEN`).
+7. **Verify everything is healthy:**
+   ```bash
+   venv/bin/matcha doctor         # per-source health + active backends
+   venv/bin/matcha doctor --json  # machine-readable report
+   ```
+   A healthy report shows `ok` for the zero-config sources (RemoteOK, Naukri,
+   Web Search, …) **and** an **AI matching** line: `ok` when the provider,
+   models, and key are all wired — `off` when untouched (heuristic-only),
+   `warn` when partially configured (e.g. a key with no provider). The line
+   shows provider, best/fast models, and whether a key is set — never the
+   key itself. In `doctor --json` this is the `ai` entry (`provider`,
+   `provider_label`, `key_set`, `model_best`, `model_fast`, `available`,
+   scrubbed `url`).
+8. **Run:**
+   ```bash
+   venv/bin/matcha
+   ```
+
+### Where Matcha keeps its files
+
+All state lives under `~/.matcha/` (plus an optional `matcha.yaml` in the
+directory you run from):
+
+| Path | Purpose |
+|---|---|
+| `~/.matcha/profile.json` | Your profile (skills, title, experience, `must_have_skills`, …) |
+| `~/.matcha/config.json` | Non-secret config + `last_query` / `last_location` / `last_days` |
+| `~/.matcha/settings.yaml` | Optional YAML overrides (see the Config File section) |
+| `~/.matcha/fernet.key` + `.ai_key.enc` / `.serpapi_key.enc` | Secrets encrypted at rest — used only when no OS keyring is available |
+| `~/.matcha/source_state.json` | Per-source circuit-breaker state |
+| `~/.matcha/jobs.db` | Saved jobs + `seen_urls` (the new-vs-seen store for `matcha watch`) |
+| `~/.matcha/ai_cache.sqlite` | Opt-in AI disk cache |
+| `~/.matcha/logs/matcha.log` | Rotating debug log (5 MB × 3) |
+
+## Environment Variables
+
+**None are required** — the tool is fully usable with zero env vars. Set
+these only to enable the optional AI / GitHub features or force a source
+backend.
+
+### AI — the only ones you usually need
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `MINIMAX` | **AI API key** — the single switch that turns AI on (legacy name kept; the key sent to the provider) | unset → heuristic-only mode |
+| `AI_PROVIDER` | Provider preset: `groq` \| `kilo` \| `openrouter` \| `openai` \| `local` | `kilo` (wizard default) |
+| `AI_API_URL` | OpenAI-compatible base URL override (wins over the preset) | provider preset |
+| `AI_MODEL` | Best-tier model (AI scoring, verdicts, profile extraction) | provider preset |
+| `AI_MODEL_FAST` | Fast-tier model (query expansion, title suggestion) | provider preset |
+
+Every slot resolves in the same order: **env var → `~/.matcha/config.json`
+→ `~/.matcha/settings.yaml` → provider preset default** — so env vars
+override the wizard, which overrides YAML, which overrides the default.
+
+### GitHub enrichment
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `GH_TOKEN` / `GITHUB_TOKEN` | Read-only auth for `matcha github enrich` (else uses `gh` hosts.yml) | — |
+| `GH_CONFIG_DIR` | `gh` config directory override | `~/.config/gh` |
+| `XDG_CONFIG_HOME` | Also honored when locating `gh`'s `hosts.yml` | OS default |
+
+### Advanced / power-user
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `<SOURCE>_BACKEND` | Force a backend for one source — e.g. `LINKEDIN_BACKEND=guest`, `INDEED_BACKEND=ddgs`, `NAUKRI_BACKEND=job-page`. Valid values are that source's backend names (see `matcha doctor`); unknown values are ignored so a stale override can never hide working backends. Equivalent YAML: `scrapers.<source>_backend` | ordered fallback list |
+| `MCPORTER_CONFIG` | mcporter config path for the Exa web-search backend | auto-discovered |
+| `MATCHA_AI_CACHE` | Path for the AI disk-cache SQLite file | `~/.matcha/ai_cache.sqlite` |
+
+Example (any shell):
+
+```bash
+export MINIMAX="your-key-here"   # the one switch that enables AI
+export AI_PROVIDER=kilo          # optional — kilo is already the default
+venv/bin/matcha
+```
+
+Notes:
+
+- `MINIMAX` is read **in addition to** a key stored via `matcha --configure`
+  (keyring/fernet) — the env var wins when both exist.
+- **SerpAPI** and **OpenCLI** have **no env vars** — both are configured
+  interactively via `matcha --configure` (the SerpAPI key is stored as a
+  secret in config.json via keyring/fernet, never in YAML).
+- `AI_PROVIDER=local` (Ollama / LM Studio) needs **no API key** — just set
+  `AI_PROVIDER=local` and optionally `AI_API_URL` / `AI_MODEL`.
+- There is **no `.env` file support** — `python-dotenv` is a dependency but
+  is never loaded. Export variables in your shell, or put non-secret
+  settings in `~/.matcha/settings.yaml`.
+
+---
+
 ## Usage
+
+### Command Reference
+
+```
+matcha                                    # interactive TUI (profile → search → browse)
+matcha --configure                        # setup wizard: SerpAPI key, AI provider+key, OpenCLI consent
+matcha --new-profile                      # re-enter your profile from scratch (-n)
+matcha --non-interactive                  # skip all prompts (-b) — needs a saved profile / YAML config
+matcha --days N                           # age-window override for one run (also: filters.days)
+matcha --config PATH                      # load a specific YAML settings file
+
+matcha doctor [--json]                    # per-source health + AI availability + backends + circuits
+matcha search -q "Platform Engineer" -l Pune -d 7 [--json] [--output FILE] [--top N] [--no-ai-queries] [--no-enrich]
+matcha watch -q "Platform Engineer" -l Pune -d 7 [--json] [--output FILE] [--top N] [--no-ai-queries] [--no-enrich] [--no-mark-seen]
+matcha skill --install [--dest PATH]      # install the agent skill (also: --uninstall)
+matcha mcp                                # optional MCP server (pip install -e '.[agent]')
+matcha github enrich                      # merge GitHub signals into profile.json (needs gh)
+```
+
+`search`/`watch` need a saved profile — create one with a first interactive
+`matcha` run (or `matcha --new-profile`). `doctor`, `skill`, `mcp`, and
+`github` work without one.
 
 ### 1. Complete Flow
 
@@ -225,44 +404,57 @@ Jobs are searched across all configured sources in parallel using the base query
 Interactive features:
 - **Paginated browsing** — `↑↓` navigate, `n/p` page, `Enter` for details
 - **Job details** — Full URL, match reasons, and description
-- **Save jobs** — Press `s` to save/unsave; `l` to view saved
+- **Save jobs** — Press `s` to save/unsave; `l` to view saved. Saved rows persist the enriched/normalized fields (salary, apply_url, workplace, company_url, posted date) via an idempotent SQLite migration, and the Saved screen shows Salary + Posted columns
 - **Open in browser** — Press `o` to open job URL
 - **Re-run** — Press `r` to search again with different terms
 - **Non-interactive mode** — Use `-b` or `--non-interactive` flag to skip all prompts and auto-search
 
 ### 4. Config File (Optional)
 
-Create `matcha.yaml` in the project directory or `~/.matcha/settings.yaml`:
+Create `matcha.yaml` in the project directory and/or `~/.matcha/settings.yaml`
+(and optionally pass `--config PATH` for one specific file). Files are
+deep-merged in order of precedence — **`~/.matcha/settings.yaml` >
+`./matcha.yaml` > `--config PATH`** — so the user-level file always wins and
+you only need to write the keys you want to override:
 
 ```yaml
 search:
   query: Platform Engineer
   location: Pune
   days: 7
+  max_pages: 2            # search-result pages per query (default 2)
 ai:
   enabled: true
+  top_n: 30               # jobs considered for the AI re-scoring pass
+  timeout: 60             # seconds per AI call
   model_best: ""          # scoring / profile extraction (default per provider)
   model_fast: ""          # query gen / title suggestion (default per provider)
   max_calls: 60           # AI budget guard per run
   cache_ttl: 0            # AI disk cache TTL in seconds (0 = off; 86400 = 24h)
+  verdict_k: 5            # top-K AI go/no-go verdicts (0 = off)
 scrapers:
-  serpapi:
-    key: your_serpapi_key
+  serpapi: false          # Google Jobs — the key itself is set via `matcha --configure`
+  indeed_domain: in.indeed.com
+  linkedin_backend: guest # optional: force a source backend (see env vars)
 enrichment:
-  enabled: true      # top-N detail enrichment after ranking
-  top_n: 30          # how many ranked jobs to enrich
-  timeout: 30        # seconds per job-detail call
-  max_workers: 5     # parallel detail fetches (capped at 5)
+  enabled: true           # top-N detail enrichment after ranking
+  top_n: 30               # how many ranked jobs to enrich
+  timeout: 30             # seconds per job-detail call
+  max_workers: 5          # parallel detail fetches (capped at 5)
 filters:
-  days: 7            # job-age window — the central filter is the FINAL authority
-  strict_age: false  # drop unknown-age jobs instead of tagging [age?]
-  min_must_matches: 1  # must-have skills required in title+description
-  soft_must_skills: false  # keep below-threshold jobs, flagged for a rank cap
-  remote: false      # remote-only mode
-  min_salary: 0      # LPA floor (0 = off)
+  days: 7                 # job-age window — the central filter is the FINAL authority
+  strict_age: false       # drop unknown-age jobs instead of tagging [age?]
+  min_must_matches: 1     # must-have skills required in title+description
+  soft_must_skills: false # keep below-threshold jobs, flagged for a rank cap
+  remote: false           # remote-only mode
+  min_salary: 0           # LPA floor (0 = off)
   drop_unknown_salary: false  # drop jobs without a parseable salary
 ranking:
-  normalize_scores: false  # stretch a flat score distribution onto [5, 100]
+  normalize_scores: false # stretch a flat score distribution onto [5, 100]
+sources:
+  rss:
+    feeds:                # optional RSS feeds as an extra source
+      - https://remoteok.com/remote-jobs.rss
 ```
 
 **Filters** (Phase 2): after dedup, every job is normalized (`listed_epoch`,
@@ -271,10 +463,15 @@ run through a **central filter pipeline** in a fixed order — quality → age �
 must-skills → location → salary — each reporting exactly how many jobs it
 cut. The TUI shows the filter summary before results
 (`Filtered: 96 kept (age −142 · must −21 · loc −33 …)`) and tags uncertain
-provenance (`[age?]` / `[salary?]`). Must-have skills, a salary floor, and a
-remote preference can be set in `~/.matcha/profile.json`
-(`must_have_skills`, `min_salary`, `remote_preference`) or via `filters:`
-above; `matcha --days N` overrides the age window for one run.
+provenance (`[age?]` / `[salary?]`). The quality gate also drops
+listing-page/nav noise leaked by snippet fallbacks ("Link to naukri.com",
+"It Jobs", "Developer Tcs Jobs" — titles ending in "Jobs" or matching
+boilerplate), and when the location stage excludes remote jobs it prints an
+actionable hint (`set filters.remote: true or remote_preference: remote`).
+Must-have skills, a salary floor, and a remote preference can be set in
+`~/.matcha/profile.json` (`must_have_skills`, `min_salary`,
+`remote_preference`) or via `filters:` above; `matcha --days N` overrides
+the age window for one run.
 
 **Ranking** (Phase 4): the heuristic scorer is now **confidence-weighted** —
 the skills/keyword dimensions scale by data richness (`data_quality`:
@@ -288,7 +485,13 @@ only on enriched candidates** (`data_quality` full/partial or a substantial
 description), and a flatline guard warns when the top-decile score spread is
 near zero (`ranking.normalize_scores: true` stretches it onto [5, 100]). The
 results table shows provenance tags next to each score: `[full]` / `[partial]`
-/ `[snippet]` plus `[age?]` / `[salary?]`.
+/ `[snippet]` plus `[age?]` / `[salary?]`. **Calibration:** the skill ratio
+saturates (a job covering ~10 distinct skills earns full marks even with a
+50+ skill profile) and the title dimension scores how much of the *job
+title* the profile covers — so a strong title match is never diluted by a
+long headline. With AI on, the top `verdict_k` (default 5) enriched jobs
+also get a go/no-go verdict ("would you actually apply?") rendered in the
+detail panel and surfaced in `search --json` as a per-job `verdict` object.
 
 **Enrichment** (Phase 1): after ranking, the top `top_n` jobs get full
 descriptions + apply URLs via OpenCLI job-detail (`opencli linkedin
@@ -304,7 +507,9 @@ LinkedIn postings fall back to the zero-config Jina Reader
 (`ok_streak` / `fail_streak` / `last_ok` / `cooldown_until`). Three
 consecutive search failures open a **30-minute cooldown**: the source is
 skipped with a visible note instead of retried every run; any success resets
-it. `matcha doctor --json` reports a `circuit` key per source.
+it. `matcha doctor --json` reports a `circuit` key per source plus an `ai`
+entry (`provider`, `key_set`, `model_best`, `model_fast`, `available`) so
+AI setup is verifiable in the same report.
 
 **GitHub profile enrichment** — `matcha github enrich` reads `gh api user` +
 `user/repos` (read-only; never `gh auth status`) and appends language- and
@@ -352,8 +557,9 @@ matcha mcp
 
 Each JSON document carries `{command, generated_at, query, location, days,
 ai_used, ai_budget_used, source_counts, source_errors, filter_summary,
-found_count, enriched_count, jobs[]}` — every job is its full search row plus
-`match_score` and `reasons`. `watch` adds `new_count`, `seen_count`,
+filter_notes, found_count, enriched_count, verdict_count, jobs[]}` — every
+job is its full search row plus `match_score` and `reasons` (and a `verdict`
+`{recommend, line}` object for verdict-scored jobs). `watch` adds `new_count`, `seen_count`,
 `new_jobs`, and `seen_urls_total` (new-vs-seen tracked in
 `~/.matcha/jobs.db` → `seen_urls`; only `watch` consumes it, so interactive
 runs never pollute the newness signal). `search`/`watch` need a saved profile
@@ -374,6 +580,7 @@ trim the pipeline for fast scripted runs.
 │ Source: Indeed                                                    │
 │ Apply URL: https://in.indeed.com/viewjob?jk=b52083124e35dc8d      │
 │ Match Score: 82%                                                  │
+│ Verdict: ✓ Recommend — strong skills overlap, right seniority     │
 │                                                                   │
 │ Why this matches:                                                 │
 │   • Job title matches profile: platform, engineer                 │
@@ -436,17 +643,22 @@ The prompt is tuned to be **critical** — scores of 80+ are reserved for strong
 
 Matcha's AI brain is a **provider-agnostic OpenAI-compatible REST client**
 (`POST {base_url}/chat/completions`) — run `matcha --configure` to pick a
-provider preset, or set env vars directly (`MINIMAX` key · `AI_API_URL` ·
+provider preset, or set env vars directly (see the [Environment
+Variables](#environment-variables) table: `MINIMAX` key · `AI_API_URL` ·
 `AI_MODEL` best-tier · `AI_MODEL_FAST` fast-tier · `AI_PROVIDER`). Keys are
 stored via keyring/fernet, never plaintext.
 
-| Preset | Default base URL | Default model |
+| Preset | Default base URL | Default best / fast model |
 |---|---|---|
-| **Groq** (free tier) | `https://api.groq.com/openai/v1` | `gpt-oss-120b` best / `gpt-oss-20b` fast |
-| **Kilo Gateway** (default) | `https://api.kilo.ai/api/gateway` | `kilo-auto/small` |
-| **OpenRouter** | `https://openrouter.ai/api/v1` | `…:free` models |
-| **OpenAI / compatible** | `https://api.openai.com/v1` | `gpt-4o-mini` |
+| **Groq** (free tier) | `https://api.groq.com/openai/v1` | `openai/gpt-oss-120b` / `openai/gpt-oss-20b` |
+| **Kilo Gateway** (default) | `https://api.kilo.ai/api/gateway` | `kilo-auto/small` (both tiers) |
+| **OpenRouter** | `https://openrouter.ai/api/v1` | `meta-llama/llama-3.3-70b-instruct:free` / `meta-llama/llama-3.1-8b-instruct:free` |
+| **OpenAI / compatible** | `https://api.openai.com/v1` | `gpt-4o-mini` (both tiers) |
 | **Local** (Ollama / LM Studio) | `http://localhost:11434/v1` | **no API key needed** |
+
+Every slot resolves **env var → config.json → settings.yaml → preset
+default** (the wizard writes config.json; the `MINIMAX` env var wins over
+everything else).
 
 **Model tiers** — `model_fast` runs cheap high-volume tasks (query expansion,
 title suggestion); `model_best` runs scoring and resume extraction. **Budget

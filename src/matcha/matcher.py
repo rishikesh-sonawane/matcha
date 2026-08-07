@@ -43,6 +43,46 @@ _FULL_DESC = 30
 _PARTIAL_DESC = 8
 #: AI re-scoring (§9.3) needs a substantial description when provenance is absent.
 _AI_MIN_DESC = 60
+#: §9.1 skill-ratio saturation. ``ratio = matches / len(skills)`` with a 50+
+#: skill list crushes real matches (6 of 53 ≈ 0.11 → ~4 pts of 35). Capping
+#: the denominator means a job covering ~10 distinct skills earns full marks;
+#: profiles with ≤ this many skills are unaffected (denominator = len).
+_SKILL_RATIO_CAP = 10
+#: Tokens that carry no role signal for the title-overlap dimension (job titles
+#: rarely contain them; a long headline must not inflate coverage through them).
+_TITLE_STOPWORDS = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "and",
+        "or",
+        "of",
+        "for",
+        "to",
+        "with",
+        "in",
+        "at",
+        "on",
+        "by",
+        "as",
+        "is",
+        "are",
+        "be",
+        "it",
+        "its",
+        "our",
+        "your",
+        "you",
+        "we",
+        "us",
+        "&",
+        "+",
+        "ii",
+        "iii",
+        "iv",
+    }
+)
 
 
 def compute_relevance_ai(
@@ -284,8 +324,11 @@ def compute_relevance(job: dict[str, Any], profile: dict[str, Any]) -> dict[str,
 
     skill_matches = [s for s in profile_skills if _word_boundary_match(job_text, s)]
     if profile_skills:
-        skill_ratio = len(skill_matches) / len(profile_skills)
-        # §9.1: text-derived dimensions are confidence-scaled.
+        # §9.1: text-derived dimensions are confidence-scaled. The denominator
+        # is capped (see _SKILL_RATIO_CAP) so long skill lists can't dilute
+        # genuine matches down to noise.
+        skill_denom = max(1, min(len(profile_skills), _SKILL_RATIO_CAP))
+        skill_ratio = min(1.0, len(skill_matches) / skill_denom)
         score += skill_ratio * 35.0 * confidence
         if skill_matches:
             msg = f"Skills: {', '.join(skill_matches[:5])}"
@@ -295,10 +338,13 @@ def compute_relevance(job: dict[str, Any], profile: dict[str, Any]) -> dict[str,
 
     profile_title_text = f"{profile.get('title', '')} {profile.get('headline', '')}"
     profile_title_tokens = tokenize(profile_title_text)
-    job_title_tokens = tokenize(job_title)
+    job_title_tokens = {t for t in tokenize(job_title) if t not in _TITLE_STOPWORDS}
     if profile_title_tokens and job_title_tokens:
         overlap = profile_title_tokens & job_title_tokens
-        title_ratio = len(overlap) / max(len(profile_title_tokens), len(job_title_tokens))
+        # §9.1: score how much of the JOB TITLE the profile covers. The old
+        # denominator (every profile token) let a long headline dilute a strong
+        # title match — "AWS DevOps Engineer" vs a 30-token headline scored ~0.
+        title_ratio = min(1.0, len(overlap) / len(job_title_tokens))
         title_points = title_ratio * 25.0
         score += title_points
         if overlap:

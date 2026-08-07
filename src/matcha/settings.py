@@ -29,6 +29,8 @@ _DEFAULTS: dict[str, Any] = {
         # Disk cache TTL (seconds); 0 = disabled. Opt-in so the tool never
         # serves stale AI output by default (strategy §10.2).
         "cache_ttl": 0,
+        # §9.5 optional top-K "would you apply?" verdicts; 0 = disabled.
+        "verdict_k": 5,
     },
     "scrapers": {
         "serpapi": False,

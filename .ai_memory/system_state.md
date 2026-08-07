@@ -1,6 +1,6 @@
 # Current System State — Matcha
 
-> Last verified: 2026-08-06 (Phase 7 — hardening — done).
+> Last verified: 2026-08-07 (Session 18 — docs overhaul + doctor AI status + MCP AI surface).
 > If any checkbox below conflicts with the actual code, **the code wins** —
 > update this file.
 
@@ -11,9 +11,21 @@ layout as an installed package.** **Phase 0 + Phase 1 (entry-point migration,
 OpenCLI backends, top-N enrichment, Exa Web Search, `agent_reach_io`, Naukrijob-page
 extraction) + Phase 2 (normalize + central filters) + Phase 4 (ranking
 recalibration) + Phase 5 (provider-agnostic AI client) + Phase 6 (agent +
-automation) + Phase 7 (hardening) are DONE.** All 623 tests pass;
-mypy clean; coverage gate ≥80% (81%+). Next: Phase 3-adjacent polish
-(saved-jobs enriched columns) or a fresh spec — do NOT start beyond that.
+automation) + Phase 7 (hardening) + Phase 3-adjacent polish (saved-jobs
+enriched columns, §9.5 AI verdict pass) + results-quality fixes (junk-title
+gate, matcher dilution calibration, remote hint) + Session 17 (AI enabled on
+this machine, AI re-scoring moved post-enrichment, Naukri dead listings
+dropped, junk-title gate extended) + Session 18 (docs overhaul + doctor AI
+status + MCP AI surface) are DONE.** All 659 tests pass; mypy clean;
+coverage gate ≥80% (81%+). **AI is LIVE on this machine**
+(`ai_provider=kilo`; `check_ai_available()=True`; live-verified: query
+expansion → 4 variants, AI re-scoring → top jobs 85, 5 verdicts, 36 AI
+calls/run within the 60-call budget). **`matcha doctor` now verifies AI
+setup in one place** — an `ai` report entry (provider, best/fast models,
+`key_set`, `available`; never the key) rendered as an "AI matching" line,
+surfaced identically through `matcha doctor --json` and the MCP
+`matcha_status` tool. Next: fresh spec — do NOT start a new phase without
+one.
 
 ## Layout
 
@@ -68,7 +80,8 @@ mypy clean; coverage gate ≥80% (81%+). Next: Phase 3-adjacent polish
   only by `watch`
 - `src/matcha/mcp_server.py` — **optional MCP server** (Phase 6): guarded
   `mcp>=1.0` extra; FastMCP `matcha_status` + `matcha_search` tools,
-  credential-scrubbed errors
+  credential-scrubbed errors; `matcha_status` now includes the doctor `ai`
+  entry (provider/models/key_set/available)
 - `src/matcha/skill/` — **bundled agent SKILL.md** (Phase 6): bilingual
   zh+en, YAML frontmatter, package-data shipped; `matcha.skill` package also
   hosts `install_skill`/`uninstall_skill`/`default_destinations`
@@ -108,9 +121,11 @@ mypy clean; coverage gate ≥80% (81%+). Next: Phase 3-adjacent polish
       else Jina Reader render (zero-config, no consent — Naukri is a
       client-rendered Next.js shell, verified live); real description /
       salary (`₹a-b LPA`) / experience / key skills / apply URL merged;
-      expired postings (search-page redirect) detected + kept as snippets;
-      per-job isolation (`enrich_error`), provenance `data_quality`
-      full/partial + `enrich_source="job-page"`; `check()` hermetic
+      expired postings (search-page redirect) detected and **DROPPED**
+      (Rev 16: `_EXPIRED` sentinel → removed from the batch, URLs logged;
+      fetch/parse failures still keep the snippet row with `enrich_error`);
+      per-job isolation, provenance `data_quality` full/partial +
+      `enrich_source="job-page"`; `check()` hermetic
 - [x] **Normalize + central filters (Phase 2, strategy §7)** — after dedup,
       `normalize_jobs` (listed_epoch, salary_int LPA, city/region, remote_ok)
       then `apply_filters` in fixed order quality → age → must-skills →
@@ -126,9 +141,11 @@ mypy clean; coverage gate ≥80% (81%+). Next: Phase 3-adjacent polish
       cap +6) bonuses; `must_skills_soft` rank cap ≤45; every row stamped
       with result-level `data_quality`/`backend` at ingest
 - [x] **AI re-scoring** — top N (default 30) via `ai_score_job`, parallel ≤8,
-      60s timeout; **Phase 4: gated to enriched candidates** (`ai_eligible`);
-      flatline guard on final scores (warning + optional
-      `ranking.normalize_scores` stretch)
+      60s timeout; **gated to enriched candidates** (`ai_eligible`); **Rev 16
+      ordering fix:** `run_search` now heuristically ranks → enriches →
+      `_ai_rescore` (post-enrichment) → re-ranks → `_apply_flatline_guard`
+      (shared helper) → verdicts, so the AI judge scores real descriptions;
+      `rank_jobs(use_ai=True)` keeps the pass for direct callers
 - [x] **Provider-agnostic AI client (Phase 5, §10.2)** — OpenAI-compatible
       REST to `{base_url}/chat/completions`; presets Groq/Kilo/OpenRouter/
       OpenAI/local (local needs no key); model tiers best (scoring/profile) /
@@ -168,16 +185,34 @@ mypy clean; coverage gate ≥80% (81%+). Next: Phase 3-adjacent polish
 
 ## NEW — Doctor (`venv/bin/python main.py doctor`)
 
-- `check_all(config)` → `{name: {status, name, message, tier, backends, active_backend}}`
-  with per-source exception isolation (status="error") and credential scrubbing.
-- Live sample (2026-08-06): LinkedIn `ok` (guest-api active) · Indeed `warn`
+- `check_all(config)` → per-source entries
+  `{name: {status, name, message, tier, backends, active_backend}}` **plus an
+  `ai` entry** `{status, name, message, provider, provider_label,
+  known_provider, requires_key, key_set, url, model_best, model_fast,
+  available}` (Session 18) — with per-source + AI exception isolation
+  (status="error") and credential scrubbing (URL included). AI status:
+  `ok`=wired / `off`=heuristic-only / `warn`=partial (key-without-provider,
+  unknown provider, missing pieces).
+- Live sample (2026-08-07): LinkedIn `ok` (guest-api active) · Indeed `warn`
   (anti-bot gated — the known py3.14/cloudscraper issue) · Naukri `ok` · RemoteOK `ok`
-  (HTTP 200) · Web Search `ok` · SerpAPI `off` (no key) · Career Sites `off` (default).
-  Status: 4/7 ready.
+  (HTTP 200) · Web Search `ok` · SerpAPI `off` (no key) · Career Sites `off` (default);
+  **AI `ok` — Kilo Gateway (default) · best/fast kilo-auto/small · key set**.
+  Status: 4/7 sources ready + AI ready.
 
 ## Test Baseline (2026-08-06)
 
-- **623/623 tests pass** (`unittest discover tests` AND `pytest tests/`).
+- **659/659 tests pass** (`unittest discover tests` AND `pytest tests/`).
+  650 at end of Session 17; +8 doctor AI tests from Session 18 (ai_status
+  snapshot resolution, ok/off/warn/unknown-provider/error status mapping,
+  URL credential scrub, key-leak guard, format + JSON `ai` entry) +1 MCP
+  `matcha_status` AI-entry test.
+  646 at end of Session 16; +3 new from Session 17 (Naukri expired-drop ×2,
+  run_search AI-rescore-after-enrichment) + case additions (junk-title
+  listing pages, live-page-not-misdetected).
+  623 at end of Phase 7; +23 from Session 16 (actions enriched-columns/
+  migration/UPSERT tests, ai verdict parse/gate/budget/cache, run_search
+  verdict wiring + payload, junk-title + remote-hint filter tests, matcher
+  dilution regressions).
   455 at end of Phase 6; +168 from Phase 7 suites: `test_breaker.py` (9),
   `test_config_hardening.py` (27), `test_rss.py`, `test_github_enrich.py`,
   `test_main_surface.py` (31), `test_profile_extra.py`, `test_actions.py`,
@@ -220,6 +255,9 @@ mypy clean; coverage gate ≥80% (81%+). Next: Phase 3-adjacent polish
 - [x] **Phase 5 — AI provider-agnostic (DONE 2026-08-06):** `ai.py` + `ai_cache.py` (OpenAI-compatible REST), presets (Groq/Kilo/OpenRouter/OpenAI/local-no-key), model tiers best/fast, opt-in disk cache, per-run budget guard, `matcha --configure` provider wizard. *Accept met: works with Groq free tier and zero config (heuristic-only); no key leak; cache hits on re-run.*
 - [x] **Phase 6 — Agent + automation (DONE 2026-08-06):** `run_search` shared pipeline; `search --json` document; `track.py` seen_urls + `matcha watch` new-vs-seen (writes latest.json); SKILL.md + installer (`matcha skill --install/--uninstall`); optional guarded MCP server (`matcha mcp`, `agent` extra). *Accept met: agent drives a full search via the skill; watch surfaces only new jobs.*
 - [x] **Phase 7 — Hardening (DONE 2026-08-06):** circuit breakers (persisted `source_state.json`, thread-safe); config hardening (atomic 0600/0700, symlink rejection, reads-never-create, size caps); GitHub profile enrichment (`matcha github enrich`); RSS source (feedparser); coverage ≥80% gate (81%+, CI + Makefile); **mypy debt cleanup (36 → 0 errors)**. Plus real-bug fixes surfaced by the new suites (actions commit, settings deepcopy, extract_experience case). *Accept met: doctor shows circuit state; config writes atomic + symlink-rejected; mypy clean; coverage gate green.*
+- [x] **Phase 3-adjacent polish + results quality (DONE 2026-08-06):** saved-jobs persist enriched/normalized fields (`actions.py` `ENRICHED_COLUMNS` + idempotent `_migrate` + UPSERT `save_job` + `job_entry`; Saved view Salary/Posted); §9.5 AI verdict pass (`ai.py` `ai_verdict`, `settings.ai.verdict_k` default 5, detail-panel + JSON `verdict`); junk listing-page titles dropped by the quality gate (`_is_junk_title`); matcher calibration (skill-ratio saturation `_SKILL_RATIO_CAP=10` + job-title-coverage title dimension) — live-verified 24.7→67 for an enriched DevOps Engineer; `filter_notes` remote-exclusion hint; track/actions sqlite ResourceWarnings fixed (py3.14 context managers never close); comprehensive test hermeticity vs live breaker state. 646/646 tests; ruff/format/mypy/bandit clean; coverage 81%.
+- [x] **Session 17 — AI live + results quality round 2 (DONE 2026-08-06):** diagnosed + fixed the real reason "AI can't make smart decisions": the user's stored Kilo key (`MINIMAX` env, 67-char `sk-`) was never wired (`ai_provider` empty ⇒ `check_ai_available()=False`) → `configure_provider('kilo')`, live-verified end-to-end. AI re-scoring moved to AFTER enrichment (`_ai_rescore` + shared `_apply_flatline_guard`) so the judge scores real descriptions (live: top jobs 85.0, verdicts "Your 4 years of AWS/Terraform expertise…", 36/60 AI calls). Naukri dead postings (expired → search-page redirect) now DROPPED (`_EXPIRED` sentinel; URLs logged). Junk-title gate extended (`top companies hiring for …`). 650/650 tests; ruff/format/mypy/bandit clean.
+- [x] **Session 18 — docs overhaul + doctor AI status + MCP AI surface (DONE 2026-08-07):** README rewritten + verified against source (full env-var reference + AI resolution order, exact AI preset models, corrected SerpAPI YAML sample — key is a `--configure` secret, CLI command reference, config precedence, `~/.matcha` layout, Docker/Makefile) + QUICKSTART.md (5 commands). `ai.py ai_status()` + doctor `ai` entry (ok/off/warn/error, scrubbed URL, key never leaks, "AI matching" section in the text report); MCP `matcha_status` surfaces the same `ai` entry (docstrings + hermetic test). 659/659 tests; ruff/format/mypy clean.
 
 **Design pillars:** multi-backend richest-first routing · doctor-first observability ·
 filters as a central pipeline stage · enrichment over volume · graceful degradation ·
@@ -227,7 +265,7 @@ provenance is data · failproof by construction.
 
 ## Known Gaps / Pain Points (1.x → fixed in 2.0)
 
-1. Thin, stale, noisy data — **Phases 1–2 fixed the big levers** (OpenCLI backends, top-N enrichment, Exa web, Naukri job-page, central filters); LinkedIn still thin on this machine until the Chrome extension is connected; Naukri DDGS index is stale (expired links gracefully kept as snippets)
+1. Thin, stale, noisy data — **Phases 1–2 fixed the big levers** (OpenCLI backends, top-N enrichment, Exa web, Naukri job-page, central filters); LinkedIn still thin on this machine until the Chrome extension is connected; Naukri DDGS index is stale — **expired postings now dropped (Rev 16)**, unverified snippets beyond the 8/batch page cap remain
 2. Re-rank on enriched signals (step 8 of §7) + `must_skills_soft` rank cap + `[full]`/`[snippet]` tags — Phase 4
 3. Pydantic models defined but only partially used at runtime (Job/Profile now extended; not yet the runtime boundary) — Phase 4+
 4. ~~AI hardcoded to one provider (legacy `MINIMAX` env var name)~~ **RESOLVED Phase 5** — provider presets + env/config/settings overrides; `MINIMAX` kept as the legacy env alias
@@ -242,7 +280,7 @@ provenance is data · failproof by construction.
 
 ## Key References (revamp/)
 
-- `matcha-2.0-strategy.md` — the plan (Rev 14, source of truth; §6.2/§6.3 corrected for OpenCLI + Exa/mcporter work, §6.5 + §6.7 + §7 + §8 + §10.2 + §11 + §13 + §17 marked implemented)
+- `matcha-2.0-strategy.md` — the plan (Rev 16, source of truth; §6.2/§6.3 corrected for OpenCLI + Exa/mcporter work, §6.5 + §6.7 + §7 + §8 + §9.3 + §10.2 + §11 + §13 + §17 marked implemented)
 - `matcha-2.0-implementation-analysis.md` — pre-implementation analysis: verified env, OpenCLI interfaces, migration plan, findings F-01..F-23
 - `phase-0-handoff-prompt.txt` — Phase 0 spec (implemented 2026-08-06)
 - `opencli-integration-plan.md` — superseded-but-adopted background

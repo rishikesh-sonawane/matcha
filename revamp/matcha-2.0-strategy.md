@@ -90,6 +90,41 @@
 > (saved jobs silently lost), `settings` shallow-copy default leak,
 > `extract_experience` case-sensitivity, `probe_url` bare-exception
 > hardening. 623/623 tests; ruff/format/mypy/bandit clean.)
+> Rev 15 (adds: **Phase 3-adjacent polish + results-quality fixes** —
+> **§9.5 verdict pass implemented** (`ai.py` `JOB_VERDICT_PROMPT` +
+> `ai_verdict`, `settings.ai.verdict_k` default 5, top-K after enrichment in
+> `run_search`, rendered in the detail panel + `search --json` `verdict`
+> object, gated/cached/budget-limited); **saved jobs persist the
+> enriched/normalized fields** (`actions.py` idempotent `ALTER TABLE`
+> migration + UPSERT so re-saving never resets status/applied_at/notes,
+> `job_entry` shared by DB + in-memory view, Saved screen shows
+> Salary/Posted); **results-quality fixes (user-reported "pathetic" run)**:
+> junk listing-page titles dropped by the quality gate ("Link to
+> naukri.com", "It Jobs", "Developer Tcs Jobs" — `_is_junk_title`),
+> matcher calibration (§9.1) so long profiles can't dilute real matches
+> (skill-ratio saturation `_SKILL_RATIO_CAP=10` + title dimension scores
+> job-title coverage by the profile, stopword-filtered), and an actionable
+> hint when the location filter excludes remote jobs (`filter_notes`,
+> printed in TUI + `search --json`). Also fixed: track.py/actions.py
+> unclosed-sqlite ResourceWarnings (py3.14 context managers never close),
+> test hermeticity for the live circuit-breaker state, Indeed breaker
+> correctly open (skipped) after 3 live failures. 646/646 tests;
+> ruff/format/mypy/bandit clean; coverage 81%.)
+> Rev 16 (adds: **AI live + results-quality round 2 (user-reported)** —
+> diagnosis: the user's stored Kilo key was never wired (empty
+> `ai_provider` ⇒ `check_ai_available()=False`), so every AI feature ran
+> heuristic-only on this machine. Set the `kilo` preset and live-verified:
+> AI query expansion (1 → 4 variants), AI re-scoring (top jobs 85.0), 5
+> verdicts, 36 AI calls within budget. **§9.3 ordering fix:** the AI
+> re-scoring pass now runs AFTER enrichment (`_ai_rescore` extracted from
+> `rank_jobs`; shared `_apply_flatline_guard`) so the judge scores real
+> descriptions and re-ranks by its verdict — previously it ran before the
+> detail pass and saw only snippet rows. **Naukri dead postings dropped:**
+> `_extract_job_fields` returns an `_EXPIRED` sentinel for expired→
+> search-page redirects and the dispatcher removes those jobs (URLs logged
+> at warning) — fetch/parse failures still keep the snippet row. Junk-title
+> gate extended: `top companies hiring for …` / `companies hiring for …`
+> listing pages. 650/650 tests; ruff/format/mypy/bandit clean.)
 
 ---
 
@@ -337,8 +372,10 @@ class Source(ABC):
 > pattern as §8) and parsed from its markdown; a direct GET is still tried
 > first and its embedded `application/ld+json` JobPosting / `__NEXT_DATA__`
 > wins whenever Naukri server-renders again. Expired postings redirect to
-> search pages ("Jobs In ... - N Job Vacancies") — detected and kept as
-> snippets with `enrich_error`. Provenance: `data_quality` full/partial,
+> search pages ("Jobs In ... - N Job Vacancies") — detected and **dropped**
+> (Rev 16: `_EXPIRED` sentinel → removed from the batch, URLs logged); a
+> mere fetch/parse failure keeps the snippet row with `enrich_error`.
+> Provenance: `data_quality` full/partial,
 > `enrich_source="job-page"`, result `backend="job-page"`; `check()` stays
 > hermetic (library-based) so doctor/contract tests stay offline-safe.
 | **RemoteOK** | `api` | — | structured, full description |
@@ -600,10 +637,17 @@ filter is: `(job, filter_spec) → (keep, reason)`. Counts are logged and shown.
 
 - Drop: empty title · **title AND company both** placeholder (`Unknown`,
   `Naukri`) · unresolved tracking URLs (`rc/clk`, `pagead/clk` with no `jk`) ·
-  obviously truncated snippets with no URL. (Placeholder company **alone** is
-  kept but tagged `partial` — Naukri yields `company="Naukri"` for otherwise
-  good jobs, see F-12.)
+  obviously truncated snippets with no URL · **junk listing-page/nav titles**
+  leaked by snippet fallbacks (`_is_junk_title`: "Link to naukri.com",
+  "It Jobs", titles ending in "Jobs", "Apply Now", "Careers" — real titles
+  end with the role). (Placeholder company **alone** is kept but tagged
+  `partial` — Naukri yields `company="Naukri"` for otherwise good jobs, see
+  F-12.)
 - Report: `quality_dropped=9`.
+- Rev 15: when the **location** stage excludes remote jobs (concrete profile
+  city + no remote preference), it records an actionable hint surfaced via
+  `filters.filter_notes` in the TUI summary and `search --json`
+  (`filter_notes`).
 
 ### 7.6 Ordering & configuration
 
@@ -634,8 +678,10 @@ filters:
 > consent (zero-config per this section) and is capped at 10 jobs/batch;
 > configurable via `settings.enrichment` (enabled/top_n/timeout/max_workers);
 > TUI detail panel shows Salary/Workplace/Posted/Applicants/Apply URL and `o`
-> opens `apply_url` when present. Re-rank on enriched signals (step 8 of §7)
-> is still future work.
+> opens `apply_url` when present. ✅ **Rev 16:** step 8 (re-rank on enriched
+> signals) is implemented — `run_search` runs the AI re-scoring pass
+> (`_ai_rescore`) AFTER enrichment so the final ranking reflects real
+> descriptions (heuristic → enrich → AI-rescore → re-rank → verdicts).
 
 After `rank_jobs`, enrich the top N (default 30) with a real LinkedIn posting
 URL via `opencli linkedin job-detail`:
@@ -690,7 +736,18 @@ def enrich_job(job, timeout=30) -> dict:
    `doctor --json` and, if configured, normalize scores.
 5. **Optional final verdict (AI, top K ≤ 5):** one extra prompt — "would you
    actually recommend applying, and why?" — rendered as a short line in the
-   detail panel. Gated, cached, budget-limited.
+   detail panel. Gated, cached, budget-limited. ✅ **Implemented (Rev 15):**
+   `ai.py` `ai_verdict()` (task `"verdict"`, best tier, cached + budget-
+   limited), `settings.ai.verdict_k` (default 5, 0 = off); `run_search`
+   scores the top-K `ai_eligible` jobs after enrichment and stamps
+   `job["verdict"] = {recommend, line}` — shown in the TUI detail panel and
+   surfaced to agents in `search --json`/`watch` as a per-job `verdict`
+   object + top-level `verdict_count`.
+   Rev 16: the **AI re-scoring pass moved to post-enrichment** (`_ai_rescore`
+   extracted from `rank_jobs`; `run_search` heuristic → enrich → AI-rescore
+   → re-rank → flatline-guard → verdicts). Live-verified: enriched/real
+   descriptions drive 80–90 scores and honest verdicts (incl. "too vague"
+   for thin snippets).
 6. **Provenance tag in TUI:** `[full]` / `[snippet]` / `[salary?]` / `[age?]`
    next to the score, so low-confidence matches are obvious.
 
@@ -882,7 +939,13 @@ class FilterReport(BaseModel):          # one per filter stage
 
 `actions.py` SQLite: add `apply_url, salary, salary_int, workplace_type,
 company_url, listed_epoch` (idempotent `ALTER TABLE` migration) + `seen_urls`
-table.
+table. ✅ **Implemented (Rev 15):** `ENRICHED_COLUMNS` in `actions.py` +
+idempotent `_migrate` (PRAGMA table_info-guarded ALTER TABLE); `save_job` is
+now a UPSERT (`ON CONFLICT(url) DO UPDATE` metadata only) so re-saving never
+resets `status`/`applied_at`/`notes`; `job_entry()` shares the row shape
+between SQLite and the TUI's in-memory `saved_ids`; `load_saved_jobs` reads
+all columns; the Saved screen shows Salary (`salary`/`salary_int`) and Posted
+(`listed_epoch`) columns.
 
 ---
 
@@ -1126,9 +1189,11 @@ registered + default-on; mypy clean; coverage gate green; 623/623 tests.
 - [x] RSS source (sources/rss.py, feedparser) — Phase 7
 - [x] Filter/pipeline stage counts surfaced in TUI + JSON
 - [x] Confidence-weighted scoring + provenance tags ([full]/[snippet]) — Phase 4
-- [ ] AI verdict pass (top-K "would you apply?" line) — optional, AI-gated
+- [x] AI verdict pass (top-K "would you apply?" line) — §9.5, Rev 15
 - [x] `--json` + SKILL.md + installer + `matcha watch` new-vs-seen + optional MCP — Phase 6
-- [ ] RSS source + GitHub profile enrichment (optional)
+- [x] Saved-jobs persist enriched+normalized fields (actions.py new columns) — Rev 15
+- [x] Junk-title quality gate + matcher dilution calibration + remote-exclusion hint — Rev 15
+- [x] RSS source + GitHub profile enrichment (optional)
 
 ---
 

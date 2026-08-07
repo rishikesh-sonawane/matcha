@@ -16,6 +16,7 @@ newness signal.
 
 import sqlite3
 import time
+from contextlib import closing
 from typing import Any
 
 from matcha.actions import CONFIG_DIR, DB_PATH
@@ -35,13 +36,15 @@ CREATE TABLE IF NOT EXISTS seen_urls (
 
 def _ensure_seen() -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(str(DB_PATH)) as conn:
+    # closing(): the sqlite3 connection context manager commits/rolls back
+    # but never closes — close explicitly to avoid leaking a handle.
+    with closing(sqlite3.connect(str(DB_PATH))) as conn:
         conn.execute(_SEEN_SCHEMA)
 
 
 def _known_urls() -> set[str]:
     _ensure_seen()
-    with sqlite3.connect(str(DB_PATH)) as conn:
+    with closing(sqlite3.connect(str(DB_PATH))) as conn:
         rows = conn.execute("SELECT url FROM seen_urls").fetchall()
     return {r[0] for r in rows}
 
@@ -73,34 +76,42 @@ def mark_seen(jobs: list[dict[str, Any]]) -> int:
     _ensure_seen()
     now = time.time()
     inserted = 0
-    with sqlite3.connect(str(DB_PATH)) as conn:
-        for job in jobs:
-            url = (job.get("url") or "").strip()
-            if not url:
-                continue
-            title = str(job.get("title", ""))[:500]
-            company = str(job.get("company", ""))[:200]
-            source = str(job.get("source", ""))[:100]
-            row = conn.execute("SELECT 1 FROM seen_urls WHERE url = ?", (url,)).fetchone()
-            if row is None:
-                conn.execute(
-                    "INSERT INTO seen_urls "
-                    "(url, title, company, source, first_seen, last_seen, seen_count) "
-                    "VALUES (?, ?, ?, ?, ?, ?, 1)",
-                    (url, title, company, source, now, now),
-                )
-                inserted += 1
-            else:
-                conn.execute(
-                    "UPDATE seen_urls SET last_seen = ?, seen_count = seen_count + 1 WHERE url = ?",
-                    (now, url),
-                )
+    with closing(sqlite3.connect(str(DB_PATH))) as conn:
+        try:
+            for job in jobs:
+                url = (job.get("url") or "").strip()
+                if not url:
+                    continue
+                title = str(job.get("title", ""))[:500]
+                company = str(job.get("company", ""))[:200]
+                source = str(job.get("source", ""))[:100]
+                row = conn.execute("SELECT 1 FROM seen_urls WHERE url = ?", (url,)).fetchone()
+                if row is None:
+                    conn.execute(
+                        "INSERT INTO seen_urls "
+                        "(url, title, company, source, first_seen, last_seen, seen_count) "
+                        "VALUES (?, ?, ?, ?, ?, ?, 1)",
+                        (url, title, company, source, now, now),
+                    )
+                    inserted += 1
+                else:
+                    conn.execute(
+                        "UPDATE seen_urls SET last_seen = ?, seen_count = seen_count + 1 "
+                        "WHERE url = ?",
+                        (now, url),
+                    )
+            # closing() alone never commits (the sqlite3 context manager did) —
+            # without this the writes above would roll back on close.
+            conn.commit()
+        except Exception:  # noqa: BLE001 — roll back and let the caller decide
+            conn.rollback()
+            raise
     return inserted
 
 
 def stats() -> dict[str, int]:
     """``{"seen_urls_total": N}`` — total distinct URLs ever tracked."""
     _ensure_seen()
-    with sqlite3.connect(str(DB_PATH)) as conn:
+    with closing(sqlite3.connect(str(DB_PATH))) as conn:
         row = conn.execute("SELECT COUNT(*) FROM seen_urls").fetchone()
     return {"seen_urls_total": int(row[0])}

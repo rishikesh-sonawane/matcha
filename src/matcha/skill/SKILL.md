@@ -11,9 +11,12 @@ description: >
   pass first, optional AI pass on enriched candidates. Output is structured
   JSON, ready to summarize.
 
-  Run `matcha doctor --json` first to see which backends are live right now.
-  Use `matcha search --json` for a ranked search and `matcha watch --json`
-  for only-NEW jobs since the last watch.
+  Run `matcha doctor --json` first: per-source health/backends plus an `ai`
+  entry (provider, key_set, available) — if AI is `off`/`warn`, tell the
+  user to set $MINIMAX or run `matcha --configure`. Use `matcha search --json`
+  for a ranked search and `matcha watch --json` for only-NEW jobs since the
+  last watch. New users: the repo's QUICKSTART.md covers the 5-command
+  install → profile → AI → doctor → headless path.
 
   NOT for: applying to jobs (Matcha only opens the apply page — enrichment-
   only), posting jobs, or non-job web research.
@@ -38,6 +41,9 @@ metadata:
 1. **动手前先体检** — run `matcha doctor --json` first; note each source's
    `active_backend` and degrade expectations accordingly (e.g. `opencli` needs
    the user's Chrome + consent; without it sources fall back to guest/ddgs).
+   Check the `ai` entry too: `ok` = AI ranking is on; `off`/`warn` = tell
+   the user to `export MINIMAX=...` or run `matcha --configure` (the repo's
+   QUICKSTART.md has the full 5-command path).
 2. **声明你在用什么** — say "using Matcha's X source / Y backend" before
    searching.
 3. **失败重试** — if a search returns 0 jobs or an error, re-run with a
@@ -49,7 +55,7 @@ metadata:
 ## 快速命令 / Quick commands
 
 ```bash
-# 健康检查 (health first)
+# 健康检查 (health first — also reports the `ai` entry: provider/key_set/available)
 matcha doctor --json
 
 # 排名搜索 — 结构化 JSON (ranked search as JSON)
@@ -68,7 +74,9 @@ matcha skill --install
 ## 工作流 / Workflow
 
 1. `matcha doctor --json` → know which backends are live (LinkedIn/Indeed
-   `opencli` vs fallbacks, Web `exa` vs `ddgs`).
+   `opencli` vs fallbacks, Web `exa` vs `ddgs`) and whether AI is wired
+   (`ai.available` / `ai.key_set` — `ok` on the AI line means AI ranking is
+   on; if `off`/`warn`, surface the setup hint).
 2. `matcha search -q QUERY -l LOC -d DAYS --json` → ranked jobs with
    `match_score`, `reasons`, and provenance fields
    (`data_quality` full/partial/snippet, `backend`).

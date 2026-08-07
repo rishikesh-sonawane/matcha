@@ -2,7 +2,9 @@
 
 Exposes two read-only tools over the Model Context Protocol (stdio):
 
-- ``matcha_status``  → per-source health report (``matcha doctor --json``).
+- ``matcha_status``  → per-source health report **+ AI availability**
+  (``matcha doctor --json``: every source entry, plus an ``ai`` entry with
+  provider / best+fast models / key_set / available — never the key).
 - ``matcha_search``  → the full headless pipeline (profile → search → filter
   → rank → enrich) as structured JSON (same document as
   ``matcha search --json``).
@@ -40,7 +42,9 @@ def create_server() -> Any:
 
     @mcp.tool()
     def matcha_status() -> str:
-        """Per-source health report as JSON — which backends are live right now."""
+        """Health report as JSON: per-source status/backends/circuits plus an
+        'ai' entry {provider, model_best, model_fast, key_set, available} —
+        the API key itself is never included."""
         from matcha.doctor import check_all, report_to_json
         from matcha.settings import load_settings
 

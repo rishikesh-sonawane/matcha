@@ -391,6 +391,31 @@ class TestTableBuilders(unittest.TestCase):
             main.show_job_detail(job, 88.5, ["a", "b"])
         console.print.assert_called()
 
+    def test_show_job_detail_renders_verdict(self):
+        import matcha.main as main
+
+        job = {
+            "title": "T",
+            "company": "C",
+            "url": "u",
+            "verdict": {"recommend": True, "line": "Great skills fit."},
+        }
+        with mock.patch("matcha.main.console") as console:
+            main.show_job_detail(job, 90.0, [])
+        panel = console.print.call_args.args[0]
+        rendered = str(panel.renderable)
+        self.assertIn("Verdict", rendered)
+        self.assertIn("Recommend", rendered)
+
+    def test_show_job_detail_no_verdict(self):
+        import matcha.main as main
+
+        job = {"title": "T", "company": "C", "url": "u"}
+        with mock.patch("matcha.main.console") as console:
+            main.show_job_detail(job, 90.0, [])
+        panel = console.print.call_args.args[0]
+        self.assertNotIn("Verdict", str(panel.renderable))
+
     def test_rank_jobs_ai_and_flatline(self):
         import matcha.main as main
 

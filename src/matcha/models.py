@@ -107,6 +107,7 @@ class AIConfig(BaseModel):
     model_fast: str = ""  # query gen / title suggestion (default per provider)
     max_calls: int = 60  # budget guard per run
     cache_ttl: int = 0  # disk cache TTL in seconds; 0 = disabled (opt-in)
+    verdict_k: int = 5  # §9.5 top-K go/no-go verdicts; 0 = disabled
 
 
 class ScraperConfig(BaseModel):

@@ -2,29 +2,43 @@
 
 ## Current Focus
 
-**Phases 1, 2, 4, 5, 6 and 7 are COMPLETE.** The pipeline is now: profile →
-queries → search → dedup → normalize → central filters → **confidence-
-weighted rank** → enrich top N → present — shared via the `run_search`
-headless pipeline across the TUI and the agent surface (`matcha search
---json`, `matcha watch`, MCP). Filters are centrally enforced (quality →
-age → must-skills → location → salary) with per-stage counts; ranking is
-confidence-weighted (full 1.0 · partial 0.85 · snippet 0.7) with
+**Phases 1, 2, 4, 5, 6, 7 AND the Phase 3-adjacent polish are COMPLETE.**
+The pipeline is now: profile → queries → search → dedup → normalize →
+central filters → **confidence-weighted rank** → enrich top N → optional
+**top-K AI verdict** → present — shared via the `run_search` headless
+pipeline across the TUI and the agent surface (`matcha search --json`,
+`matcha watch`, MCP). Filters are centrally enforced (quality → age →
+must-skills → location → salary) with per-stage counts; the quality gate
+also drops junk listing-page titles ("Link to naukri.com", "It Jobs"); the
+location stage prints an actionable hint when it excludes remote jobs.
+Ranking is confidence-weighted (full 1.0 · partial 0.85 · snippet 0.7) with
 recency/workplace/must-skill signals, a soft-mode rank cap, AI gated to
-enriched candidates, and provenance tags. AI is provider-agnostic (presets,
-model tiers, budget guard, opt-in cache). New-vs-seen tracking
-(`track.py` seen_urls) powers `watch`; a bilingual SKILL.md installer and an
-optional guarded MCP server round out the agent surface. **Phase 7
-(hardening) is DONE**: per-source circuit breakers persisted in
-`source_state.json` (atomic 0600 + symlink-rejected, thread-safe), config
-hardening (atomic writes, 0700/0600, symlink rejection, size caps,
-reads-never-create), GitHub profile enrichment (`matcha github enrich`),
-RSS source (`sources/rss.py` + `sources.rss.feeds`), **mypy clean on all 38
-files (0 errors)**, **coverage gate ≥80% (81%+)** enforced in CI + Makefile,
-plus real bug fixes surfaced by the new suites (actions.py `_db()` never
-committed → saved jobs were silently lost; settings.py shallow-copy default
-leak; `extract_experience` case-sensitivity; `probe_url` bare-exception
-hardening). **623/623 tests pass.** Next: Phase 3-adjacent polish
-(saved-jobs enriched columns) or fresh spec — do NOT start beyond that.
+enriched candidates, provenance tags, and **Rev-15 calibration** (skill-
+ratio saturation + job-title coverage) so long profiles/headlines can't
+dilute real matches into a flat low band. AI is provider-agnostic (presets,
+model tiers, budget guard, opt-in cache) plus the **§9.5 verdict pass**
+(`settings.ai.verdict_k`, default 5) rendering a "would you apply?" line in
+the detail panel + `search --json`. Saved jobs persist the enriched/
+normalized fields via an idempotent SQLite migration (UPSERT preserves
+status/notes). **Phase 7 (hardening) is DONE** (circuit breakers, config
+hardening, GitHub enrichment, RSS, mypy clean 38/38, coverage gate 81%+).
+**Session 17 (2026-08-06): AI is now LIVE on this machine** — the stored
+Kilo key (`MINIMAX` env) was never wired (`ai_provider` empty ⇒
+`check_ai_available()=False` ⇒ every AI feature ran heuristic-only); set
+`kilo` preset + live-verified (query expansion → 4 variants, AI re-scoring
+→ top jobs 85, 5 verdicts, 36/60 AI calls). **AI re-scoring moved to AFTER
+enrichment** (`_ai_rescore` + shared `_apply_flatline_guard`) so the judge
+scores real descriptions (§9.3 ordering). **Naukri dead postings are now
+DROPPED** (`_EXPIRED` sentinel on expired→search-page redirects). Junk-
+title gate extended (`top companies hiring for …`). **659/659 tests pass.**
+**Session 18 (2026-08-07): docs overhaul + doctor AI status + MCP AI
+surface** — README rewritten + verified against source (env vars, AI setup,
+CLI command reference, config precedence, `~/.matcha` file layout) and a new
+QUICKSTART.md (5 commands); **`matcha doctor` now reports AI availability in
+one place** — an `ai` entry (provider / best+fast models / `key_set` /
+`available`; never the key) rendered as an "AI matching" line, surfaced
+identically via `doctor --json` and the MCP `matcha_status` tool.
+Next: fresh spec or further polish — do NOT start a new phase without one.
 
 > 2026-08-06 session 1: full repo audit + `.ai_memory/` rewrite.
 > Session 2: Agent-Reach v1.5.0 study folded into revamp docs (strategy Rev 3).
@@ -58,6 +72,20 @@ hardening). **623/623 tests pass.** Next: Phase 3-adjacent polish
 >   commit (saved jobs were silently lost), settings deepcopy default leak,
 >   extract_experience case, probe_url hardening, breaker thread-lock,
 >   fernet write TOCTOU.
+> Session 16: **Phase 3-adjacent polish + results-quality fixes** (saved-jobs
+> enriched columns + §9.5 verdict pass + junk-title gate + matcher dilution
+> calibration + remote hint; 646/646).
+> Session 17: **AI live + results-quality round 2** (user: "results are
+> pathetic … use AI … Naukri jobs no longer valid") — root cause: the
+> stored Kilo key was never wired (`ai_provider` empty) ⇒ AI was off;
+> `configure_provider('kilo')` + live-verified (query gen, AI re-scoring,
+> verdicts). AI re-scoring moved post-enrichment (`_ai_rescore`,
+> `_apply_flatline_guard`); Naukri expired postings DROPPED (`_EXPIRED`
+> sentinel, URLs logged); junk-title gate extended; 650/650.
+> Session 18: **docs overhaul + doctor AI status + MCP AI surface**
+> (README env-var/AI-setup/CLI-reference rewrite + QUICKSTART.md; doctor
+> `ai` entry with provider/models/key_set/available — never the key; MCP
+> `matcha_status` surfaces it; 659/659).
 > Decisions locked in: shims-first (F-04); LinkedIn blank location = `"India"`
 > (F-08); console entry `matcha.main:main`; consent keys
 > `linkedin_consent`/`indeed_consent`; `-f json` locked (F-07); LinkedIn drops
@@ -308,12 +336,21 @@ hardening). **623/623 tests pass.** Next: Phase 3-adjacent polish
   key; `source_state.json` persists streaks; `matcha github enrich`
   degrades gracefully without gh; `make test-coverage` exits 0 at 81%.
 
-## Immediate Next Steps (Phase 7 boundary — do NOT start beyond)
+## Immediate Next Steps
 
-1. **Phase 3-adjacent polish**: saved-jobs persist enriched+normalized fields
-   (`actions.py` new columns: salary, salary_int, apply_url, listed_epoch);
-   optional AI verdict pass (§9.5).
-2. **Do NOT build beyond Phase 7 scope** without a fresh spec.
+1. **Session 18 landed (2026-08-07, user-driven)**: README + QUICKSTART
+   updated (verified against source); `matcha doctor` reports AI
+   availability (`ai` entry: provider / best+fast models / `key_set` /
+   `available` — never the key; "AI matching" line in the text report); the
+   MCP `matcha_status` tool surfaces the same entry. Setup is now
+   verifiable in one place: `matcha doctor` → `ok` on the AI matching line.
+2. **Optional follow-ups the user may want**: connect the OpenCLI browser
+   bridge (Chrome + extension) for real LinkedIn/Indeed enrichment
+   (`matcha --configure` → consent); set `settings ai.cache_ttl: 86400` in
+   `~/.matcha/settings.yaml` so repeat searches skip AI spend.
+3. **Do NOT start a new phase without a fresh spec.**
+4. OpenCLI extension still disconnected on this machine; mcporter and
+   agent-reach not installed (unchanged).
 
 ## Blockers / Notes
 
@@ -326,7 +363,8 @@ hardening). **623/623 tests pass.** Next: Phase 3-adjacent polish
   installed + authenticated** — `gh_profile()` works live (read-only).
 - **Naukri is client-rendered + anti-bot** — Jina-render path is the workable
   zero-config fetch; DDGS-indexed URLs are often expired (→ search-page
-  redirect, skipped gracefully).
+  redirect, now DROPPED via the `_EXPIRED` sentinel; fetch failures still
+  keep the snippet row).
 - **mypy is CLEAN** — 0 errors across all 38 source files (Phase 7). Not a
   CI gate, but the debt is gone.
 - **Coverage gate** — `fail_under = 80` in `[tool.coverage.report]`, enforced

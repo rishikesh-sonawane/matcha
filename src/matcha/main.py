@@ -25,15 +25,16 @@ from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
 from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
-from matcha.actions import is_job_saved, load_saved_jobs, save_job, unsave_job
+from matcha.actions import is_job_saved, job_entry, load_saved_jobs, save_job, unsave_job
 from matcha.ai import (
     ai_generate_queries,
+    ai_verdict,
     budget_used,
     check_ai_available,
     reset_budget,
 )
 from matcha.config import load_config, load_profile, save_config, save_profile
-from matcha.filters import apply_filters, build_filter_summary, provenance_tags
+from matcha.filters import apply_filters, build_filter_summary, filter_notes, provenance_tags
 from matcha.matcher import (
     ai_eligible,
     compute_relevance,
@@ -173,7 +174,7 @@ def configure_ai():
 
     key = ""
     if PROVIDERS[provider].get("requires_key", True):
-        key = Prompt.ask("Enter your API key (or set $AI_API_KEY env var)", password=True)
+        key = Prompt.ask("Enter your API key (or set the $MINIMAX env var)", password=True)
     url = Prompt.ask("API URL override (blank = provider default)", default="")
     model = Prompt.ask("Model override (blank = provider default)", default="")
     configure_provider(provider, key.strip(), url=url.strip(), model=model.strip())
@@ -445,57 +446,89 @@ def rank_jobs(
         ranked.append((relevance["score"], job, relevance["reasons"]))
     ranked.sort(key=lambda x: x[0], reverse=True)
 
-    # Phase 4 (§9.3): the AI pass runs only on enriched candidates — the prompt
-    # weights finally have real description/location inputs, never snippet noise.
+    # Phase 4 (§9.3): optional AI re-scoring for direct callers. The shared
+    # pipeline (run_search) instead invokes _ai_rescore AFTER enrichment so
+    # the AI judge sees real descriptions — never snippet noise.
     if use_ai:
-        ai_idx = [i for i, (_, job, _) in enumerate(ranked) if ai_eligible(job)]
-        ai_idx = ai_idx[: min(len(ai_idx), ai_top_n)]
-        if ai_idx:
-            progress_ctx: Any = (
-                Progress(
-                    SpinnerColumn(),
-                    TextColumn("[progress.description]{task.description}"),
-                    BarColumn(),
-                    console=console,
-                    transient=True,
-                )
-                if not quiet
-                else _NullProgress()
-            )
-            with progress_ctx as progress:
-                task = progress.add_task("[yellow]AI-scoring top candidates...", total=len(ai_idx))
-                with ThreadPoolExecutor(max_workers=min(len(ai_idx), 8)) as ai_executor:
-                    ai_futures = {
-                        ai_executor.submit(
-                            compute_relevance_ai, ranked[i][1], profile, ai_timeout=ai_timeout
-                        ): i
-                        for i in ai_idx
-                    }
-                    for f in as_completed(ai_futures):
-                        i = ai_futures[f]
-                        ai_relevance = f.result()
-                        if ai_relevance:
-                            ranked[i] = (
-                                ai_relevance["score"],
-                                ranked[i][1],
-                                ai_relevance["reasons"],
-                            )
-                        progress.update(task, advance=1)
-            ranked.sort(key=lambda x: x[0], reverse=True)
+        ranked = _ai_rescore(ranked, profile, ai_top_n, ai_timeout, quiet)
 
     # Phase 4 (§9.4): calibration guard on the FINAL scores (post-AI, so the
     # presented distribution is what we judge). Homogeneous scores mean the
     # heuristic couldn't separate signal; flag it and optionally spread them.
+    ranked = _apply_flatline_guard(ranked, normalize_flatline)
+
+    return ranked
+
+
+def _apply_flatline_guard(ranked: list[RankedJob], normalize: bool) -> list[RankedJob]:
+    """§9.4 — flag a homogeneous score distribution; optionally spread it.
+
+    Shared by ``rank_jobs`` (heuristic/AI pass for direct callers) and
+    ``run_search`` (final post-enrichment scores) so the calibration guard
+    logic lives in exactly one place.
+    """
     if detect_flatline([r[0] for r in ranked]):
         logger.warning(
             "Score distribution is flat (top-decile spread < %.1f) — results are "
             "homogeneous; enriched jobs should outrank snippet-guesses",
             5.0,
         )
-        if normalize_flatline:
+        if normalize:
             scores = normalize_scores([r[0] for r in ranked])
             ranked = [(scores[i], ranked[i][1], ranked[i][2]) for i in range(len(ranked))]
+    return ranked
 
+
+def _ai_rescore(
+    ranked: list[RankedJob],
+    profile: dict[str, Any],
+    ai_top_n: int = 30,
+    ai_timeout: int = 60,
+    quiet: bool = False,
+) -> list[RankedJob]:
+    """Phase 4 (§9.3) — AI re-scoring pass over eligible candidates.
+
+    Judges only ``ai_eligible`` jobs (enriched/full descriptions — the AI
+    prompt must never score bare snippet rows) and re-ranks by the AI
+    verdict. Jobs whose call fails (budget, provider, parse) keep their
+    heuristic score. Used by ``rank_jobs(use_ai=True)`` for direct callers
+    and by ``run_search`` AFTER enrichment so the judge sees real data.
+    """
+    ai_idx = [i for i, (_, job, _) in enumerate(ranked) if ai_eligible(job)]
+    ai_idx = ai_idx[: min(len(ai_idx), ai_top_n)]
+    if not ai_idx:
+        return ranked
+    progress_ctx: Any = (
+        Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            console=console,
+            transient=True,
+        )
+        if not quiet
+        else _NullProgress()
+    )
+    with progress_ctx as progress:
+        task = progress.add_task("[yellow]AI-scoring top candidates...", total=len(ai_idx))
+        with ThreadPoolExecutor(max_workers=min(len(ai_idx), 8)) as ai_executor:
+            ai_futures = {
+                ai_executor.submit(
+                    compute_relevance_ai, ranked[i][1], profile, ai_timeout=ai_timeout
+                ): i
+                for i in ai_idx
+            }
+            for f in as_completed(ai_futures):
+                i = ai_futures[f]
+                ai_relevance = f.result()
+                if ai_relevance:
+                    ranked[i] = (
+                        ai_relevance["score"],
+                        ranked[i][1],
+                        ai_relevance["reasons"],
+                    )
+                progress.update(task, advance=1)
+    ranked.sort(key=lambda x: x[0], reverse=True)
     return ranked
 
 
@@ -585,15 +618,20 @@ def run_search(
             jobs = normalize_jobs(jobs)
             jobs, filter_reports = apply_filters(jobs, profile, filters_cfg)
         filter_summary = build_filter_summary(filter_reports)
+        notes = filter_notes(filter_reports)
+    else:
+        notes = []
 
+    # Heuristic ranking first. The AI re-scoring pass runs AFTER enrichment
+    # (see below) so the AI judge scores real descriptions (§9.3).
     normalize_flatline = settings.get("ranking", {}).get("normalize_scores", False)
     ranked = rank_jobs(
         jobs,
         profile,
-        use_ai=ai_enabled,
+        use_ai=False,
         ai_top_n=ai_top_n,
         ai_timeout=ai_timeout,
-        normalize_flatline=normalize_flatline,
+        normalize_flatline=False,
         quiet=quiet,
     )
 
@@ -627,15 +665,64 @@ def run_search(
                 f"[dim]Enriched [cyan]{enriched_count}[/cyan] top jobs with details[/dim]"
             )
 
+    # Phase 4 (§9.3): AI re-scoring AFTER enrichment — the judge now sees the
+    # detail pass's descriptions/salary/location, never snippet noise. Only
+    # eligible (enriched) candidates are judged; failures keep heuristic scores.
+    if ai_enabled and ranked:
+        ranked = _ai_rescore(ranked, profile, ai_top_n=ai_top_n, ai_timeout=ai_timeout, quiet=quiet)
+
+    # §9.4 calibration guard on the FINAL scores (post-AI, post-enrichment).
+    ranked = _apply_flatline_guard(ranked, normalize_flatline)
+
+    # Phase 3-adjacent polish (§9.5): optional go/no-go verdict for the top-K
+    # enriched candidates — one extra prompt, gated on AI, budget-limited,
+    # cached. Stamped onto each job dict (surfaces in the detail panel AND in
+    # `search --json`/`watch` for agents); never blocks on empty candidates.
+    verdict_count = 0
+    verdict_k = int(settings.get("ai", {}).get("verdict_k", 5) or 0)
+    if ai_enabled and verdict_k > 0 and ranked:
+        verdict_idx = [i for i, (_, job, _) in enumerate(ranked) if ai_eligible(job)]
+        verdict_idx = verdict_idx[: min(len(verdict_idx), verdict_k)]
+        if verdict_idx:
+            v_progress_ctx: Any = (
+                Progress(
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    BarColumn(),
+                    console=console,
+                    transient=True,
+                )
+                if not quiet
+                else _NullProgress()
+            )
+            with v_progress_ctx as progress:
+                v_task = progress.add_task(
+                    "[yellow]Verdict on top candidates...", total=len(verdict_idx)
+                )
+                with ThreadPoolExecutor(max_workers=min(len(verdict_idx), 5)) as v_executor:
+                    v_futures = {
+                        v_executor.submit(ai_verdict, profile, ranked[i][1], timeout=ai_timeout): i
+                        for i in verdict_idx
+                    }
+                    for f in as_completed(v_futures):
+                        i = v_futures[f]
+                        v = f.result()
+                        if v:
+                            ranked[i][1]["verdict"] = v
+                            verdict_count += 1
+                        progress.update(v_task, advance=1)
+
     return {
         "ranked": ranked,
         "source_counts": source_counts,
         "source_errors": source_errors,
         "filter_summary": filter_summary,
+        "filter_notes": notes,
         "found_count": found_count,
         "ai_used": ai_enabled,
         "ai_budget_used": budget_used(),
         "enriched_count": enriched_count,
+        "verdict_count": verdict_count,
     }
 
 
@@ -666,8 +753,10 @@ def build_search_payload(
         "source_counts": dict(run_result.get("source_counts", {})),
         "source_errors": {str(k): list(v) for k, v in run_result.get("source_errors", {}).items()},
         "filter_summary": run_result.get("filter_summary", ""),
+        "filter_notes": list(run_result.get("filter_notes", [])),
         "found_count": int(run_result.get("found_count", 0)),
         "enriched_count": int(run_result.get("enriched_count", 0)),
+        "verdict_count": int(run_result.get("verdict_count", 0)),
         "jobs": [
             _job_json(score, job, reasons) for score, job, reasons in run_result.get("ranked", [])
         ],
@@ -693,6 +782,8 @@ def _print_human_summary(
         console.print("  " + " | ".join(source_parts))
     if run_result.get("filter_summary"):
         console.print(f"  [dim]Filtered: {len(ranked)} kept ({run_result['filter_summary']})[/dim]")
+    for note in run_result.get("filter_notes", []):
+        console.print(f"  [dim]{note}[/dim]")
     if run_result.get("ai_budget_used"):
         console.print(f"  [dim]AI budget: {run_result['ai_budget_used']} used[/dim]")
     if not ranked:
@@ -944,6 +1035,28 @@ def build_results_table(
     return table
 
 
+def _saved_salary(entry: dict[str, Any]) -> str:
+    """Saved-view Salary cell: the raw string, else the LPA number."""
+    salary = str(entry.get("salary") or "").strip()
+    if salary:
+        return salary[:12]
+    sal_int = entry.get("salary_int")
+    if isinstance(sal_int, (int, float)) and sal_int > 0:
+        return f"{int(sal_int)} LPA"
+    return ""
+
+
+def _saved_posted(entry: dict[str, Any]) -> str:
+    """Saved-view Posted cell: compact relative age from ``listed_epoch``."""
+    epoch = entry.get("listed_epoch")
+    if not isinstance(epoch, (int, float)) or not epoch:
+        return ""
+    days = int((time.time() - float(epoch)) // 86400)
+    if days <= 0:
+        return "today"
+    return f"{days}d"
+
+
 def show_job_detail(job: dict[str, Any], score: float, reasons: list[str]) -> None:
     lines = [f"[bold]{job.get('title', 'N/A')}[/bold]"]
     lines.append(f"[cyan]Company:[/cyan] {job.get('company', 'N/A')}")
@@ -961,6 +1074,10 @@ def show_job_detail(job: dict[str, Any], score: float, reasons: list[str]) -> No
     label = "Apply URL" if job.get("apply_url") else "URL"
     lines.append(f"[cyan]{label}:[/cyan] {url}")
     lines.append(f"[cyan]Match Score:[/cyan] [bold]{score}%[/bold]")
+    verdict = job.get("verdict")
+    if isinstance(verdict, dict) and verdict.get("line"):
+        mark = "[green]✓ Recommend[/green]" if verdict.get("recommend") else "[red]✗ Pass[/red]"
+        lines.append(f"[cyan]Verdict:[/cyan] {mark} — {verdict['line']}")
     lines.append("")
     lines.append("[bold]Why this matches:[/bold]")
     lines.extend(f"  \u2022 {r}" for r in reasons)
@@ -1009,6 +1126,7 @@ def prompt_loop(
     source_errors: dict[str, list[str]],
     ai_enabled: bool,
     filter_summary: str = "",
+    filter_notes: list[str] | None = None,
 ) -> str | None:
     if not ranked:
         console.print("[yellow]No jobs found. Try different search terms.[/yellow]")
@@ -1029,6 +1147,8 @@ def prompt_loop(
     console.print("  " + " | ".join(summary_parts))
     if filter_summary:
         console.print(f"  [dim]Filtered: {len(ranked)} kept ({filter_summary})[/dim]")
+    for note in filter_notes or []:
+        console.print(f"  [dim]{note}[/dim]")
     if error_parts:
         console.print("  [bold]Errors:[/bold] " + " | ".join(error_parts))
 
@@ -1064,12 +1184,9 @@ def prompt_loop(
             saved_ids.pop(url, None)
         else:
             save_job(job)
-            saved_ids[url] = {
-                "title": job.get("title", ""),
-                "company": job.get("company", ""),
-                "url": url,
-                "source": job.get("source", ""),
-            }
+            # Mirror the persisted enriched row into the live view so the
+            # Saved screen shows salary/posted immediately (strategy §8).
+            saved_ids[url] = job_entry(job)
 
     def _render_content():
         with console.capture() as cap:
@@ -1085,13 +1202,17 @@ def prompt_loop(
                         title="[bold]Saved Jobs[/bold]",
                         show_edge=False,
                     )
-                    t.add_column("Title", width=30, overflow="ellipsis")
-                    t.add_column("Company", width=16, overflow="ellipsis")
+                    t.add_column("Title", width=28, overflow="ellipsis")
+                    t.add_column("Company", width=14, overflow="ellipsis")
+                    t.add_column("Salary", width=12)
+                    t.add_column("Posted", width=8)
                     t.add_column("Source", width=10)
                     for entry in saved_ids.values():
                         t.add_row(
                             entry.get("title", ""),
                             entry.get("company", ""),
+                            _saved_salary(entry),
+                            _saved_posted(entry),
                             entry.get("source", ""),
                         )
                     console.print(t)
@@ -1481,6 +1602,7 @@ def run() -> None:
             source_errors,
             ai_enabled=use_ai,
             filter_summary=filter_summary,
+            filter_notes=run_result.get("filter_notes", []),
         )
 
         if loop_result != "re_run":

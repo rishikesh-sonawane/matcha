@@ -451,6 +451,10 @@ class TestSearchJobsScraperKwargs(unittest.TestCase):
             mock.patch("matcha.main.ThreadPoolExecutor", return_value=fake_executor),
             mock.patch("matcha.main.Live"),
             mock.patch("matcha.main.as_completed", return_value=[fake_future]),
+            # Hermetic: never consult the real ~/.matcha/source_state.json — an
+            # open circuit for a source would silently empty ``scrapers`` and
+            # break this kwargs-assertion (live-run state is not test input).
+            mock.patch("matcha.main.breaker_is_open", return_value=False),
         ):
             search_jobs(
                 queries=["Engineer"],

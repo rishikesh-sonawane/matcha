@@ -13,7 +13,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from matcha.filters import FilterReport, apply_filters, build_filter_summary
+from matcha.filters import FilterReport, apply_filters, build_filter_summary, filter_notes
 from matcha.normalization import normalize_jobs
 
 
@@ -53,6 +53,13 @@ class TestQualityFilter(unittest.TestCase):
         self.assertEqual(len(kept), 1)
         self.assertEqual(kept[0].get("data_quality"), "partial")
 
+    def test_placeholder_title_with_real_company_kept_f12(self):
+        # F-12: only title AND company BOTH placeholder are dropped (never
+        # over-drop). A placeholder title with a real company must survive.
+        for title in ("Unknown", "N/A", "TBD"):
+            kept, _ = apply_filters([_job(title=title)], {})
+            self.assertEqual(len(kept), 1, f"placeholder title {title!r} + real company kept")
+
     def test_tracking_url_without_job_key_dropped(self):
         job = _job(url="https://in.indeed.com/rc/clk?jk=abc")
         kept, _ = apply_filters([job], {})
@@ -66,6 +73,36 @@ class TestQualityFilter(unittest.TestCase):
     def test_missing_url_dropped(self):
         kept, _ = apply_filters([_job(url="")], {})
         self.assertEqual(len(kept), 0)
+
+    def test_junk_nav_titles_dropped(self):
+        # Listing-page/navigation noise leaked by snippet fallbacks — never
+        # real postings (user-reported: "Link to naukri.com", "It Jobs", …).
+        for title in (
+            "Link to naukri.com",
+            "It Jobs",
+            "It",
+            "Developer Tcs Jobs",
+            "DevOps - Jobs",
+            "Jobs in Pune",
+            "Apply Now",
+            "Careers",
+            "Top companies hiring for aws devops engineer",
+            "Companies hiring for devops engineers",
+        ):
+            kept, reports = apply_filters([_job(title=title)], {})
+            self.assertEqual(len(kept), 0, f"junk title {title!r} should be dropped")
+            self.assertEqual(reports[0].dropped, 1)
+
+    def test_legit_titles_not_dropped(self):
+        for title in (
+            "AWS DevOps Engineer",
+            "Staff DevOps Engineer",
+            "Platform Engineer",
+            "IT Support Engineer",
+            "Acme Hiring for DevOps Engineer",  # real employer-posted title
+        ):
+            kept, _ = apply_filters([_job(title=title)], {})
+            self.assertEqual(len(kept), 1, f"legit title {title!r} should be kept")
 
 
 class TestAgeFilter(unittest.TestCase):
@@ -193,6 +230,23 @@ class TestLocationFilter(unittest.TestCase):
         kept, _ = apply_filters(jobs, {"location": "Pune"}, {"remote": True})
         self.assertEqual(len(kept), 1)
         self.assertEqual(kept[0]["location"], "Remote")
+
+    def test_remote_drop_reports_actionable_hint(self):
+        kept, reports = apply_filters([_normalized(location="Remote")], {"location": "Pune"}, {})
+        self.assertEqual(len(kept), 0)
+        notes = filter_notes(reports)
+        self.assertTrue(notes)
+        self.assertIn("remote", notes[0].lower())
+        self.assertIn("remote_preference", notes[0])
+
+    def test_remote_kept_no_hint(self):
+        kept, reports = apply_filters(
+            [_normalized(location="Remote")],
+            {"location": "Pune", "remote_preference": "remote"},
+            {},
+        )
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(filter_notes(reports), [])
 
     def test_unknown_location_kept(self):
         kept, _ = apply_filters([_normalized(location="")], {"location": "Pune"}, {})

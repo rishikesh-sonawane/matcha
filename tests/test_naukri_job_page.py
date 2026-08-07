@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from matcha.sources.naukri import (
     _DIRECT_FETCH_TIMEOUT,
+    _EXPIRED,
     _JOB_PAGE_MAX,
     NaukriSource,
     _company_from_slug,
@@ -156,6 +157,11 @@ class TestRenderedParse(unittest.TestCase):
     def test_expired_posting_redirect_detected(self):
         self.assertTrue(_is_search_page_render(EXPIRED_MARKDOWN))
         self.assertIsNone(_parse_rendered_text(EXPIRED_MARKDOWN, JOB_URL))
+        # The field-level entry point must surface the dead-posting signal so
+        # the dispatcher can DROP it (not keep it as a stale snippet)…
+        self.assertIs(_extract_job_fields(EXPIRED_MARKDOWN, JOB_URL), _EXPIRED)
+        # …while a LIVE page must never be misdetected (the drop is destructive).
+        self.assertIsNot(_extract_job_fields(LIVE_MARKDOWN, JOB_URL), _EXPIRED)
 
     def test_empty_text_returns_none(self):
         self.assertIsNone(_parse_rendered_text("", JOB_URL))
@@ -345,6 +351,37 @@ class TestJobPageDispatch(unittest.TestCase):
         self.assertEqual(len(result.jobs), 1)  # kept as snippet
         fetch.assert_not_called()
         self.assertEqual(result.backend, "ddgs")
+
+    def test_expired_posting_dropped_from_results(self):
+        ddgs, _ = _patch_ddgs(_search_ok())
+        self.addCleanup(ddgs.stop)
+        with mock.patch("matcha.sources.naukri._fetch_job_page", return_value=EXPIRED_MARKDOWN):
+            result = search_naukri_jobs("python developer")
+        self.assertEqual(len(result.jobs), 0)  # dead posting removed, not kept
+
+    def test_mixed_expired_and_live_only_live_kept(self):
+        urls = [
+            {
+                "href": JOB_URL.replace("100326009734", f"100326000{i:03d}"),
+                "title": f"Python Developer {i}",
+                "body": "Python Developer",
+            }
+            for i in range(3)
+        ]
+        ddgs, _ = _patch_ddgs(urls)
+        self.addCleanup(ddgs.stop)
+
+        def fetch(url, timeout=12):
+            if url.endswith("001"):
+                return EXPIRED_MARKDOWN  # dead posting
+            return LIVE_MARKDOWN
+
+        with mock.patch("matcha.sources.naukri._fetch_job_page", side_effect=fetch):
+            result = search_naukri_jobs("python")
+        self.assertEqual(len(result.jobs), 2)  # expired one gone
+        self.assertTrue(all(j.get("data_quality") == "full" for j in result.jobs))
+        self.assertEqual(result.backend, "job-page")
+        self.assertEqual(result.data_quality, "full")
 
     def test_fetch_cap_respected(self):
         urls = [

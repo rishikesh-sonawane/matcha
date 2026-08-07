@@ -451,5 +451,121 @@ class TestConfigureProvider(unittest.TestCase):
                 configure_provider("not-a-provider", key="k")
 
 
+class TestVerdict(unittest.TestCase):
+    """§9.5 optional go/no-go verdict task (Phase 3-adjacent polish)."""
+
+    def setUp(self):
+        from matcha.ai import reset_budget
+
+        reset_budget(0)
+
+    def tearDown(self):
+        from matcha.ai import reset_budget
+
+        reset_budget(0)
+
+    def _profile(self):
+        return {
+            "title": "Platform Engineer",
+            "headline": "DevOps Engineer",
+            "skills": ["aws", "kubernetes"],
+            "experience": "4",
+            "summary": "Infrastructure engineer",
+            "location": "Pune",
+        }
+
+    def _job(self):
+        return {
+            "title": "Senior DevOps Engineer",
+            "company": "Acme",
+            "location": "Pune",
+            "salary": "₹30 LPA",
+            "description": "aws kubernetes terraform",
+        }
+
+    def test_parses_recommendation(self):
+        from matcha.ai import ai_verdict
+
+        with (
+            mock.patch("matcha.ai.check_ai_available", return_value=True),
+            mock.patch(
+                "matcha.ai._call_ai",
+                return_value='{"recommend": true, "line": "Strong skills overlap, right seniority."}',
+            ),
+        ):
+            result = ai_verdict(self._profile(), self._job())
+        self.assertEqual(
+            result, {"recommend": True, "line": "Strong skills overlap, right seniority."}
+        )
+
+    def test_gated_on_availability(self):
+        from matcha.ai import ai_verdict
+
+        with mock.patch("matcha.ai.check_ai_available", return_value=False):
+            self.assertIsNone(ai_verdict(self._profile(), self._job()))
+
+    def test_malformed_output_none(self):
+        from matcha.ai import ai_verdict
+
+        with (
+            mock.patch("matcha.ai.check_ai_available", return_value=True),
+            mock.patch("matcha.ai._call_ai", return_value="not json at all"),
+        ):
+            self.assertIsNone(ai_verdict(self._profile(), self._job()))
+
+    def test_invalid_shape_none(self):
+        from matcha.ai import ai_verdict
+
+        for raw in ('{"recommend": "maybe"}', '{"recommend": true}'):
+            with (
+                mock.patch("matcha.ai.check_ai_available", return_value=True),
+                mock.patch("matcha.ai._call_ai", return_value=raw),
+            ):
+                self.assertIsNone(ai_verdict(self._profile(), self._job()))
+
+    def test_consumes_budget(self):
+        from matcha.ai import ai_verdict, budget_used, reset_budget
+
+        reset_budget(1)
+        resp = mock.MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = {
+            "choices": [
+                {"message": {"content": '{"recommend": false, "line": "Salary below your floor."}'}}
+            ]
+        }
+        with (
+            mock.patch("matcha.ai.check_ai_available", return_value=True),
+            mock.patch("matcha.ai._get_api_key", return_value="key"),
+            mock.patch("matcha.ai._get_api_url", return_value="https://test.ai/v1"),
+            mock.patch("matcha.ai._get_model", return_value="model"),
+            mock.patch("matcha.ai.requests.post", return_value=resp),
+        ):
+            result = ai_verdict(self._profile(), self._job())
+        self.assertEqual(result["recommend"], False)
+        self.assertEqual(budget_used(), 1)
+
+    def test_wires_through_cache(self):
+        from matcha.ai import ai_verdict
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {"MATCHA_AI_CACHE": os.path.join(tmp, "cache.sqlite")},
+                ),
+                mock.patch("matcha.ai.check_ai_available", return_value=True),
+                mock.patch(
+                    "matcha.ai._call_ai",
+                    return_value='{"recommend": true, "line": "Good fit."}',
+                ) as mock_call,
+                mock.patch("matcha.ai._ai_settings", return_value={"ai": {"cache_ttl": 86400}}),
+            ):
+                first = ai_verdict(self._profile(), self._job())
+                second = ai_verdict(self._profile(), self._job())
+        self.assertEqual(first, second)
+        self.assertEqual(mock_call.call_count, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -584,3 +584,159 @@ enrichment, RSS source, coverage ≥80%, mypy debt cleanup (strategy §6.7 /
   start beyond Phase 7 scope without one.
 
 ---
+
+### 2026-08-06 — Session 16: Phase 3-adjacent polish + results-quality fixes (DONE)
+
+**Goal:** next documented step (saved-jobs enriched columns + §9.5 verdict
+pass) — then the user's live run showed "pathetic" results (13 kept, junk
+Naukri titles in the top-10, everything in a flat 22–27% band), so this
+session also fixed the underlying quality issues.
+
+- **Saved-jobs enriched columns (strategy §8/§14, F-22):** `actions.py`
+  `ENRICHED_COLUMNS` + idempotent `_migrate` (PRAGMA table_info-guarded ALTER
+  TABLE: apply_url, salary, salary_int, workplace_type, company_url,
+  listed_epoch); `save_job` → UPSERT (ON CONFLICT DO UPDATE metadata only —
+  re-saving never resets status/applied_at/notes); `job_entry()` shared by
+  SQLite + the TUI in-memory `saved_ids`; `load_saved_jobs` reads all
+  columns; Saved screen now shows Salary + Posted columns (`_saved_salary` /
+  `_saved_posted`).
+- **§9.5 verdict pass:** `ai.py` `JOB_VERDICT_PROMPT` + `ai_verdict()`
+  (task "verdict", best tier, cached + budget-limited, returns
+  `{recommend, line}`); `AIConfig.verdict_k` + `settings ai.verdict_k`
+  (default 5, 0 = off); `run_search` scores the top-K `ai_eligible` jobs
+  after enrichment (≤5 workers, quiet-aware) and stamps
+  `job["verdict"]`; `show_job_detail` renders a Verdict line; payload gains
+  `verdict_count`.
+- **Results-quality fixes (user-reported):** (1) junk listing-page titles
+  dropped by the quality gate (`filters._is_junk_title`: "Link to
+  naukri.com", "It Jobs", "It", titles ending in "Jobs", Apply Now /
+  Careers etc.) — verified live: quality −10 removed them all;
+  (2) **matcher dilution calibration** — the 53-skill profile crushed the
+  skill ratio (6/53 ≈ 0.11) and the long headline crushed title overlap; fixed
+  with skill-ratio saturation (`_SKILL_RATIO_CAP=10`) and job-title-coverage
+  scoring (stopword-filtered job tokens, `_TITLE_STOPWORDS`); verified live
+  on the real profile: enriched DevOps Engineer 24.7 → 67, AWS DevOps
+  Engineer snippet 27.1 → 45, Staff 12.7 → 36.2, score band now spreads;
+  (3) actionable hint when the location filter excludes remote jobs
+  (`filter_notes`, printed in TUI + `search --json`) — the user's run
+  silently dropped 55 remote jobs.
+- **Regression I introduced + fixed:** `closing()` in track.py/actions.py
+  silently dropped the sqlite3 context-manager COMMIT — `mark_seen` wrote
+  nothing (watch saw everything new). Fixed with an explicit commit; also
+  fixed the pre-existing py3.14 ResourceWarnings (sqlite3 context managers
+  never close connections) across track.py/actions.py/tests.
+- **Pre-existing hermeticity bug fixed:** `test_indeed_domain_present_in_
+  kwargs` called `search_jobs` without mocking the breaker — the REAL
+  `~/.matcha/source_state.json` had the Indeed circuit open (3 live
+  failures) → scrapers emptied → KeyError. Test now patches
+  `breaker_is_open`.
+- **Validation:** 646/646 tests (unittest + pytest); ruff/format/mypy (0
+  errors)/bandit clean; coverage 81% (gate ≥80%); `-W error::ResourceWarning`
+  clean; live `matcha search --json` smoke (71 found → 60 kept, quality −10,
+  top scores 49.5/45/44.5/42.5, no junk titles).
+- **Docs:** strategy → Rev 15 (§9.5 + §14 + §7.5 marked implemented, §19
+  checklist); README (verdict_k YAML, ranking calibration, filter notes,
+  saved-jobs columns, verdict detail line); memory bank synced.
+- **Next:** fresh spec or further polish — do NOT start new phases without one.
+
+---
+
+### 2026-08-06 — Session 17: AI live + results-quality round 2 (user-reported)
+
+**Goal:** user: "results are pathetic… why so low match rate… why can't you
+use AI to make smart decisions… most Naukri jobs are no longer valid."
+
+- **Root cause #1 — AI was never enabled on this machine.** The user's
+  stored Kilo key (67-char `sk-`, `MINIMAX` env) existed, but
+  `ai_provider`/`ai_url`/`ai_model` were empty ⇒ `check_ai_available()=
+  False` ⇒ query expansion, AI re-scoring and verdicts ALL ran
+  heuristic-only. Fix: `configure_provider('kilo')` (key untouched),
+  live-verified — `ai_suggest_titles` returned
+  `['DevOps Engineer','Platform Engineer','Cloud Engineer','SRE']`.
+- **Root cause #2 — pipeline order:** `rank_jobs(use_ai=True)` scored
+  BEFORE enrichment, so the AI judge saw bare snippet rows (§9.3 says
+  enriched candidates only). Fixed: extracted `_ai_rescore()` (eligible
+  top-N, parallel ≤8, re-rank) from `rank_jobs` (kept for direct callers);
+  `run_search` now: heuristic → enrich → `_ai_rescore` → re-rank →
+  `_apply_flatline_guard` (new shared helper, replaces the duplicated
+  inline flatline block) → verdicts.
+- **Root cause #3 — Naukri dead listings kept:** expired postings that
+  redirect to search pages were detected but KEPT as snippets. Now
+  `_extract_job_fields` returns an `_EXPIRED` sentinel for search-page
+  redirects and `_enrich_with_job_pages` DROPS those jobs (URLs logged at
+  warning); fetch/parse failures still keep the snippet row. Live-revealed
+  junk-title gap closed: `top companies hiring for …` / `companies hiring
+  for …` listing pages now dropped by `_is_junk_title`.
+- **Live verification (AI on):** `matcha search -q "AWS DevOps Engineer"
+  -l Hyderabad -d 3 --json` → `ai_used: True`, 36 AI calls, verdict_count
+  5, top jobs **85.0** with verdicts ("Your 4 years of AWS/Terraform
+expertise…"), 61 found → 55 kept, quality −6. (enrichment fetched 0 that
+  run — Jina/OpenCLI flaky; AI scoring picked up the slack.)
+- **Validation:** 650/650 tests (unittest + pytest) — +3 new
+  (Naukri expired-drop ×2, run_search AI-rescore-after-enrichment ×1) +
+  case additions; ruff/format/mypy (0 errors)/bandit clean.
+- **Docs:** strategy → Rev 16 (§6.2 Naukri drop, §8 re-rank step,
+  §9.3 ordering + live-verified note); memory bank synced.
+- **Next:** if the user wants richer detail, connect OpenCLI (browser
+  bridge) for LinkedIn/Indeed enrichment; optionally set
+  `settings ai.cache_ttl: 86400` to skip repeat AI spend.
+
+---
+
+### 2026-08-07 — Session 18: docs overhaul + doctor AI status + MCP AI surface (user-driven)
+
+**Goal:** user: "update the readme with the right steps incl. AI setup n env
+vars… do not miss anything" → "add a QUICKSTART" → "make doctor report AI
+availability, surface it in MCP status, sync the memory bank."
+
+- **README overhaul (verified against source, not memory):** exact "Before
+  You Run" steps (AI via `export MINIMAX=…` OR `matcha --configure` wizard
+  — which auto-skips already-configured steps); full env-var reference split
+  into AI / GitHub / Advanced with the **resolution order** (env →
+  `~/.matcha/config.json` → `settings.yaml` → provider preset); documented
+  the previously-missing `<SOURCE>_BACKEND` backend-forcing env var and
+  `XDG_CONFIG_HOME`; corrected the WRONG YAML sample (`scrapers.serpapi.key`
+  is not read — the SerpAPI key is a `--configure` secret in
+  keyring/fernet); exact AI preset models (Groq
+  `openai/gpt-oss-120b`/`openai/gpt-oss-20b`, OpenRouter `:free` models,
+  Kilo `kilo-auto/small`); complete CLI command reference
+  (search/watch/skill/mcp/github + global flags); config precedence
+  (`~/.matcha/settings.yaml` > `matcha.yaml` > `--config`); `~/.matcha`
+  file-layout table; Docker + Makefile tips; clarified there is **no `.env`
+  support** (python-dotenv installed but never loaded).
+- **QUICKSTART.md (NEW):** the 5 commands a new user needs — install
+  (venv + `pip install -e .`), run/create profile (`matcha`), enable AI
+  (`MINIMAX` or `--configure`), verify (`matcha doctor`), headless
+  (`search`/`watch --json`); README links to it from the top.
+- **Doctor AI status ("AI doctor"):** `ai.py ai_status()` — resolved
+  provider / label / best+fast models / url / `key_set` / `available`,
+  never the key; `doctor.check_all()` appends an `ai` entry (status
+  `ok`=wired / `off`=heuristic-only / `warn`=partial (key-without-provider,
+  unknown provider, missing pieces) / `error`=wrapped like sources so a
+  failure never crashes the report); URL credential-scrubbed in text + JSON;
+  `format_report` renders an "AI matching" section excluded from the source
+  ready-count. Live-verified: `matcha doctor` → "ok AI matching — Kilo
+  Gateway (default) · best kilo-auto/small · fast kilo-auto/small · key set".
+- **MCP status AI surface:** `matcha_status` already routes through
+  `check_all` → `report_to_json`, so the `ai` entry now flows into MCP
+  output automatically; tool + module docstrings updated so agents see the
+  `ai` entry shape; new hermetic test invokes the registered tool and
+  asserts provider/model/key_set/available/status.
+- **Validation:** 659/659 tests (unittest + pytest) — 650 at end of
+  Session 17; +8 doctor AI tests (snapshot resolution, ok/off/warn/
+  unknown-provider/error status mapping, URL scrub, key-leak guard, format
+  + JSON `ai` entry) +1 MCP `matcha_status` AI-entry test;
+  ruff/format/mypy (0 errors, 38 files)/bandit clean.
+- **Docs:** README + QUICKSTART updated in-session; memory bank synced here.
+- **Next:** fresh spec or further polish — do NOT start a new phase without
+  one. OpenCLI extension, mcporter, agent-reach unchanged (disconnected /
+  not installed).
+- **Addendum (post-sync): SKILL.md agent pointer + install + doc cross-link.**
+  Updated `src/matcha/skill/SKILL.md` so agents check the doctor `ai` entry
+  for AI setup (frontmatter description, resident rule 1, workflow step 1,
+  quick-command comment) and follow the repo's QUICKSTART.md 5-command path.
+  Re-installed via `matcha skill --install` → `~/.agents/skills/matcha` +
+  `~/.claude/skills/matcha` (both verified to carry the QUICKSTART pointer;
+  test_skill 5/5). QUICKSTART.md gained the reverse link — a new "Agents"
+  section pointing at `matcha skill --install` and the MCP server. No code
+  changes.

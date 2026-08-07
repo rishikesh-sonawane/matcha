@@ -116,6 +116,31 @@ class TestPayload(unittest.TestCase):
         self.assertEqual(doc["jobs"][0]["data_quality"], "full")
         json.dumps(doc)  # fully serializable
 
+    def test_build_search_payload_verdict_count_and_job_verdict(self):
+        from matcha.main import build_search_payload
+
+        run_result = {
+            "ranked": [
+                (
+                    90.0,
+                    {"title": "T", "url": "u", "verdict": {"recommend": True, "line": "Go."}},
+                    ["r"],
+                )
+            ],
+            "source_counts": {},
+            "source_errors": {},
+            "filter_summary": "",
+            "found_count": 1,
+            "ai_used": True,
+            "ai_budget_used": 1,
+            "enriched_count": 0,
+            "verdict_count": 1,
+        }
+        doc = build_search_payload("platform", "Pune", 7, run_result)
+        self.assertEqual(doc["verdict_count"], 1)
+        self.assertEqual(doc["jobs"][0]["verdict"]["recommend"], True)
+        json.dumps(doc)  # verdicts are JSON-safe (agents can consume them)
+
 
 class TestRunSearch(unittest.TestCase):
     def test_quiet_pipeline_with_fake_scraper(self):
@@ -184,6 +209,127 @@ class TestRunSearch(unittest.TestCase):
             )
             enrich.assert_not_called()
             self.assertEqual(result["enriched_count"], 0)
+
+
+class TestVerdictPass(unittest.TestCase):
+    """§9.5 top-K go/no-go verdict wiring in the shared pipeline."""
+
+    def _settings_with_ai(self, verdict_k=5):
+        settings = _settings(enrichment=False)
+        settings["ai"] = {
+            "enabled": False,
+            "top_n": 30,
+            "timeout": 60,
+            "max_calls": 60,
+            "verdict_k": verdict_k,
+        }
+        return settings
+
+    def _run(self, settings):
+        from matcha.main import SCRAPER_DEFS, run_search
+
+        verdicts = {
+            "https://jobs.acme.example/1": {"recommend": True, "line": "Great fit."},
+            "https://jobs.globex.example/2": {"recommend": False, "line": "Weak fit."},
+        }
+
+        def fake_verdict(profile, job, timeout=60):
+            return verdicts.get(job.get("url"))
+
+        with (
+            mock.patch.dict(SCRAPER_DEFS, {"Fake": _fake_scraper_factory()}, clear=True),
+            mock.patch("matcha.main.ai_verdict", side_effect=fake_verdict),
+            mock.patch("matcha.main.ai_generate_queries", return_value=None),
+            mock.patch("matcha.main.compute_relevance_ai", return_value=None),
+        ):
+            return run_search(
+                _profile(),
+                "platform",
+                "Pune",
+                7,
+                settings,
+                {},
+                ai_enabled=True,
+                quiet=True,
+            )
+
+    def test_verdicts_stamped_on_top_eligible_jobs(self):
+        result = self._run(self._settings_with_ai(verdict_k=5))
+        self.assertEqual(result["verdict_count"], 2)
+        stamped = {job["url"]: job.get("verdict") for _s, job, _r in result["ranked"]}
+        self.assertEqual(stamped["https://jobs.acme.example/1"]["recommend"], True)
+        self.assertEqual(stamped["https://jobs.globex.example/2"]["recommend"], False)
+
+    def test_verdicts_respect_top_k(self):
+        result = self._run(self._settings_with_ai(verdict_k=1))
+        self.assertEqual(result["verdict_count"], 1)
+
+    def test_verdicts_disabled_by_verdict_k_zero(self):
+        settings = self._settings_with_ai(verdict_k=0)
+        from matcha.main import SCRAPER_DEFS, run_search
+
+        with (
+            mock.patch.dict(SCRAPER_DEFS, {"Fake": _fake_scraper_factory()}, clear=True),
+            mock.patch("matcha.main.ai_verdict") as verdict,
+            mock.patch("matcha.main.ai_generate_queries", return_value=None),
+            mock.patch("matcha.main.compute_relevance_ai", return_value=None),
+        ):
+            result = run_search(
+                _profile(),
+                "platform",
+                "Pune",
+                7,
+                settings,
+                {},
+                ai_enabled=True,
+                quiet=True,
+            )
+        verdict.assert_not_called()
+        self.assertEqual(result["verdict_count"], 0)
+
+
+class TestAiRescoreAfterEnrichment(unittest.TestCase):
+    """§9.3 — the AI pass must judge ENRICHED candidates, so in run_search it
+    runs AFTER the detail pass and can re-rank by the AI verdict."""
+
+    def test_ai_rescore_after_enrichment_reranks(self):
+        from matcha.main import SCRAPER_DEFS, run_search
+
+        def fake_enrich(ranked, **kwargs):
+            # The detail pass gives top candidates real descriptions.
+            for _, job, _ in ranked:
+                job["data_quality"] = "full"
+                job["description"] = "aws kubernetes terraform docker linux ci/cd python automation"
+            return 2, ranked
+
+        def fake_ai(ranked_job, profile, ai_timeout=60):
+            # The AI judge prefers the second job even though the heuristic
+            # ranked it second — it must win the post-enrichment re-rank.
+            if ranked_job.get("url") == "https://jobs.globex.example/2":
+                return {"score": 95.0, "reasons": ["AI: direct skills fit"]}
+            return {"score": 40.0, "reasons": ["AI: weaker fit"]}
+
+        settings = _settings(enrichment=True)
+        settings["ai"]["enabled"] = True
+        with (
+            mock.patch.dict(SCRAPER_DEFS, {"Fake": _fake_scraper_factory()}, clear=True),
+            mock.patch("matcha.sources.enrichment.enrich_top_n", side_effect=fake_enrich),
+            mock.patch("matcha.main.compute_relevance_ai", side_effect=fake_ai),
+            mock.patch("matcha.main.ai_generate_queries", return_value=None),
+            mock.patch("matcha.main.ai_verdict", return_value=None),
+        ):
+            result = run_search(
+                _profile(),
+                "platform",
+                "Pune",
+                7,
+                settings,
+                {},
+                ai_enabled=True,
+                quiet=True,
+            )
+        self.assertEqual(result["ranked"][0][1]["url"], "https://jobs.globex.example/2")
+        self.assertEqual(result["ranked"][0][0], 95.0)
 
 
 class TestWatch(unittest.TestCase):
@@ -412,6 +558,48 @@ class TestMcpServer(unittest.TestCase):
             server = mcp_server.create_server()
         self.assertIs(server, fastmcp_cls.return_value)
         self.assertTrue(fastmcp_cls.return_value.tool.called)
+
+    def test_matcha_status_includes_ai_entry(self):
+        """Session 18: the MCP status tool surfaces AI availability — provider,
+        models, key_set — via the doctor report's `ai` entry."""
+        import matcha.mcp_server as mcp_server
+
+        fastmcp_cls = mock.MagicMock()
+        with (
+            mock.patch.object(mcp_server, "HAS_MCP", True),
+            mock.patch.object(mcp_server, "FastMCP", fastmcp_cls, create=True),
+        ):
+            mcp_server.create_server()
+        tool_calls = {
+            c.args[0].__name__: c.args[0]
+            for c in fastmcp_cls.return_value.tool.return_value.call_args_list
+        }
+        self.assertIn("matcha_status", tool_calls)
+
+        ai_snapshot = {
+            "provider": "kilo",
+            "provider_label": "Kilo Gateway (default)",
+            "known_provider": True,
+            "requires_key": True,
+            "key_set": True,
+            "url": "https://api.kilo.ai/api/gateway",
+            "model_best": "kilo-auto/small",
+            "model_fast": "kilo-auto/small",
+            "available": True,
+        }
+        with (
+            mock.patch("matcha.doctor.ai_status", return_value=ai_snapshot),
+            mock.patch("matcha.sources.linkedin.probe_url", return_value=("ok", "probed")),
+            mock.patch("matcha.sources.indeed.probe_url", return_value=("ok", "probed")),
+            mock.patch("matcha.sources.remoteok.probe_url", return_value=("ok", "probed")),
+            mock.patch("matcha.sources.serpapi_jobs.check_serpapi_available", return_value=False),
+        ):
+            doc = json.loads(tool_calls["matcha_status"]())
+        self.assertEqual(doc["ai"]["provider"], "kilo")
+        self.assertEqual(doc["ai"]["model_best"], "kilo-auto/small")
+        self.assertEqual(doc["ai"]["status"], "ok")
+        self.assertTrue(doc["ai"]["key_set"])
+        self.assertTrue(doc["ai"]["available"])
 
 
 if __name__ == "__main__":

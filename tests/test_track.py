@@ -59,11 +59,14 @@ class TestTrack(unittest.TestCase):
         self.assertEqual(len(new2), 2)  # still new — never recorded
 
     def test_repeat_sighting_bumps_seen_count(self):
+        from contextlib import closing
+
         from matcha.track import DB_PATH, mark_seen
 
         mark_seen([{"url": "u1", "title": "A"}])
         mark_seen([{"url": "u1", "title": "A"}])
-        with sqlite3.connect(str(DB_PATH)) as conn:
+        # closing(): the sqlite3 connection context manager never closes.
+        with closing(sqlite3.connect(str(DB_PATH))) as conn:
             row = conn.execute("SELECT seen_count FROM seen_urls WHERE url = 'u1'").fetchone()
         self.assertEqual(row[0], 2)
 

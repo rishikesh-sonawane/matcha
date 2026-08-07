@@ -222,6 +222,32 @@ class TestFlatlineGuard(unittest.TestCase):
         self.assertEqual(normalize_scores([70.0]), [70.0])
 
 
+class TestCalibrationDilution(unittest.TestCase):
+    """§9.1 calibration fixes: large skill lists and long headlines must not
+    dilute real matches into a flat low band (user-reported: everything ~25%)."""
+
+    def test_large_skill_list_not_diluted(self):
+        big_profile = {**PROFILE, "skills": PROFILE["skills"] + [f"extra{i}" for i in range(40)]}
+        result = compute_relevance(_job(data_quality="full"), big_profile)
+        # 6 matches / capped denom (10) → skills ≈ 21; title+loc+seniority top it up.
+        self.assertGreaterEqual(result["score"], 60)
+
+    def test_title_match_not_diluted_by_long_headline(self):
+        verbose = {
+            **PROFILE,
+            "headline": (
+                PROFILE["headline"]
+                + " with years of aws experience building and operating enterprise "
+                "cloud infrastructure and ci cd platforms as code across regions"
+            ),
+        }
+        job = _job(title="AWS DevOps Engineer", description="", data_quality="snippet")
+        result = compute_relevance(job, verbose)
+        # Every job-title token is covered by the profile → ~25 title points even
+        # as a bare snippet (the old all-profile-tokens denominator scored ~0).
+        self.assertGreaterEqual(result["score"], 45)
+
+
 class TestProvenanceStamping(unittest.TestCase):
     """Result-level provenance is stamped onto every row at ingest (§6.2)."""
 

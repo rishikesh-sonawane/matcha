@@ -241,6 +241,38 @@ def check_ai_available() -> bool:
     return bool(_get_api_key() and _get_api_url() and _get_model())
 
 
+def ai_status() -> dict[str, Any]:
+    """Machine-readable AI configuration snapshot (used by ``matcha doctor``).
+
+    Returns the RESOLVED values a run would actually use (env var →
+    config.json → settings.yaml → provider preset default). The API key
+    itself is NEVER returned — only a ``key_set`` boolean — so doctor
+    output can never leak credentials.
+    """
+    provider = _get_provider()
+    preset = PROVIDERS.get(provider, {})
+    requires_key = bool(preset.get("requires_key", True))
+    key_set = bool(_get_api_key())
+    url = _get_api_url()
+    model_best = _get_model("best")
+    model_fast = _get_model("fast")
+    # Availability verdict computed from the exact resolved values shown
+    # above (mirrors check_ai_available): needs URL + model, plus a key
+    # unless the provider is keyless (local endpoints).
+    available = bool(url and model_best) and (key_set or not requires_key)
+    return {
+        "provider": provider,  # "" = no provider configured
+        "provider_label": preset.get("label", "") or "Not configured",
+        "known_provider": provider in PROVIDERS,
+        "requires_key": requires_key,
+        "key_set": key_set,
+        "url": url,
+        "model_best": model_best,
+        "model_fast": model_fast,
+        "available": available,
+    }
+
+
 def configure_ai(key: str, url: str = "", model: str = "") -> None:
     config = load_config()
     config[CONFIG_KEY] = key
@@ -633,3 +665,89 @@ def ai_score_job(
         "score": max(0, min(100, round(float(score), 1))),
         "reasons": parsed.get("reasons", [])[:8],
     }
+
+
+JOB_VERDICT_PROMPT = """You are a senior recruiter advising one candidate. Give a crisp go/no-go verdict on ONE job.
+
+CANDIDATE PROFILE:
+- Current Title: {title}
+- Headline: {headline}
+- Skills: {skills}
+- Experience: {experience} years
+- Summary: {summary}
+- Preferred Location: {location}
+
+JOB:
+- Title: {job_title}
+- Company: {job_company}
+- Location: {job_location}
+- Salary: {job_salary}
+- Description: {job_description}
+
+Return valid JSON:
+{{
+  "recommend": true or false,
+  "line": "one short sentence (<20 words) explaining the recommendation"
+}}
+
+Rules:
+- recommend=true only if you would genuinely tell THIS candidate to apply
+- The line must be specific to this candidate + this job (skills overlap, seniority fit, location or salary concerns) — never generic filler"""
+
+
+def ai_verdict(
+    profile: dict[str, Any], job: dict[str, Any], timeout: int = 60
+) -> dict[str, Any] | None:
+    """Optional final verdict (§9.5): "would you actually recommend applying?"
+
+    Returns ``{"recommend": bool, "line": str}`` (rendered in the TUI detail
+    panel + surfaced in ``search --json``) or None when unavailable / unparsable.
+    Gated on AI availability, cached + budget-limited like every other task.
+    Callers gate on ``matcher.ai_eligible`` so bare snippet rows are never
+    judged.
+    """
+    if not check_ai_available():
+        return None
+    title = profile.get("title", "") or profile.get("headline", "")
+    headline = profile.get("headline", "") or title
+    skills = ", ".join(profile.get("skills", [])) or "None specified"
+    experience = profile.get("experience", "") or "Not specified"
+    summary = (profile.get("summary", "") or "")[:500]
+    location = profile.get("location", "") or ""
+
+    job_title = job.get("title", "")
+    job_company = job.get("company", "")
+    job_location = job.get("location", "")
+    job_salary = job.get("salary", "") or ""
+    job_description = (job.get("description", "") or "")[:1000]
+
+    prompt = JOB_VERDICT_PROMPT.format(
+        title=title,
+        headline=headline,
+        skills=skills,
+        experience=experience,
+        summary=summary,
+        location=location,
+        job_title=job_title,
+        job_company=job_company,
+        job_location=job_location,
+        job_salary=job_salary,
+        job_description=job_description,
+    )
+    result = _run_with_cache(
+        "verdict",
+        [{"role": "user", "content": prompt}],
+        max_tokens=4096,
+        timeout=timeout,
+        tier="best",
+    )
+    if not result:
+        return None
+    parsed = _extract_json(result)
+    if not parsed or not isinstance(parsed, dict):
+        return None
+    recommend = parsed.get("recommend")
+    line = parsed.get("line")
+    if not isinstance(recommend, bool) or not isinstance(line, str) or not line.strip():
+        return None
+    return {"recommend": recommend, "line": line.strip()}

@@ -57,6 +57,28 @@ _PLACEHOLDER = frozenset(
 )
 _TRACKING_URL = re.compile(r"(rc/clk|pagead/clk)", re.IGNORECASE)
 
+#: Navigation/listing-page titles leaked into results by snippet fallbacks
+#: (DDGS discovery for Naukri etc.) — never real postings. Titles ending in
+#: "Jobs" ("Developer Tcs Jobs", "It Jobs", "DevOps - Jobs") are listing-page
+#: artifacts; real titles end with the role. Conservative: single generic
+#: words and boilerplate. NOTE: this must NOT fold in _PLACEHOLDER — F-12
+#: keeps placeholder-title jobs whose company is real (never over-drop);
+#: placeholders are handled by their own rule below.
+_JUNK_TITLE_RE = re.compile(
+    r"^(link to\b|it jobs?$|it$|job(s)?$|hiring$|openings?$|vacanc(y|ies)$|"
+    r"careers?$|sign in$|log in$|logon$|search$|apply now$|view (job|more)$|"
+    r"see (all )?jobs?$|submit$|register$)"
+    r"|(^|\s)(jobs? in|jobs? at|jobs? for|apply for)\b"
+    r"|^top companies? (hiring|hiring for)\b"
+    r"|(^|\s)companies? hiring for\b"
+    r"|([\w-]+)\s+jobs?$",
+    re.IGNORECASE,
+)
+
+
+def _is_junk_title(title: str) -> bool:
+    return bool(_JUNK_TITLE_RE.search(title.strip().lower()))
+
 
 def _filter_quality(
     jobs: list[dict[str, Any]],
@@ -72,6 +94,8 @@ def _filter_quality(
 
         if not title:
             continue  # empty title
+        if _is_junk_title(job.get("title", "")):
+            continue  # listing-page/nav noise leaked by snippet fallbacks
         if (title in _PLACEHOLDER or title.startswith("naukri")) and company in _PLACEHOLDER:
             continue  # title AND company both placeholder (F-12: never over-drop)
         if not url:
@@ -201,6 +225,7 @@ def _filter_location(
     profile_region = normalize_region(profile_loc)
 
     kept: list[dict[str, Any]] = []
+    remote_dropped = 0
     for job in jobs:
         remote = bool(job.get("remote_ok"))
         if force_remote:
@@ -210,6 +235,8 @@ def _filter_location(
         if remote:
             if remote_acceptable:
                 kept.append(job)
+            else:
+                remote_dropped += 1
             continue  # remote job, but the user wants on-site only
         city = normalize_city(str(job.get("location") or ""))
         region = normalize_region(str(job.get("location") or ""))
@@ -221,7 +248,14 @@ def _filter_location(
             kept.append(job)  # region fallback
         elif not city:
             kept.append(job)  # unknown location — kept (ranked lower later)
-    return kept, FilterReport("location", len(kept), len(jobs) - len(kept))
+    report = FilterReport("location", len(kept), len(jobs) - len(kept))
+    # Silent mass-remote drops confuse users (a DevOps search often IS remote).
+    if remote_dropped and not force_remote:
+        report.reason = (
+            f"{remote_dropped} remote job(s) excluded — set filters.remote: true "
+            "or profile remote_preference: remote/hybrid to include them"
+        )
+    return kept, report
 
 
 # ---------------------------------------------------------------------------
@@ -307,6 +341,22 @@ def build_filter_summary(reports: list[FilterReport]) -> str:
         if report.unknown:
             parts.append(f"{report.name} ?{report.unknown}")
     return " · ".join(parts)
+
+
+def filter_notes(reports: list[FilterReport]) -> list[str]:
+    """Actionable notes beyond the drop counts (currently the remote hint).
+
+    Stage-failure messages are deliberately excluded — those are diagnostics,
+    not user guidance.
+    """
+    for report in reports:
+        if (
+            report.name == "location"
+            and report.reason
+            and not report.reason.startswith("stage failed")
+        ):
+            return [report.reason]
+    return []
 
 
 def provenance_tags(job: dict[str, Any]) -> list[str]:

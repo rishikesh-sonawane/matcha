@@ -16,8 +16,9 @@ Verified 2026-08-06 against a live ``www.naukri.com/job-listings-*`` page:
   ever server-renders again, the embedded ``application/ld+json``
   JobPosting / ``__NEXT_DATA__`` data wins.
 - Expired postings redirect to search pages ("Jobs In ... - N Job
-  Vacancies") — detected and skipped so stale links never masquerade as
-  jobs.
+  Vacancies") — detected and **dropped** so stale links never masquerade
+  as jobs. A mere fetch/parse failure still keeps the snippet row (with
+  ``enrich_error``) — only a definitive dead-posting signal removes it.
 
 Rate limits: the anonymous Jina tier is aggressive, so at most
 ``_JOB_PAGE_MAX`` postings are fetched per batch (same cap philosophy as
@@ -71,6 +72,13 @@ _MAX_DESCRIPTION = 3000
 #: client-side shell; below this size the direct fetch is a shell and the
 #: parser must not waste time on it.
 _DIRECT_FETCH_MIN_BYTES = 50_000
+
+#: Sentinel from ``_extract_job_fields``: the posting is DEFINITIVELY dead —
+#: the page redirected to a Naukri search listing (expired/closed posting).
+#: Such jobs are dropped from the result set (F-12 spirit: never surface a
+#: listing that no longer exists as a job), unlike a mere fetch/parse failure
+#: which keeps the snippet data with an ``enrich_error``.
+_EXPIRED = "EXPIRED"
 
 #: Common Indian cities (slug form) — used to split title/company/location out
 #: of Naukri's ``job-listings-<title>-<company>-<city>-...-<exp>-<jobid>`` URLs.
@@ -364,7 +372,9 @@ def _enrich_with_job_pages(result: ScraperResult, **kwargs: Any) -> None:
 
     Only ``job-listings-*`` URLs are real postings; at most ``_JOB_PAGE_MAX``
     are fetched per batch (Jina rate-limit cap), in parallel, each isolated —
-    a failing page keeps the snippet job and sets ``enrich_error``.
+    a failing page keeps the snippet job and sets ``enrich_error``; a page
+    that definitively redirects to a search page (expired posting) is dropped
+    from the batch.
     """
     targets = [j for j in result.jobs if _is_job_url(str(j.get("url") or ""))][:_JOB_PAGE_MAX]
     if not targets:
@@ -380,11 +390,20 @@ def _enrich_with_job_pages(result: ScraperResult, **kwargs: Any) -> None:
             except Exception as e:  # noqa: BLE001 — per-job isolation is the contract
                 logger.warning("Naukri job-page worker raised: %s", e)
                 fields = None
-            if fields:
+            if fields == _EXPIRED:
+                # Definitive dead posting (redirected to a search page) — drop
+                # it so stale/closed listings never surface as jobs.
+                job["dead"] = True
+            elif isinstance(fields, dict):
                 _merge_job_fields(job, fields)
             else:
                 job["enrich_error"] = "job page fetch/parse failed"
                 job["data_quality"] = "snippet"  # provenance: snippet data kept
+
+    if any(j.get("dead") for j in result.jobs):
+        dead_urls = [str(j.get("url", "?")) for j in result.jobs if j.get("dead")]
+        result.jobs = [j for j in result.jobs if not j.pop("dead", False)]
+        logger.warning("Dropped %d expired Naukri posting(s): %s", len(dead_urls), dead_urls)
 
     enriched = sum(1 for j in result.jobs if j.get("enrich_source") == "job-page")
     if not enriched:
@@ -401,7 +420,7 @@ def _enrich_with_job_pages(result: ScraperResult, **kwargs: Any) -> None:
     result.backend = "job-page"
 
 
-def _fetch_and_extract(job: dict[str, Any], timeout: int) -> dict[str, Any] | None:
+def _fetch_and_extract(job: dict[str, Any], timeout: int) -> dict[str, Any] | str | None:
     url = str(job.get("url") or "")
     text = _fetch_job_page(url, timeout)
     if not text:
@@ -433,8 +452,15 @@ def _looks_server_rendered(html: str) -> bool:
     return "application/ld+json" in html or "__NEXT_DATA__" in html
 
 
-def _extract_job_fields(text: str, url: str) -> dict[str, Any] | None:
-    """Extract job fields from a fetched page (embedded JSON or rendered text)."""
+def _extract_job_fields(text: str, url: str) -> dict[str, Any] | str | None:
+    """Extract job fields from a fetched page (embedded JSON or rendered text).
+
+    Returns ``_EXPIRED`` when the page is definitively a search-page redirect
+    (expired/closed posting) — the caller drops the job instead of keeping it
+    as a stale listing.
+    """
+    if _is_search_page_render(text):
+        return _EXPIRED
     if "application/ld+json" in text or "__NEXT_DATA__" in text:
         fields = _parse_embedded(text, url)
         if fields:
