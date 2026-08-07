@@ -679,6 +679,8 @@ make it more reliable."
   `matcha.sources.utils.time.sleep` so the suite stays fast; (2) the 30-rpm
   comment now justifies the rate by batch budget (30 tokens ≈ 19 calls with
   ~10s headroom vs the 75s timeout) instead of "proven safe".
+- **Committed + pushed** as `a806a0b` (12 files, +263/−40) — repo in sync
+  with `origin/main`.
 - **Docs:** memory bank synced (this entry).
 - **Next:** fresh spec or further polish — do NOT start a new phase without one.
 

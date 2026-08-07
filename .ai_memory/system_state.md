@@ -280,14 +280,15 @@ one.
 - Makefile targets: `run` / `test` / `test-coverage` / `lint` / `format` /
   `static-analysis` / `pre-commit` / `check`.
 
-## Git State (2026-08-06, post-Phase-7)
+## Git State (2026-08-07, post-Session-23)
 
-- Branch `main`, ahead of `origin/main`. Committed: `bf70014` (Phase 1-2-4),
-  `bb87e7c` (docs sync), `430c323` (Phase 5), `9c062bb` (Phase 6).
-  **Phase 7 is the current uncommitted work** (breaker.py / rss.py /
-  utils.py / config.py / errors.py / profile.py / agent_reach_io.py /
-  actions.py / settings.py / base.py / main.py / doctor.py + 11 test files
-  + pyproject/CI/Makefile + docs). Nothing is pushed.
+- Branch `main`, **in sync with `origin/main`** (nothing uncommitted, nothing
+  unpushed). HEAD: `a806a0b` (Session 23 — Web Search/DDGS flakiness fixed
+  at the root). Recent history: `a13afde` (Session 22 — no fake US jobs, no
+  [age?] noise, no source error spam), `54eb272` (Session 21 — no HTTP
+  caching, no-repeat result lists, all sources alive), plus the earlier
+  Session 16–20 commits and Phase 0–7 work. Sessions 16–23 are all
+  committed and pushed.
 
 ## Matcha 2.0 Roadmap (from revamp/matcha-2.0-strategy.md §18)
 
