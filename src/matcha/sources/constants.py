@@ -267,7 +267,9 @@ NON_JOB_TITLE_PATTERNS: list[re.Pattern] = [
     # Session 27: tutorial/guide articles ("How to Become a DevOps Engineer:
     # Skills & Career" from a course marketplace) are not postings.
     re.compile(r"^how\s+to\s+(become|learn|get)\s+", re.IGNORECASE),
-    re.compile(r"^(top\s+)?\d+\s*(skills|certifications?|courses?|ways)\s+(to|for)\b", re.IGNORECASE),
+    re.compile(
+        r"^(top\s+)?\d+\s*(skills|certifications?|courses?|ways)\s+(to|for)\b", re.IGNORECASE
+    ),
     re.compile(r"^Job Application\s+for\s+", re.IGNORECASE),
     re.compile(r"^Application\s+for\s+", re.IGNORECASE),
     re.compile(r"^Sign\s+In", re.IGNORECASE),

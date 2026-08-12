@@ -334,9 +334,7 @@ _EXA_TEXT_BLOCK_RE = re.compile(
 )
 #: Lenient fallback: Exa may omit Author:/Published: (or reorder) — a real
 #: posting must never be dropped because a secondary field is missing.
-_EXA_TITLE_URL_RE = re.compile(
-    r"^Title:\s*(?P<title>.+?)\nURL:\s*(?P<url>\S+)", re.DOTALL
-)
+_EXA_TITLE_URL_RE = re.compile(r"^Title:\s*(?P<title>.+?)\nURL:\s*(?P<url>\S+)", re.DOTALL)
 
 
 def _collect_content_text(node: Any, depth: int = 0) -> str:

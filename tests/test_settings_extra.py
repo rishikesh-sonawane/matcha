@@ -78,9 +78,7 @@ class TestLoadSettings(unittest.TestCase):
         round-trip and partially override the default per-source caps."""
         with tempfile.TemporaryDirectory() as d:
             cfg = Path(d) / "custom.yaml"
-            cfg.write_text(
-                "scrapers:\n  query_caps:\n    Web Search: 4\n", encoding="utf-8"
-            )
+            cfg.write_text("scrapers:\n  query_caps:\n    Web Search: 4\n", encoding="utf-8")
             s = settings_mod.load_settings(config_path=str(cfg))
         caps = s["scrapers"]["query_caps"]
         self.assertEqual(caps["Web Search"], 4)

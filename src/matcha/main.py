@@ -662,9 +662,7 @@ def run_search(
     # Search runs the slow DDGS path and its cap is clamped back to 3.
     # Overridable via scrapers.query_caps.
     query_caps = effective_query_caps(settings)
-    batch_timeout = int(
-        (settings.get("search") or {}).get("batch_timeout", DEFAULT_BATCH_TIMEOUT)
-    )
+    batch_timeout = int((settings.get("search") or {}).get("batch_timeout", DEFAULT_BATCH_TIMEOUT))
     jobs, source_counts, source_errors = search_jobs(
         queries,
         location,

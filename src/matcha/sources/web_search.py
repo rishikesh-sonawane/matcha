@@ -563,6 +563,3 @@ def _extract_location(snippet: str, url: str, title: str) -> str:
             if len(loc) < 40 and find_city_in_text(loc):
                 return loc
     return "Remote / Unspecified"
-
-
-
