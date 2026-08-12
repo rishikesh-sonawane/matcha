@@ -662,13 +662,9 @@ class TestWebSearch(unittest.TestCase):
         self.assertEqual(_extract_company_from_url("https://acme.com/jobs/3"), "Acme")
         # ATS platform host without a company subdomain: company lives in the
         # path, so the host cannot name it — caller falls back to author/text.
-        self.assertEqual(
-            _extract_company_from_url("https://boards.greenhouse.io/acme/12345"), ""
-        )
+        self.assertEqual(_extract_company_from_url("https://boards.greenhouse.io/acme/12345"), "")
         # Company label BEFORE a generic subdomain is still found
-        self.assertEqual(
-            _extract_company_from_url("https://acme.jobs.lever.co/80f1379e"), "Acme"
-        )
+        self.assertEqual(_extract_company_from_url("https://acme.jobs.lever.co/80f1379e"), "Acme")
         # Generic-label-before-platform: company is in the path (jobs.lever.co/acme)
         self.assertEqual(_extract_company_from_url("https://jobs.lever.co/acme/123"), "")
         # www2. stripped, then company found
@@ -743,7 +739,9 @@ class TestWebSearch(unittest.TestCase):
             ),
         ):
             self.assertFalse(
-                _url_is_live("https://koch.avature.net/en_US/careers/JobDetail/Platform-Engineer/188227")
+                _url_is_live(
+                    "https://koch.avature.net/en_US/careers/JobDetail/Platform-Engineer/188227"
+                )
             )
         # A 403 IN PLACE (no error-path redirect — Indeed/WWR/Foundit style)
         # is still ambiguous and stays alive.
@@ -756,7 +754,9 @@ class TestWebSearch(unittest.TestCase):
         # (whole-segment match only)
         with mock.patch(
             "matcha.sources.web_search.resilient_get",
-            return_value=_Resp({}, status_code=200, url="https://a.com/job/error-handling-engineer"),
+            return_value=_Resp(
+                {}, status_code=200, url="https://a.com/job/error-handling-engineer"
+            ),
         ):
             self.assertTrue(_url_is_live("https://a.com/job/error-handling-engineer"))
         # Error-path redirect on a 200 is dead too (soft-404 with a redirect)
@@ -777,7 +777,9 @@ class TestWebSearch(unittest.TestCase):
         # (Avature/Koch returns exactly this) — the body marker catches it.
         with mock.patch(
             "matcha.sources.web_search.resilient_get",
-            return_value=_Resp({}, status_code=200, text="Page not found", url="https://a.com/job/1"),
+            return_value=_Resp(
+                {}, status_code=200, text="Page not found", url="https://a.com/job/1"
+            ),
         ):
             self.assertFalse(_url_is_live("https://a.com/job/1"))
         # 200 with a normal job body is alive
@@ -830,6 +832,7 @@ class TestWebSearch(unittest.TestCase):
                 "text": "aws kubernetes in Pune",
             },
         ]
+
         # URL-keyed side_effect: the probe runs in a parallel pool, so list
         # side_effects would be consumed in nondeterministic order.
         def probe(url):

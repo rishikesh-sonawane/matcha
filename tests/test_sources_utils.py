@@ -136,7 +136,6 @@ class _FakeClient:
 
 
 class TestDdgsText(unittest.TestCase):
-
     def _factory(self, client):
         return lambda *a, **k: client
 
@@ -228,7 +227,9 @@ class TestQueryRelevance(unittest.TestCase):
         # The Session 27 poster-child: a Canadian hospital intake-assistant
         # row surfaced for a "DevOps Engineer Pune" site: query.
         self.assertFalse(
-            self._rel("Halton Healthcare Intake Assistant", "caregiving role", "DevOps Engineer", "Pune")
+            self._rel(
+                "Halton Healthcare Intake Assistant", "caregiving role", "DevOps Engineer", "Pune"
+            )
         )
         self.assertFalse(self._rel("COMPLY", "regtech careers", "DevOps Engineer", "Pune"))
 
@@ -238,9 +239,13 @@ class TestQueryRelevance(unittest.TestCase):
         # "Metabase" (jobs.lever.co/metabase) must drop even if its snippet
         # mentions the query words.
         self.assertFalse(
-            self._rel("Metabase", "devops engineer pune roles at metabase", "DevOps Engineer", "Pune")
+            self._rel(
+                "Metabase", "devops engineer pune roles at metabase", "DevOps Engineer", "Pune"
+            )
         )
-        self.assertFalse(self._rel("PayU", "cloud devops engineer careers", "DevOps Engineer", "Pune"))
+        self.assertFalse(
+            self._rel("PayU", "cloud devops engineer careers", "DevOps Engineer", "Pune")
+        )
 
     def test_empty_query_passes_everything(self):
         self.assertTrue(self._rel("Anything At All", "...", ""))

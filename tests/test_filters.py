@@ -170,7 +170,9 @@ class TestQualityFilter(unittest.TestCase):
         # single-word page-title artifact is dropped).
         kept, _ = apply_filters([_job(title="COMPLY Software", company="COMPLY Software")], {})
         self.assertEqual(len(kept), 1)
-        kept, _ = apply_filters([_job(title="AWS DevOps Engineer", company="AWS DevOps Engineer")], {})
+        kept, _ = apply_filters(
+            [_job(title="AWS DevOps Engineer", company="AWS DevOps Engineer")], {}
+        )
         self.assertEqual(len(kept), 1)
 
 
