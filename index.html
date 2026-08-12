@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Matcha 🍵 — AI-Powered Job Search from Your Terminal</title>
+<meta name="description" content="Matcha is a multi-source job aggregator with AI-powered relevance ranking. Search LinkedIn, Indeed, Naukri, RemoteOK and the web from your terminal, and get only the jobs that actually fit your profile.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍵</text></svg>">
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg-soft: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --green: #3fb950;
+    --green-bright: #56d364;
+    --teal: #2ea043;
+    --accent: #d2a8ff;
+    --yellow: #e3b341;
+    --red: #f85149;
+    --code-bg: #0d1117;
+    --maxw: 860px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, pre {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.9em;
+  }
+  code { background: var(--bg-soft); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 18px;
+    overflow-x: auto;
+    margin: 12px 0;
+    font-size: 0.85em;
+    line-height: 1.55;
+  }
+  pre .c { color: var(--muted); }
+  pre .k { color: var(--green-bright); }
+
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+  /* Hero */
+  header.hero {
+    background: linear-gradient(180deg, #0d1117 0%, #101823 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 72px 0 64px;
+    text-align: center;
+  }
+  .hero .emoji { font-size: 56px; line-height: 1; }
+  .hero h1 { font-size: 44px; font-weight: 800; letter-spacing: -1px; margin: 18px 0 8px; }
+  .hero h1 .matcha { color: var(--green-bright); }
+  .hero .tagline { font-size: 18px; color: var(--muted); max-width: 560px; margin: 0 auto 28px; }
+  .hero-buttons { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+  .btn {
+    display: inline-block;
+    padding: 11px 22px;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 15px;
+    border: 1px solid var(--border);
+    background: var(--bg-soft);
+    color: var(--text);
+    transition: transform .12s ease, border-color .12s ease, background .12s ease;
+  }
+  .btn:hover { transform: translateY(-1px); text-decoration: none; border-color: var(--muted); }
+  .btn.primary { background: var(--green); border-color: var(--green); color: #0d1117; }
+  .btn.primary:hover { background: var(--green-bright); border-color: var(--green-bright); }
+  .badges { margin-top: 26px; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+  .badges span {
+    font-size: 12px; padding: 4px 10px; border-radius: 20px;
+    border: 1px solid var(--border); color: var(--muted);
+  }
+  .badges span b { color: var(--text); font-weight: 600; }
+
+  /* Terminal mock */
+  .terminal {
+    max-width: 680px; margin: -30px auto 0; position: relative; z-index: 5;
+    background: #010409; border: 1px solid var(--border); border-radius: 10px;
+    box-shadow: 0 20px 60px rgba(0,0,0,.5);
+    overflow: hidden; text-align: left;
+  }
+  .terminal .bar {
+    display: flex; align-items: center; gap: 6px;
+    background: var(--bg-soft); padding: 10px 14px; border-bottom: 1px solid var(--border);
+  }
+  .terminal .bar .dot { width: 11px; height: 11px; border-radius: 50%; }
+  .terminal .bar .dot.r { background: #ff5f56; }
+  .terminal .bar .dot.y { background: #ffbd2e; }
+  .terminal .bar .dot.g { background: #27c93f; }
+  .terminal .bar .title { color: var(--muted); font-size: 12px; margin-left: 10px; font-family: ui-monospace, monospace; }
+  .terminal pre { border: none; margin: 0; padding: 18px 20px; border-radius: 0; font-size: 0.8em; }
+  .terminal .p { color: var(--green-bright); }
+
+  /* Sections */
+  section { padding: 72px 0; border-bottom: 1px solid var(--border); }
+  section.alt { background: var(--bg-soft); }
+  h2 { font-size: 28px; font-weight: 800; letter-spacing: -0.5px; margin-bottom: 8px; }
+  h2 .hash { color: var(--green); }
+  .lead { color: var(--muted); margin-bottom: 32px; font-size: 16px; }
+  h3 { font-size: 18px; font-weight: 700; margin: 26px 0 10px; }
+
+  .feature-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 12px; }
+  @media (max-width: 640px) { .feature-grid { grid-template-columns: 1fr; } }
+  .feature {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
+    padding: 20px 22px;
+  }
+  .feature .icon { font-size: 22px; }
+  .feature h4 { font-size: 15px; margin: 8px 0 6px; }
+  .feature p { color: var(--muted); font-size: 14px; }
+
+  ol.steps { counter-reset: step; list-style: none; margin-top: 12px; }
+  ol.steps > li {
+    position: relative; padding: 0 0 0 52px; margin-bottom: 34px;
+  }
+  ol.steps > li::before {
+    counter-increment: step; content: counter(step);
+    position: absolute; left: 0; top: 0;
+    width: 34px; height: 34px; border-radius: 50%;
+    background: var(--bg-soft); border: 1px solid var(--green);
+    color: var(--green-bright); font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 15px;
+  }
+  ol.steps h3 { margin-top: 0; }
+  ol.steps p.hint { color: var(--muted); font-size: 14px; margin-top: 8px; }
+
+  table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 14px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; }
+  td code { white-space: nowrap; }
+
+  .sources { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 12px; }
+  @media (max-width: 700px) { .sources { grid-template-columns: repeat(2, 1fr); } }
+  .source {
+    text-align: center; padding: 18px 10px; border: 1px solid var(--border);
+    border-radius: 10px; background: var(--bg);
+  }
+  .source .s { font-size: 24px; }
+  .source .n { font-size: 13px; font-weight: 600; margin-top: 8px; }
+  .source .f { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+  .quote {
+    border-left: 3px solid var(--green); background: var(--bg);
+    padding: 16px 20px; border-radius: 0 8px 8px 0; margin: 18px 0;
+    color: var(--muted); font-size: 15px;
+  }
+  .quote code { white-space: nowrap; }
+
+  footer {
+    padding: 40px 0; text-align: center; color: var(--muted); font-size: 14px;
+  }
+  footer .heart { color: var(--red); }
+  .homepage-note { text-align:center; color: var(--muted); font-size: 13px; margin-top: 12px; }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="emoji">🍵</div>
+    <h1><span class="matcha">Matcha</span> — your next role, perfectly brewed.</h1>
+    <p class="tagline">Multi-source job search from your terminal with AI-powered relevance ranking. Enter your profile once — get ranked, personalized matches from across the web.</p>
+    <div class="hero-buttons">
+      <a class="btn primary" href="https://github.com/rishikesh-sonawane/matcha">⭐ View on GitHub</a>
+      <a class="btn" href="https://github.com/rishikesh-sonawane/matcha/blob/main/QUICKSTART.md">⚡ 5-Command Quickstart</a>
+      <a class="btn" href="https://github.com/rishikesh-sonawane/matcha/wiki">📖 Wiki</a>
+    </div>
+    <div class="badges">
+      <span><b>Python 3.10+</b></span>
+      <span><b>No API keys required</b> for core search</span>
+      <span><b>200–500+ jobs</b> per search</span>
+      <span><b>8 sources</b> in parallel</span>
+      <span><b>AI ranking</b> optional</span>
+      <span>MIT license</span>
+    </div>
+  </div>
+</header>
+
+<div class="terminal">
+  <div class="bar">
+    <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+    <span class="title">matcha — ranked search</span>
+  </div>
+<pre><span class="p">$</span> venv/bin/matcha search -q "Platform Engineer" -l Pune -d 7 --json
+
+<span class="c"># 207 total jobs found (AI) · 8 sources searched in parallel</span>
+
+<span class="k">Found 207 total jobs (AI)</span>
+  83 from Indeed | 1 from LinkedIn | 44 from Naukri | 31 from RemoteOK | 64 from Web Search
+
+<span class="c"># ranked by match_score, filtered centrally (quality → age → skills → location → salary)</span>
+
+<span class="k">1. 92%  AWS Devops Engineer   Capgemini    LinkedIn   [full]</span>
+<span class="k">2. 92%  Software Engineer II  Microsoft    Indeed     [full]</span>
+<span class="k">3. 92%  DevOps Engineer-III   ADCI         Indeed     [full]</span>
+<span class="k">4. 85%  devOps engineer       Redbytes     Indeed     [partial]</span>
+<span class="k">5. 82%  NTT Data AWS Cloud    NTT Data     LinkedIn   [full]</span></pre>
+</div>
+
+<section id="what">
+  <div class="wrap">
+    <h2><span class="hash">#</span> Why Matcha</h2>
+    <p class="lead">Job boards show you <em>every</em> posting that matches a keyword. Matcha shows you only the ones that actually fit <em>your</em> profile.</p>
+    <div class="feature-grid">
+      <div class="feature">
+        <div class="icon">🔀</div>
+        <h4>Multi-source aggregation</h4>
+        <p>LinkedIn, Indeed, Naukri, RemoteOK, Web Search, RSS, Google Jobs, and 200+ career sites — searched in parallel from one command.</p>
+      </div>
+      <div class="feature">
+        <div class="icon">🧠</div>
+        <h4>Two-pass relevance engine</h4>
+        <p>A confidence-weighted heuristic scores every job instantly; an optional AI pass re-scores your top candidates with real semantic understanding.</p>
+      </div>
+      <div class="feature">
+        <div class="icon">🎯</div>
+        <h4>Central filter pipeline</h4>
+        <p>Every job is normalized then filtered in a fixed order — quality, age, must-have skills, location, salary — with exactly how many jobs each stage cut.</p>
+      </div>
+      <div class="feature">
+        <div class="icon">🆓</div>
+        <h4>Zero paid API requirements</h4>
+        <p>All core sources work with no API keys. AI ranking and Google Jobs are optional upgrades with free tiers.</p>
+      </div>
+      <div class="feature">
+        <div class="icon">📄</div>
+        <h4>Three-way profile entry</h4>
+        <p>Upload a PDF resume, paste a LinkedIn URL, or type it manually. AI extracts your skills, title, and experience — saved once, reused forever.</p>
+      </div>
+      <div class="feature">
+        <div class="icon">🤖</div>
+        <h4>Agent &amp; automation ready</h4>
+        <p>Structured JSON output, a bundled agent skill for Claude/OpenCode, and an optional MCP server — drive Matcha from scripts, cron, or an AI.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="install" class="alt">
+  <div class="wrap">
+    <h2><span class="hash">#</span> Get started in 5 steps</h2>
+    <p class="lead">From zero to ranked job matches in about two minutes.</p>
+
+    <ol class="steps">
+      <li>
+        <h3>Install</h3>
+<pre><span class="p">$</span> git clone https://github.com/rishikesh-sonawane/matcha.git
+<span class="p">$</span> cd matcha
+<span class="p">$</span> python3 -m venv venv
+<span class="p">$</span> venv/bin/pip install -r requirements.txt
+<span class="p">$</span> venv/bin/pip install -e .</pre>
+        <p class="hint">Requires Python 3.10+. A virtual environment is recommended on macOS (avoids LibreSSL segfaults).</p>
+      </li>
+      <li>
+        <h3>Create your profile</h3>
+<pre><span class="p">$</span> venv/bin/matcha</pre>
+        <p class="hint">First run asks how to enter your profile — PDF resume, LinkedIn URL, or manual. Saved to <code>~/.matcha/profile.json</code>, reused every run.</p>
+      </li>
+      <li>
+        <h3>Enable AI ranking (recommended)</h3>
+<pre><span class="p">$</span> export MINIMAX="your-api-key"   <span class="c"># or run: venv/bin/matcha --configure</span>
+<span class="p">$</span> venv/bin/matcha</pre>
+        <p class="hint">Free providers: Groq, OpenRouter, Kilo Gateway — or <code>AI_PROVIDER=local</code> with Ollama/LM Studio, which needs no key at all. Without AI, Matcha ranks heuristically.</p>
+      </li>
+      <li>
+        <h3>Verify everything is healthy</h3>
+<pre><span class="p">$</span> venv/bin/matcha doctor</pre>
+        <p class="hint">Per-source health plus an <b>AI matching</b> line: <code>ok</code> = fully wired, <code>off</code> = heuristic-only, <code>warn</code> = partial setup.</p>
+      </li>
+      <li>
+        <h3>Search — interactively or headless</h3>
+<pre><span class="p">$</span> venv/bin/matcha                          <span class="c"># interactive TUI</span>
+<span class="p">$</span> venv/bin/matcha search -q "Platform Engineer" -l Pune -d 7 --json
+<span class="p">$</span> venv/bin/matcha watch -q "Platform Engineer" -l Pune -d 7 --json  <span class="c"># only NEW jobs</span></pre>
+      </li>
+    </ol>
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap">
+    <h2><span class="hash">#</span> Everything it does</h2>
+    <p class="lead">A quick tour of the surface area — details live in the <a href="https://github.com/rishikesh-sonawane/matcha/blob/main/README.md">README</a>.</p>
+    <table>
+      <tr><th>Feature</th><th>What it means for you</th></tr>
+      <tr><td><code>AI query expansion</code></td><td>Your profile generates 3–5 diverse queries ("Platform Engineer" → SRE, Cloud Infra, DevOps Automation…) to widen the search surface.</td></tr>
+      <tr><td><code>Central filters</code></td><td>Quality → age → must-skills → location → salary, each reporting cuts. Provenance tags make low-confidence matches obvious.</td></tr>
+      <tr><td><code>watch</code></td><td>Only-NEW jobs since your last watch — the natural "anything new?" workflow, tracked in <code>~/.matcha/jobs.db</code>.</td></tr>
+      <tr><td><code>Rich TUI</code></td><td>Color-coded match scores, paginated results, detail panels, save/open/re-run — all keyboard driven.</td></tr>
+      <tr><td><code>Enrichment</code></td><td>Top jobs get full descriptions + clean apply URLs (OpenCLI, Jina fallback).</td></tr>
+      <tr><td><code>Circuit breakers</code></td><td>A flaky source is skipped for 30 minutes instead of failing every run. Health visible in <code>matcha doctor</code>.</td></tr>
+      <tr><td><code>Secrets at rest</code></td><td>API keys encrypted with fernet — never plaintext, no OS keychain dependency.</td></tr>
+    </table>
+  </div>
+</section>
+
+<section id="sources" class="alt">
+  <div class="wrap">
+    <h2><span class="hash">#</span> 8 sources, one command</h2>
+    <p class="lead">Searched in parallel; each isolated so one failure never blocks the rest.</p>
+    <div class="sources">
+      <div class="source"><div class="s">💼</div><div class="n">LinkedIn</div><div class="f">OpenCLI / guest</div></div>
+      <div class="source"><div class="s">🔍</div><div class="n">Indeed</div><div class="f">OpenCLI / DDGS</div></div>
+      <div class="source"><div class="s">🇮🇳</div><div class="n">Naukri</div><div class="f">job-page parse</div></div>
+      <div class="source"><div class="s">🌍</div><div class="n">RemoteOK</div><div class="f">public API</div></div>
+      <div class="source"><div class="s">🌐</div><div class="n">Web Search</div><div class="f">Exa / DDGS</div></div>
+      <div class="source"><div class="s">📡</div><div class="n">RSS</div><div class="f">your feeds</div></div>
+      <div class="source"><div class="s">🗂️</div><div class="n">Google Jobs</div><div class="f">SerpAPI (opt)</div></div>
+      <div class="source"><div class="s">🏢</div><div class="n">Career Sites</div><div class="f">200+ boards (opt)</div></div>
+    </div>
+  </div>
+</section>
+
+<section id="agents">
+  <div class="wrap">
+    <h2><span class="hash">#</span> Built for agents &amp; automation</h2>
+    <p class="lead">Matcha is a first-class citizen for AI agents, cron jobs, and scripts.</p>
+    <div class="feature-grid">
+      <div class="feature">
+        <div class="icon">📦</div>
+        <h4>Structured JSON everywhere</h4>
+        <p>Every search returns <code>{command, ai_used, source_counts, filter_summary, found_count, jobs[]}</code> with per-job <code>match_score</code>, reasons, and apply URLs.</p>
+      </div>
+      <div class="feature">
+        <div class="icon">🎓</div>
+        <h4>Bundled agent skill</h4>
+<pre><span class="p">$</span> venv/bin/matcha skill --install</pre>
+        <p>Installs a bilingual SKILL.md so Claude/OpenCode can run health checks, ranked searches, and new-job watches for you.</p>
+      </div>
+      <div class="feature">
+        <div class="icon">🔌</div>
+        <h4>MCP server</h4>
+<pre><span class="p">$</span> pip install -e '.[agent]'
+<span class="p">$</span> venv/bin/matcha mcp</pre>
+        <p>Exposes <code>matcha_status</code> and <code>matcha_search</code> tools to any MCP client.</p>
+      </div>
+      <div class="feature">
+        <div class="icon">⏰</div>
+        <h4>Watch + cron</h4>
+<pre><span class="c"># every morning at 8am, diff new jobs vs yesterday</span>
+0 8 * * * cd ~/matcha && venv/bin/matcha watch -q "DevOps Engineer" -l Pune --json --output ~/.matcha/latest.json</pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="faq" class="alt">
+  <div class="wrap">
+    <h2><span class="hash">#</span> FAQ</h2>
+    <table>
+      <tr><th>Question</th><th>Answer</th></tr>
+      <tr><td>Do I need an API key?</td><td>No — core search is keyless. AI and Google Jobs are optional with free tiers.</td></tr>
+      <tr><td>Can Matcha apply for me?</td><td>No. Matcha opens the apply page — it's search + enrichment, never auto-apply.</td></tr>
+      <tr><td>How do I start over?</td><td><code>venv/bin/matcha --new-profile</code>, or <code>rm -rf ~/.matcha</code> for a full reset.</td></tr>
+      <tr><td>Where's the log?</td><td><code>~/.matcha/logs/matcha.log</code> (rotating 5 MB × 3).</td></tr>
+      <tr><td>What platforms?</td><td>Python 3.10+, macOS and Linux (tested on macOS; CI covers 3.10–3.14 on Linux).</td></tr>
+    </table>
+    <div class="quote">
+      💬 Want the full reference? Read the <a href="https://github.com/rishikesh-sonawane/matcha/blob/main/README.md">README</a>,
+      the <a href="https://github.com/rishikesh-sonawane/matcha/blob/main/QUICKSTART.md">5-command quickstart</a>,
+      or the <a href="https://github.com/rishikesh-sonawane/matcha/wiki">wiki</a>.
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p>🍵 <b>Matcha</b> — built with <span class="heart">♥</span> for job seekers. MIT licensed.</p>
+    <p><a href="https://github.com/rishikesh-sonawane/matcha">GitHub</a> · <a href="https://github.com/rishikesh-sonawane/matcha/wiki">Wiki</a> · <a href="https://github.com/rishikesh-sonawane/matcha/issues">Issues</a></p>
+  </div>
+</footer>
+
+</body>
+</html>
