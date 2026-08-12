@@ -5,7 +5,22 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Matcha 🍵 — AI-Powered Job Search from Your Terminal</title>
 <meta name="description" content="Matcha is a multi-source job aggregator with AI-powered relevance ranking. Search LinkedIn, Indeed, Naukri, RemoteOK and the web from your terminal, and get only the jobs that actually fit your profile.">
+<meta name="theme-color" content="#0d1117">
+<link rel="canonical" href="https://rishikesh-sonawane.github.io/matcha/">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍵</text></svg>">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Matcha">
+<meta property="og:title" content="Matcha 🍵 — AI-Powered Job Search from Your Terminal">
+<meta property="og:description" content="Multi-source job search from your terminal with AI-powered relevance ranking. Search LinkedIn, Indeed, Naukri, RemoteOK and the web in parallel — get only the jobs that actually fit your profile. No API keys required.">
+<meta property="og:url" content="https://rishikesh-sonawane.github.io/matcha/">
+<meta property="og:image" content="https://rishikesh-sonawane.github.io/matcha/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Matcha — AI-powered job search from your terminal">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Matcha 🍵 — AI-Powered Job Search from Your Terminal">
+<meta name="twitter:description" content="Multi-source job search from your terminal with AI-powered relevance ranking. No API keys required.">
+<meta name="twitter:image" content="https://rishikesh-sonawane.github.io/matcha/og-image.png">
 <style>
   :root {
     --bg: #0d1117;
@@ -33,6 +48,34 @@
   }
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
+
+  /* Sticky section nav */
+  .sidenav {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    display: flex;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 10px 12px;
+    background: rgba(13, 17, 23, .84);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--border);
+    transition: box-shadow .15s ease;
+  }
+  .sidenav.scrolled { box-shadow: 0 6px 24px rgba(0, 0, 0, .45); }
+  .sidenav a {
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 600;
+    padding: 6px 13px;
+    border-radius: 6px;
+    transition: color .12s ease, background .12s ease;
+  }
+  .sidenav a:hover { color: var(--text); background: var(--bg-soft); text-decoration: none; }
+  .sidenav a.active { color: var(--green-bright); background: rgba(62, 203, 113, .12); }
   code, pre {
     font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
     font-size: 0.9em;
@@ -106,7 +149,7 @@
   .terminal .p { color: var(--green-bright); }
 
   /* Sections */
-  section { padding: 72px 0; border-bottom: 1px solid var(--border); }
+  section { padding: 72px 0; border-bottom: 1px solid var(--border); scroll-margin-top: 62px; }
   section.alt { background: var(--bg-soft); }
   h2 { font-size: 28px; font-weight: 800; letter-spacing: -0.5px; margin-bottom: 8px; }
   h2 .hash { color: var(--green); }
@@ -169,6 +212,15 @@
 </style>
 </head>
 <body>
+
+<nav class="sidenav" aria-label="Page sections">
+  <a href="#what">Why</a>
+  <a href="#install">Install</a>
+  <a href="#features">Features</a>
+  <a href="#sources">Sources</a>
+  <a href="#agents">Agents</a>
+  <a href="#faq">FAQ</a>
+</nav>
 
 <header class="hero">
   <div class="wrap">
@@ -384,6 +436,29 @@
     <p><a href="https://github.com/rishikesh-sonawane/matcha">GitHub</a> · <a href="https://github.com/rishikesh-sonawane/matcha/wiki">Wiki</a> · <a href="https://github.com/rishikesh-sonawane/matcha/issues">Issues</a></p>
   </div>
 </footer>
+
+<script>
+  // Sticky nav: highlight the link of the section currently in view.
+  (function () {
+    var links = Array.prototype.slice.call(document.querySelectorAll('.sidenav a'));
+    var ids = links.map(function (a) { return a.getAttribute('href').slice(1); });
+    var sections = ids.map(function (id) { return document.getElementById(id); });
+    var nav = document.querySelector('.sidenav');
+    function onScroll() {
+      var probe = window.scrollY + 130;
+      var current = null;
+      sections.forEach(function (s, i) {
+        if (s && s.offsetTop <= probe) current = ids[i];
+      });
+      links.forEach(function (a) {
+        a.classList.toggle('active', a.getAttribute('href') === '#' + current);
+      });
+      nav.classList.toggle('scrolled', window.scrollY > 80);
+    }
+    window.addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
+  })();
+</script>
 
 </body>
 </html>
