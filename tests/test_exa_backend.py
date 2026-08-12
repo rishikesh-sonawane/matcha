@@ -10,6 +10,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -17,7 +18,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from matcha.models import ScraperResult
 from matcha.sources.backends.exa import (
-    EXA_INCLUDE_DOMAINS,
     exa_configured,
     exa_search,
     exa_status,
@@ -66,8 +66,11 @@ class TestMcporterInspection(unittest.TestCase):
         self.assertFalse(inspection.imports_unchecked)
 
     def test_no_config_returns_empty(self):
-        with mock.patch.dict(os.environ, {}, clear=False):
-            inspection = inspect_mcporter_config(root_dir="/nonexistent-dir-xyz")
+        # Isolate from a real ~/.mcporter (e.g. after ``mcporter config add
+        # exa --scope home``) by pointing HOME at an empty temp dir.
+        with tempfile.TemporaryDirectory() as home:
+            with mock.patch.dict(os.environ, {"HOME": home, "MCPORTER_CONFIG": ""}, clear=False):
+                inspection = inspect_mcporter_config(root_dir="/nonexistent-dir-xyz")
         self.assertEqual(inspection.server_names, frozenset())
 
     def test_malformed_json_raises(self):
@@ -165,21 +168,29 @@ class TestRunMcporterCall(unittest.TestCase):
         self.assertEqual(first[2], "exa.web_search_exa")
         self.assertIn('query="python"', first)
         self.assertIn("numResults=5", first)
+        # mcporter 0.13+ defaults to human-readable text — JSON output must
+        # be requested explicitly.
+        self.assertIn("--output", first)
+        self.assertIn("json", first)
         self.assertEqual(len(run.call_args_list), 1)  # no retry on success
 
     @mock.patch("matcha.sources.backends.exa.subprocess.run")
     @mock.patch("matcha.sources.backends.exa.shutil.which", return_value="/bin/mcporter")
     def test_legacy_dsl_retried_on_failure(self, which, run):
-        # first (new syntax) fails with exit 69; second (legacy DSL) succeeds
+        # new syntax fails on both --output json and plain forms; legacy DSL
+        # succeeds on the fourth attempt (0.7.x wshobson generation).
         run.side_effect = [
+            self._proc(returncode=69, stdout="Error: bad syntax"),
+            self._proc(returncode=69, stdout="Error: bad syntax"),
             self._proc(returncode=69, stdout="Error: bad syntax"),
             self._proc(stdout=json.dumps(_EXA_ENVELOPE)),
         ]
         result = run_mcporter_call("exa", "web_search_exa", {"query": "python", "numResults": 5})
         self.assertTrue(result["ok"])
-        self.assertEqual(len(run.call_args_list), 2)
-        second = run.call_args_list[1].args[0]
-        self.assertIn("web_search_exa(query: ", second[2])
+        self.assertEqual(len(run.call_args_list), 4)
+        fourth = run.call_args_list[3].args[0]
+        self.assertIn("web_search_exa(query: ", fourth[2])
+        self.assertNotIn("--output", fourth)
 
     @mock.patch("matcha.sources.backends.exa.subprocess.run")
     @mock.patch("matcha.sources.backends.exa.shutil.which", return_value="/bin/mcporter")
@@ -187,10 +198,12 @@ class TestRunMcporterCall(unittest.TestCase):
         run.side_effect = [
             self._proc(returncode=1, stdout="boom"),
             self._proc(returncode=1, stdout="boom"),
+            self._proc(returncode=1, stdout="boom"),
+            self._proc(returncode=1, stdout="boom"),
         ]
         result = run_mcporter_call("exa", "web_search_exa", {"query": "python"})
         self.assertFalse(result["ok"])
-        self.assertEqual(len(run.call_args_list), 2)
+        self.assertEqual(len(run.call_args_list), 4)
 
     @mock.patch(
         "matcha.sources.backends.exa.subprocess.run",
@@ -201,6 +214,27 @@ class TestRunMcporterCall(unittest.TestCase):
         result = run_mcporter_call("exa", "web_search_exa", {"query": "python"})
         self.assertFalse(result["ok"])
         self.assertIn("timed out", result["error"])
+
+    @mock.patch("matcha.sources.backends.exa.subprocess.run")
+    @mock.patch("matcha.sources.backends.exa.shutil.which", return_value="/bin/mcporter")
+    def test_total_budget_caps_all_attempts(self, which, run):
+        # Session 28 (reviewer-caught): the 4-attempt runner must respect ONE
+        # overall budget — a hung Exa must not chain 4×timeout and starve the
+        # DDGS fallback (the scraper batch abandons futures after
+        # settings ``search.batch_timeout``, default 120s).
+        run.side_effect = [
+            self._proc(returncode=1, stdout="a"),
+            self._proc(returncode=1, stdout="b"),
+        ]
+        with mock.patch(
+            "matcha.sources.backends.exa.time.monotonic",
+            side_effect=[100.0, 100.0, 131.0, 131.0],
+        ):
+            result = run_mcporter_call("exa", "web_search_exa", {"query": "python"}, timeout=30)
+        self.assertFalse(result["ok"])
+        # Attempt 1 fails; by attempt 2 the 30s budget is exhausted, so the
+        # runner breaks BEFORE the subprocess call — only 1 call, never 4×30s.
+        self.assertEqual(len(run.call_args_list), 1)
 
     @mock.patch("matcha.sources.backends.exa.shutil.which", return_value=None)
     def test_mcporter_not_installed(self, which):
@@ -217,17 +251,82 @@ class TestRunMcporterCall(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["rows"][0]["url"], _EXA_ENVELOPE["results"][0]["url"])
 
+    @mock.patch("matcha.sources.backends.exa.subprocess.run")
+    @mock.patch("matcha.sources.backends.exa.shutil.which", return_value="/bin/mcporter")
+    def test_rendered_text_blocks_payload(self, which, run):
+        # mcporter 0.13+ renders Exa results as Title:/URL:/... text blocks
+        # inside content[].text — the runner must parse them into rows.
+        rendered = "\n".join(
+            [
+                "Title: AWS DevOps Engineer | Acme",
+                "URL: https://jobs.acme.com/123",
+                "Published: N/A",
+                "Author: Acme",
+                "Highlights:",
+                "We are hiring an AWS DevOps Engineer in Pune.",
+                "",
+                "---",
+                "",
+                "Title: DevOps Engineer | Globex",
+                "URL: https://boards.greenhouse.io/globex/1",
+                "Published: 2026-07-28T00:00:00.000Z",
+                "Author: N/A",
+                "Highlights:",
+                "Second posting.",
+            ]
+        )
+        wrapped = {"content": [{"type": "text", "text": rendered}]}
+        run.return_value = self._proc(stdout=json.dumps(wrapped))
+        result = run_mcporter_call("exa", "web_search_exa", {"query": "python"})
+        self.assertTrue(result["ok"])
+        rows = result["rows"]
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["title"], "AWS DevOps Engineer | Acme")
+        self.assertEqual(rows[0]["url"], "https://jobs.acme.com/123")
+        self.assertEqual(rows[0]["author"], "Acme")
+        self.assertNotIn("publishedDate", rows[0])  # N/A omitted
+        self.assertEqual(rows[1]["publishedDate"], "2026-07-28T00:00:00.000Z")
+        self.assertNotIn("author", rows[1])  # N/A omitted
+        self.assertIn("hiring an AWS DevOps Engineer", rows[0]["text"])
+
+    @mock.patch("matcha.sources.backends.exa.subprocess.run")
+    @mock.patch("matcha.sources.backends.exa.shutil.which", return_value="/bin/mcporter")
+    def test_text_block_missing_secondary_fields_still_parsed(self, which, run):
+        # Session 28 (reviewer-caught): Exa may omit Author:/Published: — a
+        # real posting must never be dropped because a secondary field is
+        # missing, so the parser falls back to Title+URL.
+        rendered = "\n".join(
+            [
+                "Title: Backend Engineer | Acme",
+                "URL: https://jobs.acme.com/42",
+                "Highlights:",
+                "Hiring.",
+            ]
+        )
+        wrapped = {"content": [{"type": "text", "text": rendered}]}
+        run.return_value = self._proc(stdout=json.dumps(wrapped))
+        result = run_mcporter_call("exa", "web_search_exa", {"query": "python"})
+        self.assertTrue(result["ok"])
+        rows = result["rows"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["title"], "Backend Engineer | Acme")
+        self.assertEqual(rows[0]["url"], "https://jobs.acme.com/42")
+        self.assertNotIn("publishedDate", rows[0])
+        self.assertNotIn("author", rows[0])
+
 
 class TestExaSearch(unittest.TestCase):
     @mock.patch("matcha.sources.backends.exa.run_mcporter_call")
-    def test_maps_days_to_start_published_date(self, call):
+    def test_sends_only_supported_params(self, call):
         call.return_value = {"ok": True, "rows": _EXA_ENVELOPE["results"], "error": ""}
-        exa_search("python", days=7)
+        exa_search("python", "pune", days=7)
         params = call.call_args.args[2]
-        self.assertIn("startPublishedDate", params)
-        self.assertIn("includeDomains", params)
-        self.assertEqual(params["includeDomains"], EXA_INCLUDE_DOMAINS)
+        self.assertEqual(params["query"], "python job posting pune")
         self.assertEqual(params["numResults"], 5)
+        # The current Exa MCP server ignores includeDomains/startPublishedDate —
+        # sending them would be dead weight at best.
+        self.assertNotIn("includeDomains", params)
+        self.assertNotIn("startPublishedDate", params)
 
     @mock.patch("matcha.sources.backends.exa.run_mcporter_call")
     def test_failure_returns_none(self, call):
@@ -235,32 +334,16 @@ class TestExaSearch(unittest.TestCase):
         self.assertIsNone(exa_search("python"))
 
     @mock.patch("matcha.sources.backends.exa.run_mcporter_call")
-    def test_retries_without_include_domains(self, call):
-        # Array literals may not parse in either mcporter syntax — the
-        # backend must retry without includeDomains rather than give up.
-        call.side_effect = [
-            {"ok": False, "rows": [], "error": "array parse failed"},
-            {"ok": True, "rows": _EXA_ENVELOPE["results"], "error": ""},
-        ]
-        rows = exa_search("python")
-        self.assertEqual(len(call.call_args_list), 2)
-        self.assertEqual(len(rows), 1)
-        second_params = call.call_args_list[1].args[2]
-        self.assertNotIn("includeDomains", second_params)
-        self.assertEqual(second_params["query"], "python")
-
-    @mock.patch("matcha.sources.backends.exa.run_mcporter_call")
-    def test_no_retry_when_both_fail(self, call):
-        call.side_effect = [
-            {"ok": False, "rows": [], "error": "a"},
-            {"ok": False, "rows": [], "error": "b"},
-        ]
+    def test_no_retry_on_failure(self, call):
+        # The includeDomains retry guard is gone — a failed call returns None
+        # so the caller can fall back to DDGS immediately.
+        call.return_value = {"ok": False, "rows": [], "error": "a"}
         self.assertIsNone(exa_search("python"))
-        self.assertEqual(len(call.call_args_list), 2)
+        self.assertEqual(len(call.call_args_list), 1)
 
     @mock.patch("matcha.sources.backends.exa.run_mcporter_call")
     def test_no_retry_on_empty_results(self, call):
-        # A clean 0-result envelope is NOT a failure — no includeDomains retry.
+        # A clean 0-result envelope is NOT a failure — return [] directly.
         call.return_value = {"ok": True, "rows": [], "error": ""}
         self.assertEqual(exa_search("python"), [])
         self.assertEqual(len(call.call_args_list), 1)
@@ -359,8 +442,10 @@ class TestWebSearchDispatch(unittest.TestCase):
 
 
 class TestExaMapping(unittest.TestCase):
+    @mock.patch("matcha.sources.web_search._url_is_live")
     @mock.patch("matcha.sources.backends.exa.exa_search")
-    def test_rows_mapped_to_job_dicts(self, search):
+    def test_rows_mapped_to_job_dicts(self, search, live):
+        live.return_value = True
         search.return_value = [
             {
                 "title": "Python Developer | Acme",

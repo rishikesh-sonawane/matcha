@@ -136,7 +136,6 @@ class _FakeClient:
 
 
 class TestDdgsText(unittest.TestCase):
-    """Session 23: the shared DDGS helper must retry transient failures."""
 
     def _factory(self, client):
         return lambda *a, **k: client
@@ -178,12 +177,73 @@ class TestDdgsText(unittest.TestCase):
         self.assertEqual(client.calls, 1)
 
     def test_ddgs_rate_is_30_rpm(self):
-        # Session 23: 6 rpm (1 req/10s) starved the DDGS sources under the 75s
-        # batch timeout; 30 rpm keeps the pipeline inside budget while staying
-        # polite to DuckDuckGo.
+        # Session 23: 6 rpm (1 req/10s) starved the DDGS sources under the
+        # then-75s scraper batch timeout (now settings search.batch_timeout);
+        # 30 rpm keeps the pipeline inside budget while staying polite to
+        # DuckDuckGo.
         from matcha.sources.utils import limiter
 
         self.assertEqual(limiter._buckets["duckduckgo.com"].max_tokens, 30)
+
+
+class TestHomepageUrl(unittest.TestCase):
+    """Session 27: DDGS ``site:domain`` queries leak company homepages."""
+
+    def _is(self, url):
+        from matcha.sources.utils import is_homepage_url
+
+        return is_homepage_url(url)
+
+    def test_root_and_bare_domains_are_homepages(self):
+        self.assertTrue(self._is("https://www.lever.co/?lang=fa"))
+        self.assertTrue(self._is("https://lever.co"))
+        self.assertTrue(self._is("https://lever.co/"))
+        self.assertTrue(self._is(""))
+
+    def test_real_job_paths_are_not_homepages(self):
+        self.assertFalse(self._is("https://jobs.lever.co/comply/80f1379e-b76c"))
+        self.assertFalse(self._is("https://careers.google.com/jobs/results"))
+        self.assertFalse(self._is("https://in.indeed.com/viewjob?jk=abc"))
+
+
+class TestQueryRelevance(unittest.TestCase):
+    """Session 27: drop DDGS rows that carry no query/location signal."""
+
+    def _rel(self, title, snippet, query, location=""):
+        from matcha.sources.utils import has_query_relevance
+
+        return has_query_relevance(title, snippet, query, location)
+
+    def test_matching_query_token_kept(self):
+        self.assertTrue(self._rel("DevOps Engineer at Barclays", "...", "DevOps Engineer"))
+        self.assertTrue(self._rel("Senior Staff Engineer", "...", "DevOps Engineer", "Pune"))
+
+    def test_role_word_in_title_kept(self):
+        # A related-role title (SRE / Staff Engineer) is still a real posting
+        # even when it doesn't echo the query's exact words.
+        self.assertTrue(self._rel("Staff SRE", "", "DevOps Engineer", "Pune"))
+        self.assertTrue(self._rel("Site Reliability Engineer", "", "DevOps Engineer"))
+
+    def test_unrelated_row_dropped(self):
+        # The Session 27 poster-child: a Canadian hospital intake-assistant
+        # row surfaced for a "DevOps Engineer Pune" site: query.
+        self.assertFalse(
+            self._rel("Halton Healthcare Intake Assistant", "caregiving role", "DevOps Engineer", "Pune")
+        )
+        self.assertFalse(self._rel("COMPLY", "regtech careers", "DevOps Engineer", "Pune"))
+
+    def test_landing_page_title_dropped_even_with_snippet_match(self):
+        # Session 27: DDGS snippets are full-page bodies that mention generic
+        # terms regardless of the posting — a company landing page titled
+        # "Metabase" (jobs.lever.co/metabase) must drop even if its snippet
+        # mentions the query words.
+        self.assertFalse(
+            self._rel("Metabase", "devops engineer pune roles at metabase", "DevOps Engineer", "Pune")
+        )
+        self.assertFalse(self._rel("PayU", "cloud devops engineer careers", "DevOps Engineer", "Pune"))
+
+    def test_empty_query_passes_everything(self):
+        self.assertTrue(self._rel("Anything At All", "...", ""))
 
 
 if __name__ == "__main__":

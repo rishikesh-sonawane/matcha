@@ -43,9 +43,14 @@ from matcha.matcher import (
     normalize_scores,
 )
 from matcha.models import ScraperResult
-from matcha.normalization import normalize_jobs
+from matcha.normalization import normalize_jobs, search_location
 from matcha.profile import build_or_load_profile
-from matcha.settings import load_settings
+from matcha.settings import (
+    DDGS_WEB_SEARCH_CAP,
+    DEFAULT_BATCH_TIMEOUT,
+    DEFAULT_QUERY_CAPS,
+    load_settings,
+)
 from matcha.sources.breaker import is_open as breaker_is_open
 from matcha.sources.breaker import record_failure as breaker_record_failure
 from matcha.sources.breaker import record_success as breaker_record_success
@@ -294,6 +299,7 @@ def search_jobs(
     extra_scrapers: dict[str, Any] | None = None,
     extra_scraper_kwargs: dict[str, dict[str, Any]] | None = None,
     query_caps: dict[str, int] | None = None,
+    batch_timeout: int = DEFAULT_BATCH_TIMEOUT,
 ) -> tuple[list[dict[str, Any]], dict[str, int], dict[str, list[str]]]:
     if isinstance(queries, str):
         queries = [queries]
@@ -301,6 +307,13 @@ def search_jobs(
     queries = [q for q in (queries or []) if q]
     if not queries:
         return [], {}, {}
+
+    # Session 27: sources accept ONE location string. A multi-city preference
+    # ("Pune, Bengaluru, Hyderabad") sent verbatim makes LinkedIn/Indeed
+    # return almost nothing — derive a source-level location (country-wide
+    # "India" for an all-Indian multi-city preference) and let the central
+    # location FILTER keep exactly the preferred cities + remote.
+    source_location = search_location(location)
 
     scrapers = dict(SCRAPER_DEFS)
     if extra_scrapers:
@@ -394,13 +407,20 @@ def search_jobs(
                         # variant queries reuse the same US-index rows.
                         per_q["recover_titles"] = qi == 0
                     f = executor.submit(
-                        run_scraper, f"{name}({q})", func, q, location, days, max_pages, **per_q
+                        run_scraper,
+                        f"{name}({q})",
+                        func,
+                        q,
+                        source_location,
+                        days,
+                        max_pages,
+                        **per_q,
                     )
                     futures[f] = name
 
             _last_state: tuple[bytes, ...] | None = None
             try:
-                for future in as_completed(futures, timeout=75):
+                for future in as_completed(futures, timeout=batch_timeout):
                     source_name = futures[future]
                     _, result = future.result()
                     pending[source_name] = False
@@ -431,7 +451,10 @@ def search_jobs(
                         _last_state = _state
                     time.sleep(0.05)
             except TimeoutError:
-                logger.warning("Scraper batch timed out after 75s, returning partial results")
+                logger.warning(
+                    "Scraper batch timed out after %ss, returning partial results",
+                    batch_timeout,
+                )
                 live.update(_status_table())
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
@@ -544,6 +567,26 @@ def _ai_rescore(
     return ranked
 
 
+def effective_query_caps(settings: dict[str, Any]) -> dict[str, int]:
+    """Per-source query caps, adapted to the active Web Search backend.
+
+    Returns ``scrapers.query_caps`` (or :data:`DEFAULT_QUERY_CAPS`) with the
+    Web Search entry clamped to :data:`DDGS_WEB_SEARCH_CAP` when Exa is not
+    configured (Session 29). Exa is one fast mcporter call per query, but the
+    DDGS fallback fans out into 5 rate-limited site queries per search query
+    — the raised cap would regularly blow the scraper batch timeout on the
+    slow path. Read-only; never starts mcporter.
+    """
+    caps = dict((settings.get("scrapers") or {}).get("query_caps") or DEFAULT_QUERY_CAPS)
+    from matcha.sources.backends.exa import exa_configured
+
+    if not exa_configured():
+        web = caps.get("Web Search")
+        if web is not None and web > DDGS_WEB_SEARCH_CAP:
+            caps["Web Search"] = DDGS_WEB_SEARCH_CAP
+    return caps
+
+
 def run_search(
     profile: dict[str, Any],
     query: str,
@@ -612,6 +655,16 @@ def run_search(
 
         extra_scrapers["Career Sites"] = search_career_sites_jobs
 
+    # Session 21/28/29: per-source query caps — how many of the (up to 6) AI
+    # queries each source runs. Defaults live in settings.DEFAULT_QUERY_CAPS
+    # (raised Web Search 3 -> 6 once Exa became the primary backend: one fast
+    # mcporter call per query). Adaptive: when Exa is not configured, Web
+    # Search runs the slow DDGS path and its cap is clamped back to 3.
+    # Overridable via scrapers.query_caps.
+    query_caps = effective_query_caps(settings)
+    batch_timeout = int(
+        (settings.get("search") or {}).get("batch_timeout", DEFAULT_BATCH_TIMEOUT)
+    )
     jobs, source_counts, source_errors = search_jobs(
         queries,
         location,
@@ -621,9 +674,8 @@ def run_search(
         quiet=quiet,
         extra_scrapers=extra_scrapers or None,
         extra_scraper_kwargs=extra_scraper_kwargs or None,
-        # Session 21: cap the DDGS-heavy sources so the 6 AI queries don't
-        # explode into 40+ slow searches that starve under the batch timeout.
-        query_caps={"Career Sites": 2, "Web Search": 3, "Naukri": 3},
+        query_caps=query_caps,
+        batch_timeout=batch_timeout,
     )
     found_count = len(jobs)
 

@@ -95,6 +95,11 @@ class SearchConfig(BaseModel):
     location: str = ""
     days: int = 7
     max_pages: int = 2
+    #: Wall-time budget for one search's scraper batch (seconds). Session 29:
+    #: raised from the hardcoded 75s — Web Search now runs up to 6 queries
+    #: and the Exa backend (30s budget per call, parallel) must not be cut
+    #: off mid-run while other sources are still streaming in.
+    batch_timeout: int = 120
 
 
 class AIConfig(BaseModel):
@@ -115,6 +120,11 @@ class ScraperConfig(BaseModel):
     indeed_domain: str = "in.indeed.com"
     #: 200+ employer career boards via DDGS (default off; opt-in).
     career_sites: bool = False
+    #: Per-source query caps — how many of the (up to 6) AI-expanded queries
+    #: each source runs in one search (Session 21/28). Raised Web Search to
+    #: 6 now that Exa is the primary backend: one fast mcporter call per
+    #: query, so every AI query contributes semantic results.
+    query_caps: dict[str, int] = Field(default_factory=dict)
 
 
 class EnrichmentConfig(BaseModel):

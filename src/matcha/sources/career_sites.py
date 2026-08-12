@@ -10,6 +10,7 @@ except ImportError:
     DDGS = None  # type: ignore[assignment, misc]
 
 from matcha.models import ScraperResult
+from matcha.normalization import find_city_in_text
 from matcha.sources.base import Source
 from matcha.sources.constants import (
     MONTH_NAMES,
@@ -18,7 +19,7 @@ from matcha.sources.constants import (
     SEARCH_PAGE_PATTERNS,
 )
 
-from .utils import ddgs_text, limiter
+from .utils import ddgs_text, has_query_relevance, is_homepage_url, limiter
 
 logger = logging.getLogger(__name__)
 
@@ -341,6 +342,13 @@ def _match_company(url: str) -> str:
 
 
 def _extract_location(snippet: str, title: str) -> str:
+    # Session 28: same trap as web_search — snippets contain "in Managing
+    # cloud infrastructure" phrases the loose regex misreads as locations.
+    # A known city / remote marker anywhere in the row wins first; a regex
+    # candidate is only trusted when it itself names a known city.
+    known = find_city_in_text(f"{title} {snippet}")
+    if known:
+        return known
     patterns = [
         re.compile(r"in\s+([A-Z][a-zA-Z\s]+(?:,\s*[A-Z]{2})?)", re.IGNORECASE),
         re.compile(r"([A-Z][a-zA-Z\s]+(?:,\s*[A-Z]{2}))(?:\s+[.…]|\s*$)", re.IGNORECASE),
@@ -349,7 +357,7 @@ def _extract_location(snippet: str, title: str) -> str:
         m = p.search(snippet or "")
         if m:
             loc = m.group(1).strip()
-            if len(loc) < 40:
+            if len(loc) < 40 and find_city_in_text(loc):
                 return loc
     return "Remote / Unspecified"
 
@@ -425,9 +433,19 @@ def search_career_sites_jobs(
                     continue
                 if _is_search_page(title, url):
                     continue
+                # Session 27: ``site:domain`` queries return company HOMEPAGES
+                # as results — never postings (a job page always has a path).
+                if is_homepage_url(url):
+                    continue
                 if any(re.search(p, url) for p in NON_JOB_URL_PATTERNS):
                     continue
                 if any(re.search(p, title) for p in NON_JOB_TITLE_PATTERNS):
+                    continue
+                # Session 27: a ``site:smartrecruiters.com DevOps Engineer Pune``
+                # query can surface an unrelated job on the same board (e.g. a
+                # Canadian hospital's intake assistant) — drop rows that carry
+                # no query/location token and no role word in title/snippet.
+                if not has_query_relevance(title, snippet, query, location):
                     continue
                 if days and _is_older_than_days(snippet, days):
                     continue

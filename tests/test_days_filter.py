@@ -107,7 +107,8 @@ class TestRemoteokDaysFilter(unittest.TestCase):
 class TestWebSearchDaysFilter(unittest.TestCase):
     @mock.patch("matcha.sources.web_search.limiter.acquire")
     @mock.patch("matcha.sources.web_search.DDGS")
-    def test_timelimit_passed(self, mock_ddgs, mock_acquire):
+    @mock.patch("matcha.sources.web_search._exa_should_run", return_value=False)
+    def test_timelimit_passed(self, mock_exa, mock_ddgs, mock_acquire):
         mock_instance = mock.MagicMock()
         mock_ddgs.return_value.__enter__.return_value = mock_instance
         mock_instance.text.return_value = []
@@ -117,7 +118,8 @@ class TestWebSearchDaysFilter(unittest.TestCase):
 
     @mock.patch("matcha.sources.web_search.limiter.acquire")
     @mock.patch("matcha.sources.web_search.DDGS")
-    def test_no_linkedin_queries(self, mock_ddgs, mock_acquire):
+    @mock.patch("matcha.sources.web_search._exa_should_run", return_value=False)
+    def test_no_linkedin_queries(self, mock_exa, mock_ddgs, mock_acquire):
         mock_instance = mock.MagicMock()
         mock_ddgs.return_value.__enter__.return_value = mock_instance
         mock_instance.text.return_value = []
@@ -128,7 +130,8 @@ class TestWebSearchDaysFilter(unittest.TestCase):
 
     @mock.patch("matcha.sources.web_search.limiter.acquire")
     @mock.patch("matcha.sources.web_search.DDGS")
-    def test_no_timelimit_without_days(self, mock_ddgs, mock_acquire):
+    @mock.patch("matcha.sources.web_search._exa_should_run", return_value=False)
+    def test_no_timelimit_without_days(self, mock_exa, mock_ddgs, mock_acquire):
         mock_instance = mock.MagicMock()
         mock_ddgs.return_value.__enter__.return_value = mock_instance
         mock_instance.text.return_value = []

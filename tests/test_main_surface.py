@@ -527,6 +527,42 @@ class TestTableBuilders(unittest.TestCase):
         self.assertEqual(sorted(q for n, q in calls if n == "A"), ["q1", "q2"])
         self.assertEqual(sorted(q for n, q in calls if n == "B"), ["q1", "q2", "q3"])
 
+    def test_search_jobs_batch_timeout_default(self):
+        """Session 29: the scraper batch default timeout is the settings
+        default (120s) — raised from the old hardcoded 75s."""
+        import matcha.main as main
+
+        def _fake(q, loc="", **kw):
+            return []
+
+        with (
+            mock.patch.object(main, "SCRAPER_DEFS", {}),
+            mock.patch("matcha.main.check_serpapi_available", return_value=False),
+            mock.patch("matcha.main.as_completed") as as_completed,
+        ):
+            as_completed.return_value = iter(())
+            main.search_jobs(["q1"], "loc", quiet=True, extra_scrapers={"A": _fake})
+        self.assertEqual(as_completed.call_args.kwargs["timeout"], main.DEFAULT_BATCH_TIMEOUT)
+
+    def test_search_jobs_batch_timeout_forwarded(self):
+        """Session 29: a caller-supplied batch_timeout must reach the
+        as_completed wait (run_search reads it from search.batch_timeout)."""
+        import matcha.main as main
+
+        def _fake(q, loc="", **kw):
+            return []
+
+        with (
+            mock.patch.object(main, "SCRAPER_DEFS", {}),
+            mock.patch("matcha.main.check_serpapi_available", return_value=False),
+            mock.patch("matcha.main.as_completed") as as_completed,
+        ):
+            as_completed.return_value = iter(())
+            main.search_jobs(
+                ["q1"], "loc", quiet=True, extra_scrapers={"A": _fake}, batch_timeout=200
+            )
+        self.assertEqual(as_completed.call_args.kwargs["timeout"], 200)
+
     def test_search_jobs_indeed_recovery_only_first_query(self):
         import matcha.main as main
 

@@ -1,6 +1,7 @@
 import logging
 import os
 import random
+import re
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -148,6 +149,67 @@ def ddgs_text(
 
 def _get_domain(url: str) -> str:
     return urlparse(url).netloc.lower().removeprefix("www.")
+
+
+#: Significant-token minimum length — 1-2 char tokens ("ai", "go") are noise
+#: in a query-relevance gate.
+_MIN_TOKEN = 3
+#: Role words that make a title a REAL posting even when it doesn't echo the
+#: query's exact words ("SRE", "Staff Engineer" vs query "DevOps Engineer").
+_ROLE_WORD_RE = re.compile(
+    r"\b(engineer|developer|devops|sre|architect|analyst|manager|lead|principal|"
+    r"staff|specialist|administrator|consultant|designer|scientist|operator|"
+    r"coordinator|intern|trainee)\b",
+    re.IGNORECASE,
+)
+
+
+def is_homepage_url(url: str) -> bool:
+    """True when a URL points at a site root, not an individual page.
+
+    DDGS discovery frequently returns company HOMEPAGES for ``site:domain``
+    queries (e.g. ``https://www.lever.co/?lang=fa`` for ``site:lever.co``) —
+    those are never postings. A job page always has a real path; a homepage
+    has an empty or root-only path (query strings like ``?lang=fa`` don't
+    count).
+    """
+    parsed = urlparse((url or "").strip())
+    path = parsed.path.strip()
+    return path in ("", "/")
+
+
+def significant_tokens(text: str) -> list[str]:
+    """Lowercased tokens long enough to carry job-search meaning."""
+    return [t for t in re.findall(r"[a-z0-9+#.]+\b", text.lower()) if len(t) >= _MIN_TOKEN]
+
+
+def has_query_relevance(
+    title: str,
+    snippet: str,
+    query: str,
+    location: str = "",
+) -> bool:
+    """True when a discovered row plausibly matches the search intent.
+
+    A DDGS ``site:domain <query> <location>`` hit often matches a page that
+    merely mentions the keywords (a different job on the same company board,
+    a career landing page) — e.g. a Canadian hospital's intake-assistant row
+    for a "DevOps Engineer Pune" query. Drop rows where the TITLE carries
+    neither a significant query/location token nor a role word.
+
+    Title-only by design (Session 27): DDGS snippets are full-page bodies
+    that mention generic terms ("aws", "engineer", ...) regardless of the
+    actual posting, so snippet matching lets company landing pages through
+    (``jobs.lever.co/metabase`` → "Metabase"). A real posting's TITLE names
+    the role.
+    """
+    tokens = significant_tokens(f"{query} {location}")
+    if not tokens:
+        return True  # nothing to judge against
+    title_lower = (title or "").lower()
+    if any(t in title_lower for t in tokens):
+        return True
+    return bool(_ROLE_WORD_RE.search(title or ""))
 
 
 def resilient_get(

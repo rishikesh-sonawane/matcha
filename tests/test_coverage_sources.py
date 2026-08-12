@@ -44,13 +44,20 @@ class _FakeDDGS:
 
 
 class _Resp:
-    def __init__(self, json_data=None, status_code=200, text=""):
+    def __init__(self, json_data=None, status_code=200, text="", url=""):
         self.json_data = json_data or {}
         self.status_code = status_code
         self.text = text
+        self.url = url or "https://example.com/job/1"
 
     def json(self):
         return self.json_data
+
+    def close(self):
+        pass
+
+    def iter_content(self, chunk_size):
+        return iter([self.text.encode("utf-8")])
 
 
 # ── career_sites.py ──────────────────────────────────────────────────
@@ -109,8 +116,21 @@ class TestCareerSitesHelpers(unittest.TestCase):
     def test_extract_location(self):
         from matcha.sources.career_sites import _extract_location
 
-        self.assertEqual(_extract_location("Engineer in Bengaluru, KA", "T"), "Bengaluru, KA")
+        self.assertEqual(_extract_location("Engineer in Bengaluru, KA", "T"), "Bengaluru")
         self.assertEqual(_extract_location("no location", "T"), "Remote / Unspecified")
+
+    def test_extract_location_prefers_known_city(self):
+        # Session 28: the loose regex misreads "in Managing cloud
+        # infrastructure" as a location — a known city wins first.
+        from matcha.sources.career_sites import _extract_location
+
+        self.assertEqual(
+            _extract_location("Join us in Pune to build cloud infra", "DevOps Engineer"), "Pune"
+        )
+        self.assertEqual(
+            _extract_location("in Managing cloud infrastructure", "DevOps"),
+            "Remote / Unspecified",
+        )
 
     def test_build_queries(self):
         from matcha.sources.career_sites import _build_queries
@@ -159,7 +179,7 @@ class TestCareerSitesHelpers(unittest.TestCase):
                     "body": "",
                 },
                 {
-                    "title": "Real Job",
+                    "title": "Real Engineer Job",
                     "href": "https://careers.google.com/jobs/2",
                     "body": "in Bengaluru",
                 },
@@ -170,7 +190,60 @@ class TestCareerSitesHelpers(unittest.TestCase):
             mock.patch("matcha.sources.career_sites.limiter.acquire"),
         ):
             result = search_career_sites_jobs("engineer", max_queries=1)
-        self.assertEqual([j["title"] for j in result.jobs], ["Real Job"])
+        self.assertEqual([j["title"] for j in result.jobs], ["Real Engineer Job"])
+
+    def test_search_drops_homepage_urls(self):
+        # Session 27: ``site:lever.co`` returns the company homepage
+        # (``/?lang=fa``) as a "job" — never a posting, always dropped.
+        from matcha.sources.career_sites import search_career_sites_jobs
+
+        fake = _FakeDDGS(
+            rows=[
+                {
+                    "title": "Lever",
+                    "href": "https://www.lever.co/?lang=fa",
+                    "body": "",
+                },
+                {
+                    "title": "Software Engineer - Lever",
+                    "href": "https://jobs.lever.co/acme/80f1379e",
+                    "body": "in Pune",
+                },
+            ]
+        )
+        with (
+            mock.patch("matcha.sources.career_sites.DDGS", lambda *a, **k: fake),
+            mock.patch("matcha.sources.career_sites.limiter.acquire"),
+        ):
+            result = search_career_sites_jobs("engineer", "Pune", max_queries=1)
+        self.assertEqual([j["title"] for j in result.jobs], ["Software Engineer"])
+
+    def test_search_drops_unrelated_rows(self):
+        # Session 27: a ``site:smartrecruiters.com DevOps Engineer Pune`` hit
+        # can be an unrelated posting on the same board (e.g. a Canadian
+        # hospital's intake assistant) — no query/location token, no role word.
+        from matcha.sources.career_sites import search_career_sites_jobs
+
+        fake = _FakeDDGS(
+            rows=[
+                {
+                    "title": "Halton Healthcare Intake Assistant",
+                    "href": "https://jobs.smartrecruiters.com/HaltonHealthcare1/3743",
+                    "body": "caregiving",
+                },
+                {
+                    "title": "Senior Staff Engineer - Nagarro",
+                    "href": "https://jobs.smartrecruiters.com/Nagarro1/7440",
+                    "body": "in Pune",
+                },
+            ]
+        )
+        with (
+            mock.patch("matcha.sources.career_sites.DDGS", lambda *a, **k: fake),
+            mock.patch("matcha.sources.career_sites.limiter.acquire"),
+        ):
+            result = search_career_sites_jobs("DevOps Engineer", "Pune", max_queries=1)
+        self.assertEqual([j["title"] for j in result.jobs], ["Senior Staff Engineer"])
 
     def test_search_old_posting_filtered(self):
         from matcha.sources.career_sites import search_career_sites_jobs
@@ -552,13 +625,248 @@ class TestWebSearch(unittest.TestCase):
         )
         self.assertEqual(_extract_company("https://www.lever.co/x", "no match", "T"), "Lever")
 
+    def test_extract_company_from_url(self):
+        # Session 30: Exa's ``author`` field is page-scraped noise ("scale"
+        # for a Vodafone job) — the posting's own host names the company.
+        from matcha.sources.web_search import _extract_company_from_url
+
+        self.assertEqual(
+            _extract_company_from_url(
+                "https://opportunities.vodafone.com/job/Pune-AWS-Cloud-DevOps/1395729933/"
+            ),
+            "Vodafone",
+        )
+        self.assertEqual(
+            _extract_company_from_url(
+                "https://jobs.sanofi.com/en/job/hyderabad/lead-container-platform-engineer/2"
+            ),
+            "Sanofi",
+        )
+        self.assertEqual(
+            _extract_company_from_url(
+                "https://careers.unitedhealthgroup.com/job/bengaluru/senior-devops-engineer/34088/"
+            ),
+            "Unitedhealthgroup",
+        )
+        self.assertEqual(
+            _extract_company_from_url(
+                "https://koch.avature.net/en_US/careers/JobDetail/Platform-Engineer/188227"
+            ),
+            "Koch",
+        )
+        self.assertEqual(
+            _extract_company_from_url("https://www.globallogic.com/careers/telecom-devops/1"),
+            "Globallogic",
+        )
+        # Plain host, no noise
+        self.assertEqual(_extract_company_from_url("https://acme.com/jobs/3"), "Acme")
+        # ATS platform host without a company subdomain: company lives in the
+        # path, so the host cannot name it — caller falls back to author/text.
+        self.assertEqual(
+            _extract_company_from_url("https://boards.greenhouse.io/acme/12345"), ""
+        )
+        # Company label BEFORE a generic subdomain is still found
+        self.assertEqual(
+            _extract_company_from_url("https://acme.jobs.lever.co/80f1379e"), "Acme"
+        )
+        # Generic-label-before-platform: company is in the path (jobs.lever.co/acme)
+        self.assertEqual(_extract_company_from_url("https://jobs.lever.co/acme/123"), "")
+        # www2. stripped, then company found
+        self.assertEqual(_extract_company_from_url("https://www2.globallogic.com/x"), "Globallogic")
+        # Workday host prefix carries no company name (company is in the path)
+        self.assertEqual(
+            _extract_company_from_url("https://wd5.myworkdayjobs.com/Company/job/x"), ""
+        )
+        # Subdomain TLD mid-host still resolves left→right
+        self.assertEqual(_extract_company_from_url("https://jobs.company.com.au/job/1"), "Company")
+        self.assertEqual(_extract_company_from_url(""), "")
+
+    def test_url_is_live(self):
+        from matcha.sources.web_search import _url_is_live
+
+        # 404 / 410 → hard dead
+        with mock.patch(
+            "matcha.sources.web_search.resilient_get",
+            return_value=_Resp({}, status_code=404),
+        ):
+            self.assertFalse(_url_is_live("https://a.com/job/1"))
+        with mock.patch(
+            "matcha.sources.web_search.resilient_get",
+            return_value=_Resp({}, status_code=410),
+        ):
+            self.assertFalse(_url_is_live("https://a.com/job/1"))
+        # 200 deep page → alive
+        with mock.patch(
+            "matcha.sources.web_search.resilient_get",
+            return_value=_Resp({}, status_code=200, url="https://a.com/job/1"),
+        ):
+            self.assertTrue(_url_is_live("https://a.com/job/1"))
+        # Redirect chain ends on the bare site root → posting closed
+        with mock.patch(
+            "matcha.sources.web_search.resilient_get",
+            return_value=_Resp({}, status_code=200, url="https://a.com/"),
+        ):
+            self.assertFalse(_url_is_live("https://a.com/job/1"))
+        # Localized-homepage bounce (jobs.sanofi.com/en) is a closed posting too
+        with mock.patch(
+            "matcha.sources.web_search.resilient_get",
+            return_value=_Resp({}, status_code=200, url="https://a.com/en"),
+        ):
+            self.assertFalse(_url_is_live("https://a.com/job/1"))
+        # But a real job deep-link (with locale prefix) is alive
+        with mock.patch(
+            "matcha.sources.web_search.resilient_get",
+            return_value=_Resp({}, status_code=200, url="https://a.com/en/job/1"),
+        ):
+            self.assertTrue(_url_is_live("https://a.com/en/job/1"))
+        # Bot wall (403) is NOT proof of death — Indeed/WWR 403 curl but live
+        with mock.patch(
+            "matcha.sources.web_search.resilient_get",
+            return_value=_Resp({}, status_code=403, url="https://a.com/job/1"),
+        ):
+            self.assertTrue(_url_is_live("https://a.com/job/1"))
+        # 5xx / maintenance is NOT proof of death
+        with mock.patch(
+            "matcha.sources.web_search.resilient_get",
+            return_value=_Resp({}, status_code=503, url="https://a.com/job/1"),
+        ):
+            self.assertTrue(_url_is_live("https://a.com/job/1"))
+        # Session 31: a 403 bot wall that redirects to a literal /Error path
+        # (Avature/Koch bounces closed postings there) IS a dead signal —
+        # checked for every status, not just 2xx.
+        with mock.patch(
+            "matcha.sources.web_search.resilient_get",
+            return_value=_Resp(
+                {},
+                status_code=403,
+                url="https://koch.avature.net/en_US/careers/Error",
+            ),
+        ):
+            self.assertFalse(
+                _url_is_live("https://koch.avature.net/en_US/careers/JobDetail/Platform-Engineer/188227")
+            )
+        # A 403 IN PLACE (no error-path redirect — Indeed/WWR/Foundit style)
+        # is still ambiguous and stays alive.
+        with mock.patch(
+            "matcha.sources.web_search.resilient_get",
+            return_value=_Resp({}, status_code=403, url="https://a.com/job/1"),
+        ):
+            self.assertTrue(_url_is_live("https://a.com/job/1"))
+        # A real job slug that merely CONTAINS "error" must not match
+        # (whole-segment match only)
+        with mock.patch(
+            "matcha.sources.web_search.resilient_get",
+            return_value=_Resp({}, status_code=200, url="https://a.com/job/error-handling-engineer"),
+        ):
+            self.assertTrue(_url_is_live("https://a.com/job/error-handling-engineer"))
+        # Error-path redirect on a 200 is dead too (soft-404 with a redirect)
+        with mock.patch(
+            "matcha.sources.web_search.resilient_get",
+            return_value=_Resp({}, status_code=200, url="https://a.com/en/error"),
+        ):
+            self.assertFalse(_url_is_live("https://a.com/en/job/1"))
+        # The orig-path guard: a URL that ALREADY has a dead segment (e.g. a
+        # requisition literally named "error" or Exa returning an error page
+        # directly, no redirect) is NOT dropped by the redirect check.
+        with mock.patch(
+            "matcha.sources.web_search.resilient_get",
+            return_value=_Resp({}, status_code=200, url="https://a.com/error"),
+        ):
+            self.assertTrue(_url_is_live("https://a.com/error"))
+        # Soft-404: HTTP 200 with a "Page not found" body is a dead posting
+        # (Avature/Koch returns exactly this) — the body marker catches it.
+        with mock.patch(
+            "matcha.sources.web_search.resilient_get",
+            return_value=_Resp({}, status_code=200, text="Page not found", url="https://a.com/job/1"),
+        ):
+            self.assertFalse(_url_is_live("https://a.com/job/1"))
+        # 200 with a normal job body is alive
+        with mock.patch(
+            "matcha.sources.web_search.resilient_get",
+            return_value=_Resp({}, status_code=200, text="Hiring now", url="https://a.com/job/1"),
+        ):
+            self.assertTrue(_url_is_live("https://a.com/job/1"))
+        # Network error / timeout → treat as alive (flaky network must not
+        # kill a live posting)
+        with mock.patch(
+            "matcha.sources.web_search.resilient_get", side_effect=TimeoutError("slow")
+        ):
+            self.assertTrue(_url_is_live("https://a.com/job/1"))
+
+    def test_search_exa_company_prefers_host_over_author(self):
+        # Session 30: author field junk ("scale") must not become the company
+        # when the posting's own host names it (Vodafone).
+        from matcha.sources.web_search import _search_web_exa
+
+        rows = [
+            {
+                "title": "AWS Cloud DevOps Engineer",
+                "url": "https://opportunities.vodafone.com/job/Pune-aws/1395729933/",
+                "text": "cloud infrastructure in Pune",
+                "author": "scale",
+            }
+        ]
+        with (
+            mock.patch("matcha.sources.backends.exa.exa_search", return_value=rows),
+            mock.patch("matcha.sources.web_search._url_is_live", return_value=True),
+        ):
+            result = _search_web_exa("AWS DevOps", "Pune", num=5)
+        self.assertEqual(result.jobs[0]["company"], "Vodafone")
+
+    def test_search_exa_drops_dead_links(self):
+        # Session 30: expired ATS postings must not reach the results — the
+        # probe drops 404s and redirect-to-homepage bounces.
+        from matcha.sources.web_search import _search_web_exa
+
+        rows = [
+            {
+                "title": "Senior DevOps Engineer - UnitedHealth",
+                "url": "https://careers.unitedhealthgroup.com/job/x/96580840736",
+                "text": "terraform in Bengaluru",
+            },
+            {
+                "title": "DevOps Engineer - Acme",
+                "url": "https://acme.com/jobs/3",
+                "text": "aws kubernetes in Pune",
+            },
+        ]
+        # URL-keyed side_effect: the probe runs in a parallel pool, so list
+        # side_effects would be consumed in nondeterministic order.
+        def probe(url):
+            return "acme.com" in url
+
+        with (
+            mock.patch("matcha.sources.backends.exa.exa_search", return_value=rows),
+            mock.patch("matcha.sources.web_search._url_is_live", side_effect=probe),
+        ):
+            result = _search_web_exa("DevOps Engineer", "Pune", num=5)
+        self.assertEqual([j["title"] for j in result.jobs], ["DevOps Engineer"])
+
     def test_extract_location_and_source(self):
-        from matcha.sources.web_search import _extract_location, _identify_source
+        from matcha.sources.web_search import _extract_location
 
         self.assertEqual(_extract_location("Engineer in Bengaluru", "u", "t"), "Bengaluru")
         self.assertEqual(_extract_location("", "u", "t"), "Remote / Unspecified")
-        self.assertEqual(_identify_source("https://www.greenhouse.io/jobs/x"), "Greenhouse")
-        self.assertEqual(_identify_source("https://example.com/jobs/x"), "Example")
+
+    def test_rows_tagged_web_search_source(self):
+        # Session 28: every Web Search row (Exa AND DDGS) is sourced "Web
+        # Search" — the old per-row _identify_source ("Careers", "Foundit")
+        # made source_counts disagree with the rows.
+        from matcha.sources.web_search import _search_web_exa
+
+        rows = [
+            {
+                "title": "DevOps Engineer - Acme",
+                "url": "https://acme.com/jobs/3",
+                "text": "in Pune",
+            }
+        ]
+        with (
+            mock.patch("matcha.sources.backends.exa.exa_search", return_value=rows),
+            mock.patch("matcha.sources.web_search._url_is_live", return_value=True),
+        ):
+            result = _search_web_exa("DevOps Engineer", "Pune", num=5)
+        self.assertEqual(result.jobs[0]["source"], "Web Search")
 
     def test_search_exa_routing(self):
         from matcha.sources.web_search import search_web_for_jobs
@@ -608,11 +916,43 @@ class TestWebSearch(unittest.TestCase):
                 "score": 0.9,
             }
         ]
-        with mock.patch("matcha.sources.backends.exa.exa_search", return_value=rows):
+        with (
+            mock.patch("matcha.sources.backends.exa.exa_search", return_value=rows),
+            mock.patch("matcha.sources.web_search._url_is_live", return_value=True),
+        ):
             result = _search_web_exa("engineer", num=5)
         self.assertEqual(len(result.jobs), 1)
         self.assertEqual(result.jobs[0]["company"], "Acme")
         self.assertEqual(result.jobs[0]["listed"], "2025-06-01")
+
+    def test_search_exa_drops_homepages_and_unrelated(self):
+        # Session 27: the Exa backend must apply the same junk gates as DDGS
+        # — homepages and irrelevant postings leak through semantic search.
+        from matcha.sources.web_search import _search_web_exa
+
+        rows = [
+            {
+                "title": "Lever",
+                "url": "https://www.lever.co/?lang=fa",
+                "text": "",
+            },
+            {
+                "title": "Halton Healthcare Intake Assistant",
+                "url": "https://jobs.smartrecruiters.com/HaltonHealthcare1/3743",
+                "text": "caregiving",
+            },
+            {
+                "title": "DevOps Engineer - Acme",
+                "url": "https://acme.com/jobs/3",
+                "text": "aws kubernetes",
+            },
+        ]
+        with (
+            mock.patch("matcha.sources.backends.exa.exa_search", return_value=rows),
+            mock.patch("matcha.sources.web_search._url_is_live", return_value=True),
+        ):
+            result = _search_web_exa("DevOps Engineer", "Pune", num=5)
+        self.assertEqual([j["title"] for j in result.jobs], ["DevOps Engineer"])
 
     def test_search_exa_none(self):
         from matcha.sources.web_search import _search_web_exa
@@ -631,7 +971,10 @@ class TestWebSearch(unittest.TestCase):
                 "publishedDate": "2020-01-01",
             }
         ]
-        with mock.patch("matcha.sources.backends.exa.exa_search", return_value=rows):
+        with (
+            mock.patch("matcha.sources.backends.exa.exa_search", return_value=rows),
+            mock.patch("matcha.sources.web_search._url_is_live", return_value=True),
+        ):
             result = _search_web_exa("engineer", days=30, num=5)
         self.assertEqual(result.jobs, [])
 
@@ -656,6 +999,49 @@ class TestWebSearch(unittest.TestCase):
             mock.patch("matcha.sources.web_search.limiter.acquire"),
         ):
             result = _search_web_ddgs("engineer")
+        self.assertEqual([j["title"] for j in result.jobs], ["Engineer"])
+
+    def test_search_ddgs_drops_homepage_urls(self):
+        # Session 27: ``site:lever.co`` returns the company homepage as a job.
+        from matcha.sources.web_search import _search_web_ddgs
+
+        fake = _FakeDDGS(
+            rows=[
+                {"title": "Lever", "href": "https://www.lever.co/?lang=fa", "body": ""},
+                {"title": "Engineer - Acme", "href": "https://acme.com/job/2", "body": "in Pune"},
+            ]
+        )
+        with (
+            mock.patch("matcha.sources.web_search.DDGS", lambda *a, **k: fake),
+            mock.patch("matcha.sources.web_search.limiter.acquire"),
+        ):
+            result = _search_web_ddgs("engineer")
+        self.assertEqual([j["title"] for j in result.jobs], ["Engineer"])
+
+    def test_search_ddgs_drops_howto_articles(self):
+        # Session 27: tutorial articles ("How to Become a DevOps Engineer:
+        # Skills & Career" from a course marketplace) are not postings.
+        from matcha.sources.web_search import _search_web_ddgs
+
+        fake = _FakeDDGS(
+            rows=[
+                {
+                    "title": "How to Become a DevOps Engineer: Skills & Career",
+                    "href": "https://www.simplilearn.com/how-to-become-devops-engineer",
+                    "body": "learn devops",
+                },
+                {
+                    "title": "Engineer - Acme",
+                    "href": "https://acme.com/job/4",
+                    "body": "in Pune",
+                },
+            ]
+        )
+        with (
+            mock.patch("matcha.sources.web_search.DDGS", lambda *a, **k: fake),
+            mock.patch("matcha.sources.web_search.limiter.acquire"),
+        ):
+            result = _search_web_ddgs("DevOps Engineer", "Pune")
         self.assertEqual([j["title"] for j in result.jobs], ["Engineer"])
 
     def test_web_search_source_check(self):

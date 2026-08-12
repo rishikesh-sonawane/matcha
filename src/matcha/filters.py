@@ -140,6 +140,11 @@ def _filter_quality(
             continue  # listing-page/nav noise leaked by snippet fallbacks
         if (title in _PLACEHOLDER or title.startswith("naukri")) and company in _PLACEHOLDER:
             continue  # title AND company both placeholder (F-12: never over-drop)
+        # Session 27: a single-word title that IS the company name is a
+        # page-title artifact ("COMPLY" / "Lever" from a careers page
+        # rendered as a job), never a posting — the job title must name a role.
+        if title and company and title == company and " " not in title:
+            continue
         if not url:
             continue  # truncated snippet with no URL
         if _TRACKING_URL.search(url) and not job.get("job_key"):

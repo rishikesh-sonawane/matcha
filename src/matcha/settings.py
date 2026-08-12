@@ -12,12 +12,36 @@ logger = logging.getLogger(__name__)
 LOCAL_CONFIG = Path("matcha.yaml")
 USER_CONFIG = Path.home() / ".matcha" / "settings.yaml"
 
+#: Wall-time budget for one search's scraper batch (seconds). Session 29:
+#: raised from the hardcoded 75s — Web Search now runs up to 6 queries and
+#: the Exa backend (up to 30s per call, parallel) must not be cut off while
+#: other sources are still streaming in. Overridable via ``search.batch_timeout``.
+DEFAULT_BATCH_TIMEOUT = 120
+
+#: Per-source query caps — how many of the (up to 6) AI-expanded queries
+#: each source runs in one search. Session 21 capped the DDGS-heavy sources
+#: so 6 queries don't explode into 40+ slow searches that starve under the
+#: batch timeout. Session 28 raised Web Search 3 -> 6: Exa is now the
+#: primary backend (one fast mcporter call per query), so every AI query
+#: contributes semantic postings. The Web Search entry is ADAPTIVE (Session
+#: 29): when Exa is not configured the slow DDGS fallback takes over and the
+#: cap is clamped back down to :data:`DDGS_WEB_SEARCH_CAP` (3). Shared with
+#: main.run_search's fallback so the defaults can't drift.
+DEFAULT_QUERY_CAPS = {"Career Sites": 2, "Web Search": 6, "Naukri": 3}
+
+#: DDGS-safe Web Search cap — the DDGS fallback fans out into 5 rate-limited
+#: site queries per search query, so the raised Exa cap would regularly blow
+#: the scraper batch timeout on the slow path. Clamped in main.run_search
+#: whenever Exa is not configured (Session 29).
+DDGS_WEB_SEARCH_CAP = 3
+
 _DEFAULTS: dict[str, Any] = {
     "search": {
         "query": "",
         "location": "",
         "days": 7,
         "max_pages": 2,
+        "batch_timeout": DEFAULT_BATCH_TIMEOUT,
     },
     "ai": {
         "enabled": True,
@@ -36,6 +60,7 @@ _DEFAULTS: dict[str, Any] = {
         "serpapi": False,
         "indeed_domain": "in.indeed.com",
         "career_sites": False,
+        "query_caps": dict(DEFAULT_QUERY_CAPS),
     },
     "enrichment": {
         "enabled": True,

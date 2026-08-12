@@ -159,6 +159,99 @@ SKIP_DOMAIN_PARTS: frozenset[str] = frozenset(
     }
 )
 
+#: TLD / country-code labels that are never part of a company name — stripped
+#: when deriving a company from a URL host (``jobs.sanofi.com`` → sanofi).
+URL_TLD_LABELS: frozenset[str] = frozenset(
+    {
+        "com",
+        "net",
+        "org",
+        "io",
+        "co",
+        "dev",
+        "ai",
+        "cloud",
+        "tech",
+        "in",
+        "uk",
+        "de",
+        "fr",
+        "au",
+        "ca",
+        "br",
+        "jp",
+        "sg",
+        "ae",
+        "eu",
+        "nl",
+        "se",
+        "ch",
+        "it",
+        "es",
+    }
+)
+
+#: Generic career-site subdomain labels that are never company names — a
+#: posting URL's leftmost labels are walked, skipping these, until a real
+#: company label is found (``opportunities.vodafone.com`` → vodafone).
+GENERIC_SUBDOMAIN_LABELS: frozenset[str] = frozenset(
+    {
+        "opportunities",
+        "recruiting",
+        "talent",
+        "career",
+        "careers",
+        "jobs",
+        "job",
+        "boards",
+        "employment",
+        "apply",
+        "search",
+        "candidate",
+        "hiring",
+        "join",
+        "openings",
+        "vacancies",
+        "staffing",
+        "workat",
+        "careerpage",
+        "jobsportal",
+        "hr",
+        "people",
+    }
+)
+
+#: ATS platform hosts — when a posting lives on one of these, the real
+#: company is the subdomain label (``koch.avature.net`` → Koch,
+#: ``acme.wd5.myworkdayjobs.com`` → Acme).
+ATS_PLATFORM_LABELS: frozenset[str] = frozenset(
+    {
+        "avature",
+        "myworkdayjobs",
+        "workday",
+        "greenhouse",
+        "lever",
+        "ashbyhq",
+        "smartrecruiters",
+        "icims",
+        "taleo",
+        "oraclecloud",
+        "successfactors",
+        "adp",
+        "bamboohr",
+        "recruitee",
+        "jobvite",
+        "pinpointhq",
+        "workable",
+        "teamtailor",
+        "personio",
+        "ultipro",
+        "gethired",
+        "breezy",
+        "dover",
+    }
+)
+
 SEARCH_PAGE_PATTERNS: list[re.Pattern] = [
     re.compile(r"jobs\s+in\s", re.IGNORECASE),
     re.compile(r"jobs\s+available", re.IGNORECASE),
@@ -171,6 +264,10 @@ NON_JOB_TITLE_PATTERNS: list[re.Pattern] = [
     re.compile(r"^page\s+\d+", re.IGNORECASE),
     re.compile(r"^\d+\s*(jobs|results)", re.IGNORECASE),
     re.compile(r"^(search|sign\s+in|log\s+in|register|apply)", re.IGNORECASE),
+    # Session 27: tutorial/guide articles ("How to Become a DevOps Engineer:
+    # Skills & Career" from a course marketplace) are not postings.
+    re.compile(r"^how\s+to\s+(become|learn|get)\s+", re.IGNORECASE),
+    re.compile(r"^(top\s+)?\d+\s*(skills|certifications?|courses?|ways)\s+(to|for)\b", re.IGNORECASE),
     re.compile(r"^Job Application\s+for\s+", re.IGNORECASE),
     re.compile(r"^Application\s+for\s+", re.IGNORECASE),
     re.compile(r"^Sign\s+In", re.IGNORECASE),
@@ -223,20 +320,6 @@ AGGREGATE_URL_PATTERNS: list[re.Pattern] = [
     re.compile(r"\?f_", re.IGNORECASE),
     re.compile(r"\?location", re.IGNORECASE),
 ]
-
-JOB_SOURCE_DOMAINS: dict[str, str] = {
-    "linkedin.com": "LinkedIn",
-    "indeed.com": "Indeed",
-    "glassdoor.com": "Glassdoor",
-    "monster.com": "Monster",
-    "ziprecruiter.com": "ZipRecruiter",
-    "dice.com": "Dice",
-    "simplyhired.com": "SimplyHired",
-    "wellfound.com": "Wellfound",
-    "greenhouse.io": "Greenhouse",
-    "lever.co": "Lever",
-    "ashbyhq.com": "Ashby",
-}
 
 MONTH_NAMES: dict[str, int] = {
     "january": 1,

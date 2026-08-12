@@ -155,6 +155,24 @@ class TestQualityFilter(unittest.TestCase):
             kept, _ = apply_filters([_job(title=title)], {})
             self.assertEqual(len(kept), 1, f"role title {title!r} should be kept")
 
+    def test_single_word_title_equal_to_company_dropped(self):
+        # Session 27: a single-word title that IS the company name is a
+        # page-title artifact ("COMPLY" / "Lever" from careers pages rendered
+        # as jobs), never a posting — the title must name a role.
+        for company in ("COMPLY", "Lever"):
+            kept, reports = apply_filters([_job(title=company, company=company)], {})
+            self.assertEqual(len(kept), 0, f"company-name title {company!r} should be dropped")
+            self.assertEqual(reports[0].dropped, 1)
+
+    def test_multiword_title_equal_to_company_kept(self):
+        # "Nagarro Digital" as a company page is still multiword — a real
+        # posting titled like a division must not be over-dropped (only the
+        # single-word page-title artifact is dropped).
+        kept, _ = apply_filters([_job(title="COMPLY Software", company="COMPLY Software")], {})
+        self.assertEqual(len(kept), 1)
+        kept, _ = apply_filters([_job(title="AWS DevOps Engineer", company="AWS DevOps Engineer")], {})
+        self.assertEqual(len(kept), 1)
+
 
 class TestAgeFilter(unittest.TestCase):
     def test_old_job_dropped(self):

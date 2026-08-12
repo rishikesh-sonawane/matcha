@@ -266,6 +266,222 @@ class TestRunSearch(unittest.TestCase):
             )
         career_search.assert_not_called()
 
+    def test_web_search_query_cap_forwarded_from_settings(self):
+        """Session 28: `run_search` must forward `scrapers.query_caps` to
+        `search_jobs` instead of a hardcoded dict, so raising Web Search's
+        cap (Exa primary backend) actually takes effect."""
+        from matcha.main import run_search
+
+        captured: dict = {}
+
+        def _fake_search_jobs(queries, location, **kwargs):
+            captured["caps"] = kwargs.get("query_caps")
+            return [], {}, {}
+
+        settings = _settings(enrichment=False)
+        settings["scrapers"]["query_caps"] = {
+            "Career Sites": 2,
+            "Web Search": 6,
+            "Naukri": 3,
+        }
+        with (
+            mock.patch("matcha.main.search_jobs", side_effect=_fake_search_jobs),
+            mock.patch("matcha.main.check_serpapi_available", return_value=False),
+            mock.patch("matcha.sources.backends.exa.exa_configured", return_value=True),
+        ):
+            run_search(
+                _profile(),
+                "platform",
+                "Pune",
+                7,
+                settings,
+                {},
+                ai_enabled=False,
+                quiet=True,
+            )
+        self.assertEqual(captured["caps"]["Web Search"], 6)
+
+    def test_web_search_query_cap_default_when_settings_missing(self):
+        """No `scrapers.query_caps` in settings → the raised default
+        (Web Search: 6) applies so Exa still contributes every AI query."""
+        from matcha.main import run_search
+
+        captured: dict = {}
+
+        def _fake_search_jobs(queries, location, **kwargs):
+            captured["caps"] = kwargs.get("query_caps")
+            return [], {}, {}
+
+        settings = _settings(enrichment=False)
+        settings["scrapers"].pop("query_caps", None)
+        with (
+            mock.patch("matcha.main.search_jobs", side_effect=_fake_search_jobs),
+            mock.patch("matcha.main.check_serpapi_available", return_value=False),
+            mock.patch("matcha.sources.backends.exa.exa_configured", return_value=True),
+        ):
+            run_search(
+                _profile(),
+                "platform",
+                "Pune",
+                7,
+                settings,
+                {},
+                ai_enabled=False,
+                quiet=True,
+            )
+        self.assertEqual(captured["caps"]["Web Search"], 6)
+
+    def test_web_search_cap_clamped_when_exa_unavailable(self):
+        """Session 29: adaptive cap — when Exa is not configured, Web Search
+        runs the slow DDGS path (5 rate-limited site queries per query), so
+        its cap must drop from the Exa default (6) to the DDGS-safe 3."""
+        from matcha.main import run_search
+
+        captured: dict = {}
+
+        def _fake_search_jobs(queries, location, **kwargs):
+            captured["caps"] = kwargs.get("query_caps")
+            return [], {}, {}
+
+        settings = _settings(enrichment=False)
+        settings["scrapers"].pop("query_caps", None)
+        with (
+            mock.patch("matcha.main.search_jobs", side_effect=_fake_search_jobs),
+            mock.patch("matcha.main.check_serpapi_available", return_value=False),
+            mock.patch("matcha.sources.backends.exa.exa_configured", return_value=False),
+        ):
+            run_search(
+                _profile(),
+                "platform",
+                "Pune",
+                7,
+                settings,
+                {},
+                ai_enabled=False,
+                quiet=True,
+            )
+        self.assertEqual(captured["caps"]["Web Search"], 3)
+
+    def test_web_search_cap_below_clamp_preserved_on_ddgs(self):
+        """A user cap BELOW the DDGS clamp (e.g. 2) must be preserved — the
+        adaptive logic only lowers caps above DDGS_WEB_SEARCH_CAP."""
+        from matcha.main import run_search
+
+        captured: dict = {}
+
+        def _fake_search_jobs(queries, location, **kwargs):
+            captured["caps"] = kwargs.get("query_caps")
+            return [], {}, {}
+
+        settings = _settings(enrichment=False)
+        settings["scrapers"]["query_caps"] = {"Web Search": 2}
+        with (
+            mock.patch("matcha.main.search_jobs", side_effect=_fake_search_jobs),
+            mock.patch("matcha.main.check_serpapi_available", return_value=False),
+            mock.patch("matcha.sources.backends.exa.exa_configured", return_value=False),
+        ):
+            run_search(
+                _profile(),
+                "platform",
+                "Pune",
+                7,
+                settings,
+                {},
+                ai_enabled=False,
+                quiet=True,
+            )
+        self.assertEqual(captured["caps"]["Web Search"], 2)
+
+    def test_web_search_cap_above_default_preserved_on_exa(self):
+        """A user cap ABOVE the Exa default (e.g. 8) must survive untouched
+        when Exa is configured — the clamp only applies to the DDGS path."""
+        from matcha.main import run_search
+
+        captured: dict = {}
+
+        def _fake_search_jobs(queries, location, **kwargs):
+            captured["caps"] = kwargs.get("query_caps")
+            return [], {}, {}
+
+        settings = _settings(enrichment=False)
+        settings["scrapers"]["query_caps"] = {"Web Search": 8}
+        with (
+            mock.patch("matcha.main.search_jobs", side_effect=_fake_search_jobs),
+            mock.patch("matcha.main.check_serpapi_available", return_value=False),
+            mock.patch("matcha.sources.backends.exa.exa_configured", return_value=True),
+        ):
+            run_search(
+                _profile(),
+                "platform",
+                "Pune",
+                7,
+                settings,
+                {},
+                ai_enabled=False,
+                quiet=True,
+            )
+        self.assertEqual(captured["caps"]["Web Search"], 8)
+
+    def test_run_search_forwards_batch_timeout(self):
+        """Session 29: `search.batch_timeout` must reach search_jobs (raised
+        from the old hardcoded 75s so Exa's 6 queries aren't cut off)."""
+        from matcha.main import run_search
+
+        captured: dict = {}
+
+        def _fake_search_jobs(queries, location, **kwargs):
+            captured["batch_timeout"] = kwargs.get("batch_timeout")
+            return [], {}, {}
+
+        settings = _settings(enrichment=False)
+        settings["search"]["batch_timeout"] = 150
+        with (
+            mock.patch("matcha.main.search_jobs", side_effect=_fake_search_jobs),
+            mock.patch("matcha.main.check_serpapi_available", return_value=False),
+            mock.patch("matcha.sources.backends.exa.exa_configured", return_value=True),
+        ):
+            run_search(
+                _profile(),
+                "platform",
+                "Pune",
+                7,
+                settings,
+                {},
+                ai_enabled=False,
+                quiet=True,
+            )
+        self.assertEqual(captured["batch_timeout"], 150)
+
+    def test_run_search_batch_timeout_default(self):
+        """No `search.batch_timeout` in settings → the raised default (120s)
+        applies."""
+        from matcha.main import DEFAULT_BATCH_TIMEOUT, run_search
+
+        captured: dict = {}
+
+        def _fake_search_jobs(queries, location, **kwargs):
+            captured["batch_timeout"] = kwargs.get("batch_timeout")
+            return [], {}, {}
+
+        settings = _settings(enrichment=False)
+        settings["search"].pop("batch_timeout", None)
+        with (
+            mock.patch("matcha.main.search_jobs", side_effect=_fake_search_jobs),
+            mock.patch("matcha.main.check_serpapi_available", return_value=False),
+            mock.patch("matcha.sources.backends.exa.exa_configured", return_value=True),
+        ):
+            run_search(
+                _profile(),
+                "platform",
+                "Pune",
+                7,
+                settings,
+                {},
+                ai_enabled=False,
+                quiet=True,
+            )
+        self.assertEqual(captured["batch_timeout"], DEFAULT_BATCH_TIMEOUT)
+
 
 class TestVerdictPass(unittest.TestCase):
     """§9.5 top-K go/no-go verdict wiring in the shared pipeline."""

@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from matcha.normalization import (
+    find_city_in_text,
     is_remote,
     normalize_city,
     normalize_job,
@@ -22,6 +23,7 @@ from matcha.normalization import (
     normalize_listed_epoch,
     normalize_region,
     normalize_salary_int,
+    search_location,
 )
 
 
@@ -157,6 +159,71 @@ class TestCityRegionRemote(unittest.TestCase):
         self.assertTrue(is_remote("Pune", "Remote"))
         self.assertFalse(is_remote("Pune", "On-site"))
         self.assertFalse(is_remote("Pune"))
+
+
+class TestFindCityInText(unittest.TestCase):
+    """Session 28: Exa/DDGS snippets contain "in Managing cloud infra"-style
+    phrases that loose regex extractors misread as locations — a known-city
+    scan must win over them so the location filter keeps the posting."""
+
+    def test_known_city_in_free_text(self):
+        self.assertEqual(find_city_in_text("Job Details | Pune AWS DevOps"), "Pune")
+        self.assertEqual(find_city_in_text("Location: Bengaluru, India"), "Bengaluru")
+        self.assertEqual(find_city_in_text("Noida, India"), "Noida")
+
+    def test_loose_phrase_not_mistaken_for_city(self):
+        # The regex-extractor trap: "in Managing cloud infrastructure" — no
+        # known city means no location, NOT a bogus one.
+        self.assertEqual(find_city_in_text("in Managing cloud infrastructure"), "")
+        self.assertEqual(find_city_in_text("we are hiring a DevOps engineer in Pune"), "Pune")
+
+    def test_remote_marker(self):
+        self.assertEqual(find_city_in_text("Remote / Unspecified"), "Remote")
+        self.assertEqual(find_city_in_text("Work from home OK"), "Remote")
+
+    def test_specific_city_beats_generic(self):
+        self.assertEqual(find_city_in_text("Pune, Maharashtra, India"), "Pune")
+
+    def test_ambiguous_keys_excluded(self):
+        # Session 28 (reviewer-caught): "ncr" matches the NCR Corp employer,
+        # "virtual" matches "virtual machines" in descriptions, "salem" is a
+        # common English word — none may resolve to a location in free text.
+        self.assertEqual(find_city_in_text("NCR Corporation is hiring engineers"), "")
+        self.assertEqual(find_city_in_text("manage virtual machines and CI/CD"), "")
+        self.assertEqual(find_city_in_text("salem is a fine city to visit"), "")
+        # But a REAL city still wins over them.
+        self.assertEqual(find_city_in_text("NCR Corporation Pune hiring"), "Pune")
+
+    def test_empty(self):
+        self.assertEqual(find_city_in_text(""), "")
+        self.assertEqual(find_city_in_text(None), "")
+
+
+class TestSearchLocation(unittest.TestCase):
+    """Session 27: sources accept ONE location string — a multi-city
+    preference must be reduced to a broad source-level location."""
+
+    def test_single_city_passthrough(self):
+        self.assertEqual(search_location("Pune"), "Pune")
+        self.assertEqual(search_location(""), "")
+        self.assertEqual(search_location("Remote"), "Remote")
+
+    def test_all_indian_cities_search_country_wide(self):
+        self.assertEqual(search_location("Pune, Bengaluru, Hyderabad"), "India")
+        self.assertEqual(search_location("Hyderabad, Pune & Bengaluru"), "India")
+        self.assertEqual(search_location("Pune, Remote"), "India")
+
+    def test_non_indian_part_falls_back_to_first(self):
+        self.assertEqual(search_location("Pune, London"), "Pune")
+        self.assertEqual(search_location("New York, Pune"), "New York")
+
+    def test_garbage_string_falls_back_to_first(self):
+        # Session 27: pasted paragraphs must never reach sources as-is — the
+        # first token wins and the location filter decides the rest.
+        self.assertEqual(
+            search_location("Enterprise, Docker, Linux, and Datadog. Proven track"),
+            "Enterprise",
+        )
 
 
 class TestNormalizeJob(unittest.TestCase):

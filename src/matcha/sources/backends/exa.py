@@ -12,9 +12,18 @@ doctor reports ``warn`` (not ``ok``) for it; search still attempts it and
 degrades to DDGS on any failure.
 
 Command syntax: mcporter's CLI was rewritten upstream (``wshobson/mcporter``
-0.7.x DSL → ``openclaw/mcporter`` 0.8+ ``key=value`` args). Both are
-supported — the current form is tried first, the legacy DSL on failure — so
-the backend works regardless of which version is installed.
+0.7.x DSL → ``openclaw/mcporter`` 0.8+ ``key=value`` args) and 0.13+
+defaults to human-readable text, so calls pass ``--output json`` to keep
+parsing reliable. Each syntax is tried with and without the flag, so the
+backend works regardless of which generation is installed.
+
+Current Exa MCP server contract (verified live): ``web_search_exa`` accepts
+ONLY ``query`` + ``numResults`` (``includeDomains`` / ``startPublishedDate``
+are silently ignored) and returns results as rendered text blocks
+(``Title:``/``URL:``/``Published:``/``Author:``/``Highlights:`` separated by
+``---``) rather than a structured ``results`` array. Queries are phrased with
+"job posting" to steer Exa toward postings instead of LinkedIn people
+profiles; recency is enforced client-side from the parsed ``publishedDate``.
 """
 
 from __future__ import annotations
@@ -24,7 +33,7 @@ import logging
 import re
 import shutil
 import subprocess
-from datetime import datetime, timedelta, timezone
+import time
 from typing import Any
 
 from matcha.sources.backends.mcporter import (
@@ -38,14 +47,6 @@ logger = logging.getLogger(__name__)
 EXA_SERVER_NAME = "exa"
 EXA_MCP_URL = "https://mcp.exa.ai/mcp"
 EXA_TOOL = "web_search_exa"
-
-#: Career-site ATS domains — the same surface the DDGS fallback targets.
-EXA_INCLUDE_DOMAINS = [
-    "greenhouse.io",
-    "boards.greenhouse.io",
-    "lever.co",
-    "jobs.ashbyhq.com",
-]
 
 _MCPORTER_TIMEOUT = 30
 
@@ -111,31 +112,20 @@ def exa_search(
 ) -> list[dict[str, Any]] | None:
     """Run an Exa semantic search for job postings; None on any failure.
 
-    Returns raw result rows ({title, url, publishedDate, author, text,
-    score, ...}) so the source module maps them with its own helpers.
-    Recency is enforced server-side via ``startPublishedDate``.
+    Returns raw result rows ({title, url, publishedDate, author, text, ...})
+    so the source module maps them with their own helpers. The current Exa
+    MCP server exposes only query/numResults, so the query is phrased with
+    "job posting" to target postings and recency is enforced client-side
+    from the parsed ``publishedDate`` (see the web source's recency gate).
     """
-    text = f"{query} {location}".strip() if location else query
+    del days  # startPublishedDate is ignored by the current Exa server
+    text = f"{query} job posting {location}".strip() if location else f"{query} job posting"
     params: dict[str, Any] = {
         "query": text,
         "numResults": num,
-        "includeDomains": EXA_INCLUDE_DOMAINS,
     }
-    if days:
-        start = (datetime.now(timezone.utc) - timedelta(days=days)).date().isoformat()
-        params["startPublishedDate"] = start
 
     result = run_mcporter_call(EXA_SERVER_NAME, EXA_TOOL, params, timeout=timeout)
-    # Array literals in mcporter CLI args are unverified across both syntaxes;
-    # if the call fails with includeDomains present, retry once without it so
-    # the backend still delivers (scoping falls back to the query itself).
-    if not result["ok"] and "includeDomains" in params:
-        logger.info(
-            "Exa call with includeDomains failed (%s); retrying without it",
-            result["error"],
-        )
-        params.pop("includeDomains")
-        result = run_mcporter_call(EXA_SERVER_NAME, EXA_TOOL, params, timeout=timeout)
     if not result["ok"]:
         logger.warning("Exa search failed: %s", result["error"])
         return None
@@ -167,23 +157,40 @@ def run_mcporter_call(
         return {"ok": False, "rows": [], "error": "mcporter not installed", "raw": ""}
 
     env = utf8_subprocess_env()
-    attempts = [
+    # mcporter 0.13+ needs --output json (its default is human-readable
+    # text); older generations return the raw JSON envelope and reject the
+    # flag. Try each syntax both ways so either generation works.
+    bases = [
         ("new", ["call", f"{server}.{tool}", *_format_new_args(params)]),
         ("legacy", ["call", f"{server}.{tool}({_format_legacy_dsl(params)})"]),
     ]
+    attempts: list[tuple[str, list[str]]] = []
+    for syntax, args in bases:
+        attempts.append((syntax, [*args, "--output", "json"]))
+        attempts.append((syntax, args))
     errors: list[str] = []
+    # Session 28 (reviewer-caught): the whole call must stay inside the
+    # caller's budget (the scraper batch abandons futures after
+    # settings ``search.batch_timeout``, default 120s). Cap the TOTAL across
+    # all 4 attempts to ``timeout`` — a hung Exa must not chain 4×30s and
+    # starve the DDGS fallback for the entire run.
+    deadline = time.monotonic() + timeout
     for syntax, cmd_args in attempts:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            errors.append(f"mcporter call exceeded its {timeout}s total budget")
+            break
         try:
             proc = subprocess.run(
                 [path, *cmd_args],
                 capture_output=True,
                 encoding="utf-8",
                 errors="replace",
-                timeout=timeout,
+                timeout=remaining,
                 env=env,
             )
         except subprocess.TimeoutExpired:
-            errors.append(f"mcporter ({syntax} syntax) timed out after {timeout}s")
+            errors.append(f"mcporter ({syntax} syntax) timed out after {remaining:.0f}s")
             break
         except OSError as e:
             errors.append(f"mcporter ({syntax} syntax) failed to run: {e}")
@@ -300,15 +307,101 @@ def _parse_json_output(text: str) -> Any | None:
 
 
 def _extract_exa_results(payload: Any) -> list[dict[str, Any]]:
-    """Find the ``results`` list inside an Exa/mcporter payload.
+    """Find result rows inside an Exa/mcporter payload.
 
-    Handles the bare Exa envelope ({requestId, results: [...]}), and MCP CLI
-    wrappers that nest the tool output ({content: [{text: "{...}"}]}).
+    Handles three shapes: the bare Exa envelope ({requestId, results: [...]}),
+    MCP CLI wrappers that nest tool output ({content: [{text: "{...}"}]}), and
+    the current Exa MCP server's rendered text blocks ({content: [{text:
+    "Title: ...\\nURL: ..."}]}).
     """
     found = _walk_for_results(payload, depth=0)
     if isinstance(found, list):
         return [r for r in found if isinstance(r, dict)]
+    text = _collect_content_text(payload)
+    if text:
+        return _parse_exa_text_blocks(text)
     return []
+
+
+_EXA_BLOCK_SEPARATOR = re.compile(r"\n\s*---\s*\n")
+_EXA_TEXT_BLOCK_RE = re.compile(
+    r"^Title:\s*(?P<title>.+?)\n"
+    r"URL:\s*(?P<url>\S+)\n"
+    r"Published:\s*(?P<published>.*?)\n"
+    r"Author:\s*(?P<author>.*?)\n"
+    r"Highlights:\s*\n(?P<highlights>.*)$",
+    re.DOTALL,
+)
+#: Lenient fallback: Exa may omit Author:/Published: (or reorder) — a real
+#: posting must never be dropped because a secondary field is missing.
+_EXA_TITLE_URL_RE = re.compile(
+    r"^Title:\s*(?P<title>.+?)\nURL:\s*(?P<url>\S+)", re.DOTALL
+)
+
+
+def _collect_content_text(node: Any, depth: int = 0) -> str:
+    """Concatenate MCP ``content`` text blocks (mcporter 0.13+ rendering)."""
+    if depth > 4 or node is None:
+        return ""
+    if isinstance(node, dict):
+        if node.get("type") == "text" and isinstance(node.get("text"), str):
+            return node["text"]
+        parts: list[str] = []
+        for value in node.values():
+            part = _collect_content_text(value, depth + 1)
+            if part:
+                parts.append(part)
+        return "\n".join(parts)
+    if isinstance(node, list):
+        parts = []
+        for item in node:
+            part = _collect_content_text(item, depth + 1)
+            if part:
+                parts.append(part)
+        return "\n".join(parts)
+    return ""
+
+
+def _parse_exa_text_blocks(text: str) -> list[dict[str, Any]]:
+    """Parse the current Exa server's rendered result blocks into rows.
+
+    Each block looks like::
+
+        Title: AWS DevOps Engineer | Acme
+        URL: https://jobs.acme.com/123
+        Published: 2026-07-28T00:00:00.000Z
+        Author: Acme
+        Highlights:
+        <page text>
+
+    Blocks are separated by a line of ``---``. Missing/N-A fields are omitted
+    so downstream mapping falls back to its own extraction helpers.
+    """
+    rows: list[dict[str, Any]] = []
+    for block in _EXA_BLOCK_SEPARATOR.split(text):
+        m = _EXA_TEXT_BLOCK_RE.match(block.strip())
+        if not m:
+            m = _EXA_TITLE_URL_RE.match(block.strip())
+        if not m:
+            continue
+        row: dict[str, Any] = {
+            "title": m.group("title").strip(),
+            "url": m.group("url").strip(),
+        }
+        if "published" in m.groupdict():
+            published = m.group("published").strip()
+            if published and published != "N/A":
+                row["publishedDate"] = published
+        if "author" in m.groupdict():
+            author = m.group("author").strip()
+            if author and author != "N/A":
+                row["author"] = author
+        if "highlights" in m.groupdict():
+            highlights = m.group("highlights").strip()
+            if highlights:
+                row["text"] = highlights
+        rows.append(row)
+    return rows
 
 
 def _walk_for_results(node: Any, depth: int) -> Any:

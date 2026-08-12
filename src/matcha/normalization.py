@@ -332,6 +332,14 @@ def normalize_salary_int(salary: str) -> int | None:
 #: the location filter silently dropped or mis-matched those rows.
 _GENERIC_LOCATIONS = frozenset({"India", "Remote"})
 
+#: City keys that are common English words / company names in FREE TEXT and
+#: must not be trusted outside a location field. "ncr" matches the NCR Corp
+#: employer (→ bogus "Delhi"), "virtual" matches "virtual machines" in job
+#: descriptions (→ bogus "Remote"), "salem" is a common English word.
+#: normalize_city (structured location strings) keeps them; only the free-
+#: text scan (find_city_in_text) excludes them (Session 28, reviewer-caught).
+_FREE_TEXT_AMBIGUOUS_KEYS = frozenset({"ncr", "salem", "virtual"})
+
 
 def normalize_city(location: str) -> str:
     """Primary city of a location string, synonym-canonicalized ("" if none).
@@ -368,6 +376,37 @@ def normalize_city(location: str) -> str:
     return ""
 
 
+def find_city_in_text(text: str) -> str:
+    """Canonical city (or 'Remote') named in free text, or "" if none.
+
+    Session 28: Exa/DDGS snippets contain phrases like "in Managing cloud
+    infrastructure" that loose regex location extractors misread as a
+    location, dropping the job at the location filter. Scanning for known
+    city synonyms prefers the real place ("Noida" in a Noida posting,
+    "Remote" for a work-from-home blurb). Specific cities beat the generic
+    ``India``/``Remote`` fallbacks, earliest mention wins.
+    """
+    if not text:
+        return ""
+    lowered = str(text).lower()
+    matches: list[tuple[int, str]] = []
+    seen: set[str] = set()
+    for key, canon in _CITY_SYNONYMS.items():
+        if key in _FREE_TEXT_AMBIGUOUS_KEYS:
+            continue
+        m = re.search(rf"(?<![a-z0-9]){re.escape(key)}(?![a-z0-9])", lowered)
+        if m and canon not in seen:
+            matches.append((m.start(), canon))
+            seen.add(canon)
+    if not matches:
+        return ""
+    matches.sort()
+    for _, canon in matches:
+        if canon not in _GENERIC_LOCATIONS:
+            return canon
+    return matches[0][1]  # only generic (India / Remote) present
+
+
 def normalize_region(location: str) -> str:
     """Coarse region (state / NCR) of a location, or \"\" when unknown."""
     city = normalize_city(location).lower()
@@ -377,6 +416,32 @@ def normalize_region(location: str) -> str:
         if city in cities:
             return region
     return ""
+
+
+_LOCATION_PART_SEP = re.compile(r"[,;/&|]|\b(?:and|or)\b", re.IGNORECASE)
+
+
+def search_location(location: str) -> str:
+    """Single location string for the SOURCE-level search.
+
+    Sources (LinkedIn/Indeed/Naukri/SerpAPI) accept ONE location string; a
+    multi-city preference ("Pune, Bengaluru, Hyderabad") sent verbatim makes
+    LinkedIn/Indeed return almost nothing (verified live, Session 27). The
+    central location FILTER is the multi-city authority, so the sources
+    should retrieve a broad superset: when every preferred part is an Indian
+    city (or remote), search country-wide "India" and let the filter keep
+    exactly the preferred cities + remote. Anything else falls back to the
+    first part.
+    """
+    parts = [p.strip() for p in _LOCATION_PART_SEP.split(location or "") if p.strip()]
+    if len(parts) <= 1:
+        return (location or "").strip()
+    for part in parts:
+        city = normalize_city(part)
+        # A non-Indian part (no region mapping) can't be covered by "India".
+        if not city or not normalize_region(part):
+            return parts[0]
+    return "India"
 
 
 def is_remote(location: str, workplace: str = "", description: str = "") -> bool:
